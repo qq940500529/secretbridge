@@ -1,9 +1,41 @@
-# Third-party notices and provenance
+# Third-party notices
 
-No application libraries, fonts, icons, customer datasets or third-party application source are bundled in this initial design-stage repository. Documentation links to upstream projects are not dependency inclusion.
+[Home](README.md) / Third-party notices
 
-The LICENSE file is the unmodified GNU AGPL v3 license text supplied by GitHub's license API; its license-document copyright notice is retained. The project's own grant is AGPL-3.0-only as stated in README. The DCO is linked, not copied or relicensed. Repository CI references actions/checkout by commit; it is fetched by GitHub Actions and is not vendored here.
+This inventory describes material included in the repository. Technologies discussed in design documents are not automatically bundled dependencies.
 
-Before adding any dependency or asset, record its exact version, upstream URL, SPDX/license evidence, modification status and distribution obligations here or in a generated reviewed inventory. Preserve required notices and include corresponding sources where applicable. Do not treat this initial empty dependency inventory as an audit of a future application.
+## Included or referenced material
 
-The initial design and repository tooling were AI-assisted and reviewed for scope, public-data hygiene and internal consistency. They have not undergone independent legal or security review. No ownership or originality guarantee is inferred from AI generation.
+| Material | Relationship | Notice |
+| :--- | :--- | :--- |
+| GNU AGPL v3 license text | Included as [LICENSE](LICENSE) | License-document copyright and terms retained verbatim |
+| Developer Certificate of Origin | Linked from [CONTRIBUTING.md](CONTRIBUTING.md) | Not copied or relicensed |
+| actions/checkout | CI reference pinned to a commit | Retrieved by GitHub Actions; not vendored |
+| Application libraries, fonts and images | None currently bundled | Inventory required before introduction |
+
+Company-owned material is offered under `AGPL-3.0-only` or a separate written commercial license; see [LICENSING.md](LICENSING.md). An upstream component retains its own terms; this file does not override those terms.
+
+## Adding a dependency or asset
+
+Record the following before merge:
+
+| Field | Required information |
+| :--- | :--- |
+| Identity | Component/asset name and exact version or commit |
+| Source | Upstream repository or distribution location |
+| License | SPDX identifier and license-file evidence |
+| Use | Runtime, build, test, CI or documentation |
+| Changes | Whether upstream content was modified |
+| Distribution | Bundled files, notices, source and attribution obligations |
+
+Generated inventories must be reviewed against actual release contents. A dependency list is not itself a license or vulnerability audit.
+
+## Provenance
+
+AI-assisted contributions are subject to the same source, license and review requirements as other work. Contribution records should identify generated portions and their review; generation does not establish ownership, originality or safety.
+
+For maintainer decisions, see [open-source governance](docs/开源治理与发布.md) and the [candidate dependency license assessment](docs/依赖许可风险评估.md). The latter is a design-stage review, not an audit of a resolved dependency graph or release binaries.
+
+---
+
+[License](LICENSE) · [Contribution guide](CONTRIBUTING.md)
