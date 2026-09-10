@@ -3,7 +3,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    ffi::OsStr,
+    io::{self, BufRead, Write},
+    net::SocketAddr,
+    path::PathBuf,
+};
 
 use secretbridge_server::{AppState, router_with_web};
 use tokio::net::TcpListener;
@@ -14,6 +20,10 @@ const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args_os().nth(1).as_deref() == Some(OsStr::new("--synthetic-terminal-child")) {
+        return run_synthetic_terminal();
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -52,6 +62,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+fn run_synthetic_terminal() -> Result<(), Box<dyn std::error::Error>> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    writeln!(stdout, "SecretBridge synthetic terminal")?;
+    writeln!(
+        stdout,
+        "No system shell, credentials, files, or network targets are available."
+    )?;
+    writeln!(stdout, "Type 'help' to list the safe built-in commands.\r")?;
+    write!(stdout, "secretbridge> ")?;
+    stdout.flush()?;
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        match line.trim() {
+            "help" => writeln!(
+                stdout,
+                "help    show this message\r\nstatus  show the isolated mode\r\nclear   clear the screen\r\nexit    close this synthetic terminal"
+            )?,
+            "status" => writeln!(
+                stdout,
+                "mode=synthetic_only credentials=disabled shell=disabled"
+            )?,
+            "clear" => write!(stdout, "\x1b[2J\x1b[H")?,
+            "exit" => {
+                writeln!(stdout, "Synthetic terminal closed.")?;
+                stdout.flush()?;
+                break;
+            }
+            "" => {}
+            input => writeln!(stdout, "echo: {input}")?,
+        }
+        write!(stdout, "secretbridge> ")?;
+        stdout.flush()?;
+    }
     Ok(())
 }
 

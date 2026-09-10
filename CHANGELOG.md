@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.2 · synthetic terminal lifecycle
+
+- Add an isolated, built-in synthetic PTY with bounded dimensions, input, retained output and concurrent-session capacity.
+- Add authenticated WebSocket attachment, automatic reconnect, buffered output replay, resize and explicit termination.
+- Keep the PTY alive when the browser transport disconnects; integration tests cover detach, reattach and output replay.
+- Store only SHA-256 digests of bootstrap and browser-session tokens in service memory; expire sessions after 30 minutes and support explicit revocation.
+- Add xterm.js 6 and `portable-pty` 0.9 with locked dependencies and updated third-party review records.
+- Continue to reject system shells, user commands, real credentials and business-system targets.
+
 ### Licensing
 
 - Identify 数链创元（天津）信息技术有限责任公司 as the copyright holder of company-owned material.

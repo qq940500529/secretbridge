@@ -24,10 +24,14 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 
 import { getSession, getStatus, pair, type ServiceStatus } from "./api";
 import { consumePairingToken } from "./pairing";
+
+const TerminalView = lazy(() =>
+  import("./TerminalView").then((module) => ({ default: module.TerminalView })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -90,7 +94,7 @@ const copy: Record<Language, Copy> = {
     stage: "M0 安全基础",
     syntheticTitle: "当前仅允许合成凭据",
     syntheticBody:
-      "这一版本用于验证本地配对与安全边界，真实凭据的保存、注入和命令执行均未启用。",
+      "这一版本用于验证本地配对、安全边界和合成PTY；真实凭据、业务系统访问和系统命令执行均未启用。",
     boundaryTitle: "本机安全边界",
     boundaryBody: "服务只监听回环地址，不接受局域网或公网连接。",
     sessionTitle: "一次性浏览器配对",
@@ -108,7 +112,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "接入系统密钥库、策略化命令模板与持久化 PTY；所有功能先通过合成凭据测试。",
+      "继续验证三平台PTY、输入租约和安全输出背压，再进入凭据引用与审批流程。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -135,7 +139,7 @@ const copy: Record<Language, Copy> = {
     stage: "M0 security foundation",
     syntheticTitle: "Synthetic credentials only",
     syntheticBody:
-      "This release validates local pairing and trust boundaries. Real credential storage, injection, and command execution are disabled.",
+      "This release validates local pairing, trust boundaries, and a synthetic PTY. Real credentials, business targets, and system commands are disabled.",
     boundaryTitle: "Local trust boundary",
     boundaryBody:
       "The service binds only to loopback and rejects LAN or public access.",
@@ -156,7 +160,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Add OS secret stores, policy-bound command templates, and persistent PTY sessions—first with synthetic credentials.",
+      "Validate the PTY on all three platforms, then add input leases and bounded safe-output flows before credential references and approvals.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -197,6 +201,7 @@ export function App() {
   const [authentication, setAuthentication] =
     useState<Authentication>("unpaired");
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<keyof Copy>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
   const text = copy[language];
@@ -220,6 +225,7 @@ export function App() {
         const session = await getSession(pairedSession.session_token);
         if (!active) return;
         setAuthentication(session.authenticated ? "paired" : "error");
+        if (session.authenticated) setSessionToken(pairedSession.session_token);
         const refreshedStatus = await getStatus();
         if (active) setServiceStatus(refreshedStatus);
       } catch {
@@ -371,6 +377,10 @@ export function App() {
                 status={serviceStatus}
                 featureCards={featureCards}
               />
+            ) : activePage === "terminal" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <TerminalView language={language} sessionToken={sessionToken} />
+              </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />
             )}
@@ -378,6 +388,17 @@ export function App() {
         </div>
       </div>
     </Tooltip.Provider>
+  );
+}
+
+function TerminalLoading({ text }: { text: Copy }) {
+  return (
+    <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+      <div>
+        <Activity className="mx-auto size-8 animate-pulse text-cyan-600" />
+        <p className="mb-0 mt-4 text-sm font-medium text-slate-600">{text.checking}</p>
+      </div>
+    </section>
   );
 }
 

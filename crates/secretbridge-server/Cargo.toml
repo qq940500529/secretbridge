@@ -11,8 +11,11 @@ publish = false
 
 [dependencies]
 axum.workspace = true
+portable-pty.workspace = true
 secretbridge-core = { path = "../secretbridge-core" }
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
@@ -22,8 +25,9 @@ uuid.workspace = true
 webbrowser.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
 http-body-util.workspace = true
-serde_json.workspace = true
+tokio-tungstenite.workspace = true
 tower.workspace = true
 
 [lints]
