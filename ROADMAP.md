@@ -2,15 +2,15 @@
 
 [Home](README.md) / Roadmap
 
-Milestones describe acceptance gates rather than promised dates. The current phase is **design and repository tooling**; application implementation has not started.
+Milestones describe acceptance gates rather than promised dates. The current phase is **M0 security foundation**: a synthetic-only Web console and loopback Rust service are implemented, while credential handling and command execution remain disabled.
 
 ## Progress at a glance
 
 | Milestone | Outcome | Status |
 | :--- | :--- | :--- |
 | Foundation | Architecture, threat model, platform/UI targets and repository governance | Available |
-| M0 · Feasibility | Synthetic credential and isolation experiments | Planned |
-| M1 · Desktop workflow | UI, approvals, session supervision and reconnection | Planned |
+| M0 · Feasibility | Synthetic credential and isolation experiments | In progress |
+| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | Planned |
 | M2 · Controlled operations | Scoped adapter and MCP integration | Planned |
 | M3 · Security pilot | Approved low-privilege testing and independent review | Planned |
 | M4 · Distribution | Validated packages, source correspondence and recovery | Planned |
@@ -31,16 +31,16 @@ A later milestone cannot bypass an unresolved security prerequisite.
 <details open>
 <summary>M0 — Feasibility and isolation</summary>
 
-- [ ] Use only synthetic credentials and targets.
+- [x] Enforce synthetic-only mode; real credential and execution paths are absent.
 - [ ] Verify the intended identity boundary on Windows, Linux and macOS.
-- [ ] Demonstrate authenticated local IPC and rejection of unauthorized clients.
+- [x] Demonstrate one-time browser pairing, exact Origin checks and rejection of invalid tokens on a loopback-only service.
 - [ ] Demonstrate PTY lifetime independent of UI and assistant connections.
 - [ ] Record unsupported environments and remaining risks.
 
 </details>
 
 <details>
-<summary>M1 — Desktop workflow</summary>
+<summary>M1 — Local Web workflow</summary>
 
 - [ ] Implement credential-reference and target configuration.
 - [ ] Implement scoped approval and revocation.
@@ -75,8 +75,8 @@ A later milestone cannot bypass an unresolved security prerequisite.
 <summary>M4 — Distribution</summary>
 
 - [ ] Build and test each supported OS/architecture.
-- [ ] Validate native UI, keychain, IPC, install and uninstall behavior.
-- [ ] Publish signed packages with corresponding source, SBOM and hashes.
+- [ ] Validate browser UI, native keychain/process backends, local transport, install and uninstall behavior.
+- [ ] Publish signed service packages with corresponding source, SBOM and hashes.
 - [ ] Validate upgrade, rollback and configuration recovery.
 - [ ] Publish compatibility, known limitations and release notes.
 

@@ -2,7 +2,7 @@
 
 [Home](README.md) / Changelog
 
-Changes affecting contributors, project scope and future users are recorded here. Entries under **Unreleased** do not represent an application release.
+Changes affecting contributors, project scope and future users are recorded here. Entries under **Unreleased** do not represent a stable release.
 
 ## Unreleased
 
@@ -20,6 +20,15 @@ Changes affecting contributors, project scope and future users are recorded here
 - Standardize navigation, GitHub alerts, reference tables and expandable detail.
 - Clarify repository checks, runtime status and supported contribution workflows.
 
+### M0 Web foundation
+
+- Add a React 19, TypeScript 7, Vite 8 and Tailwind CSS 4 bilingual management console.
+- Add a Rust 1.98, Axum 0.8 and Tokio local service bound to loopback only.
+- Add one-time URL-fragment bootstrap pairing, exact Origin validation and memory-only browser sessions.
+- Keep real credential storage, injection and command execution disabled; tests assert synthetic-only mode.
+- Add locked Rust and pnpm dependency graphs plus Web and Rust checks to the three-platform CI workflow.
+- Record the permanent browser-based UI decision; no desktop shell is planned.
+
 ### Project foundation · 2026-09-10
 
 - Establish credential-use boundaries, persistent terminal semantics and a threat model.
@@ -29,7 +38,7 @@ Changes affecting contributors, project scope and future users are recorded here
 - Add limited repository hygiene checks and three-OS CI for those checks.
 
 > [!NOTE]
-> No desktop application, installer or runtime compatibility claim is associated with these entries.
+> The M0 prototype has only been run locally on Windows. Linux/macOS CI and native platform functions remain unverified until their checks complete.
 
 ---
 

@@ -18,6 +18,8 @@ Thumbs.db
 /runtime/
 /private/
 /secrets/
-/node_modules/
+**/node_modules/
 /target/
 /dist/
+/web/dist/
+*.tsbuildinfo

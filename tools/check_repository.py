@@ -18,11 +18,20 @@ REQUIRED = (
     "COPYRIGHT.md", "LICENSING.md", "COMMERCIAL_LICENSE.md",
     "docs/README.md", "docs/使用指南.md", "docs/开发者入门.md",
     "docs/依赖许可风险评估.md", "docs/贡献与再许可.md",
+    "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml",
+    "pnpm-workspace.yaml", "rust-toolchain.toml",
+    "tools/check_dependency_licenses.py",
     ".github/workflows/repository-checks.yml",
 )
-SPECIAL_NAMES = {"LICENSE", ".gitignore", ".gitattributes", ".editorconfig", "CODEOWNERS"}
-TEXT_SUFFIXES = {".md", ".py", ".yml", ".yaml"}
-SKIP_PARTS = {".git", "__pycache__"}
+SPECIAL_NAMES = {
+    "LICENSE", "Cargo.lock", ".gitignore", ".gitattributes",
+    ".editorconfig", "CODEOWNERS",
+}
+TEXT_SUFFIXES = {
+    ".css", ".html", ".json", ".md", ".py", ".rs", ".toml",
+    ".ts", ".tsx", ".yml", ".yaml",
+}
+SKIP_PARTS = {".git", "__pycache__", "dist", "node_modules", "target"}
 PATTERNS = {
     "private-key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "github-token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),

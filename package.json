@@ -1,0 +1,17 @@
+{
+  "name": "secretbridge-workspace",
+  "private": true,
+  "version": "0.1.0-alpha.1",
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@11.23.0",
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=11.23 <12"
+  },
+  "scripts": {
+    "build": "pnpm --dir web build",
+    "dev:web": "pnpm --dir web dev",
+    "test": "pnpm --dir web test",
+    "typecheck": "pnpm --dir web typecheck"
+  }
+}

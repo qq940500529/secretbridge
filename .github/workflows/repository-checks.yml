@@ -28,7 +28,29 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned
         with:
           persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, pinned
+        with:
+          node-version: 24
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install Web dependencies
+        run: pnpm install --frozen-lockfile
       - name: Check public repository contents
         run: python tools/check_repository.py
-      - name: Test repository checker (not application tests)
+      - name: Test repository checker
         run: python -m unittest discover -s tests -v
+      - name: Check Web types
+        run: pnpm typecheck
+      - name: Test Web application
+        run: pnpm test
+      - name: Build Web application
+        run: pnpm build
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Test Rust workspace
+        run: cargo test --workspace --all-targets
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Check locked dependency licenses
+        run: python tools/check_dependency_licenses.py

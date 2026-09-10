@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "crates/secretbridge-core",
+    "crates/secretbridge-server",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.98"
+license = "AGPL-3.0-or-later"
+authors = ["数链创元（天津）信息技术有限责任公司"]
+repository = "https://github.com/qq940500529/secretbridge"
+
+[workspace.dependencies]
+axum = { version = "=0.8.9", features = ["json"] }
+http-body-util = "=0.1.5"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+subtle = "=2.6.1"
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+tower = { version = "=0.5.3", features = ["util"] }
+tower-http = { version = "=0.7.1", features = ["fs", "set-header", "trace"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
+uuid = { version = "=1.26.1", features = ["v4"] }
+webbrowser = "=1.2.4"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
