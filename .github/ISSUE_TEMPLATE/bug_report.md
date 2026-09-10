@@ -1,21 +1,34 @@
 ---
 name: Bug report
-about: Report a non-sensitive issue using synthetic data
+about: Report a reproducible problem using synthetic data
 title: ""
 labels: ""
 assignees: ""
 ---
 
-Do not post credentials, private endpoints or vulnerability details. Use SECURITY.md for private reports.
+> [!WARNING]
+> Do not include credentials, private endpoints or vulnerability details. Use the repository's Security tab for a private security report.
+
+## Affected area
+
+Documentation / repository tooling / another area:
 
 ## Environment
 
-OS/version, repository commit, and whether this concerns docs or repository tooling:
+Repository commit or version, OS/version and relevant tool versions:
 
-## Steps to reproduce
+## Reproduction
 
-Use synthetic data only:
+1. Prepare synthetic input.
+2. Describe the operation.
+3. Describe the observed result.
 
-## Expected / actual behavior
+## Expected behavior
 
-## Checks performed
+## Actual behavior
+
+Provide sanitized output only.
+
+## Checks already performed
+
+For a documentation issue, include the affected page and section.

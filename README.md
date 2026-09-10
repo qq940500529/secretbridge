@@ -1,54 +1,95 @@
+<div align="center">
+
 # SecretBridge · 密桥
 
-**A local credential-use broker for AI-assisted operations — designed for Windows, Linux and macOS.**
+**Controlled credential use for AI-assisted operations.**
 
-[简体中文](README.zh-CN.md) · [Architecture](docs/开发设计.md) · [Security](SECURITY.md) · [Roadmap](ROADMAP.md) · [Contributing](CONTRIBUTING.md)
+Windows · Linux · macOS &nbsp; | &nbsp; AGPL-3.0-only + separate commercial licensing
 
-## Status: design-stage, not a usable credential manager
+[简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-This initial repository contains design documents, contribution policies and repository hygiene checks. **There is no application, working UI, credential broker or installer yet. Do not use real credentials.** Cross-platform support and the UI experience below are implementation targets, not verified product capabilities. Repository CI does not test an application.
+![Repository checks](https://github.com/qq940500529/secretbridge/actions/workflows/repository-checks.yml/badge.svg?branch=main)
 
-## The goal
+</div>
 
-Let an AI request an approved operation without receiving the underlying password. A trusted local broker would retrieve credentials, execute a narrowly scoped operation, and release only reviewed results. Ordinary persistent terminals and credential-bearing operations are separate trust domains.
+> [!IMPORTANT]
+> **Design-stage project.** Documentation and repository checks are available; the desktop application, credential broker and installers are not. Platform support is a development target. Do not use real credentials.
 
-Planned capabilities:
+## Why SecretBridge?
 
-- A polished, accessible desktop UI with Chinese and English localization.
-- Local credential configuration, target binding, approvals, revocation and audit.
-- Persistent terminal sessions independent of the UI and AI connection lifecycle.
-- Structured MCP tools that never offer a secret-reading API.
-- Platform-specific credential, IPC, process supervision and isolation backends.
+Giving an assistant a password also exposes that password to its surrounding context and tools. SecretBridge is designed to keep credential use behind a local, explicit authorization boundary: an assistant requests an operation; a trusted broker performs it; reviewed results return to the assistant.
 
-Proposed stack: Tauri 2, Rust, React/TypeScript and xterm.js; Windows ConPTY and POSIX PTYs on Linux/macOS. Libraries are proposals, not bundled dependencies.
+| Capability | Intended experience |
+| :--- | :--- |
+| Credential-use delegation | Configure credentials locally; expose approved operations, not a secret-reading API. |
+| Explicit approvals | Review the target, parameters, permissions and output scope before an operation starts. |
+| Persistent terminals | Reconnect to sessions without tying their lifetime to a window or one assistant request. |
+| Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
+| Cross-platform desktop | Consistent workflows with native credential, IPC and process backends. |
 
-## Security is more than masking
+All capabilities above are planned. See [milestone acceptance criteria](ROADMAP.md) for implementation progress.
 
-Passing secrets to arbitrary commands and filtering their output cannot reliably stop exfiltration. OS credential stores alone do not isolate an AI with unrestricted execution under the credential owner's account. Production use requires validated identity/process isolation, narrow adapters, authenticated targets and controlled output. See the [threat model](docs/安全模型与验收.md).
+## How it works
+
+```mermaid
+flowchart LR
+    A["Assistant<br/>Operation request"] --> B["Policy and approval"]
+    U["User"] -->|"Approve scope"| B
+    B --> C["Local broker"]
+    K["Credential store"] -->|"Private use"| C
+    C --> D["Approved target"]
+    D --> E["Review output"]
+    E -->|"Allowed results only"| A
+```
+
+The assistant does not receive the stored secret. Ordinary terminals and credential-bearing operations use separate execution paths; a credentialed session is not an unrestricted shell.
+
+> [!WARNING]
+> Masking is not isolation. An assistant with unrestricted access under the credential owner's OS account may bypass application controls. A secure deployment requires a tested identity/process boundary and narrowly scoped adapters. Read the [security model](docs/安全模型与验收.md) before evaluating real-world use.
+
+## Choose a starting point
+
+| Your goal | Start here |
+| :--- | :--- |
+| Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
+| Find the right technical document | [Documentation hub](docs/README.md) |
+| Contribute code, design or tests | [Contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) |
+| Review architecture and platform behavior | [Architecture](docs/开发设计.md) and [platform/UI specification](docs/跨平台与UI规范.md) |
+| Report a vulnerability privately | [Security policy](SECURITY.md) |
+
+The English and Chinese homepages cover the same product scope. Detailed engineering documents are currently in Simplified Chinese; English translations are welcome.
 
 ## Platform targets
 
-| Platform | Initial validation target | Current status |
-|---|---|---|
-| Windows | Windows 11 x64 | Planned; application not implemented |
-| Linux | Ubuntu 24.04 x64, GNOME and KDE sessions | Planned; application not implemented |
-| macOS | macOS 14+ arm64 and x64 | Planned; application not implemented |
+| Platform | First validation baseline | Runtime status |
+| :--- | :--- | :--- |
+| Windows | Windows 11 · x64 | Not implemented |
+| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | Not implemented |
+| macOS | macOS 14+ · arm64/x64 | Not implemented |
 
-Exact supported versions will be published only after testing. Windows/Linux arm64 and other Linux distributions require separate validation. Details: [platform and UI specification](docs/跨平台与UI规范.md).
+Other OS versions and architectures require their own validation. The CI badge covers repository checks on three runner families, **not application compatibility**.
 
-## Check this repository
+## Work with this repository
 
-Python 3.11+ is sufficient; no package installation or secrets required:
+Python 3.11+ and Git are sufficient for the current contribution workflow:
 
 ```sh
+git clone https://github.com/qq940500529/secretbridge.git
+cd secretbridge
 python tools/check_repository.py
 python -m unittest discover -s tests -v
 ```
 
-Checks cover required files, local document links, selected leak patterns and forbidden artifacts. They are intentionally limited, not a substitute for a mature secret scanner, dependency audit or security review.
+These commands validate documentation and repository hygiene. There is no application launch command yet. See [development setup](docs/开发者入门.md) for expected results, limitations and troubleshooting.
 
-## License and responsible contribution
+## License and community
 
-Project-owned material is offered under **GNU Affero General Public License v3.0 only**, SPDX `AGPL-3.0-only`, unless explicitly marked otherwise. See [LICENSE](LICENSE) and [licensing guidance](docs/开源治理与发布.md). Third-party material retains its own license. No warranty is provided; this repository is not security certification.
+Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**. Company-owned material is offered under **AGPL-3.0-only** or a **separate written commercial license**. Commercial authorization may permit proprietary use within its agreed scope; this repository does not automatically grant such authorization. See [licensing options](LICENSING.md), [commercial licensing](COMMERCIAL_LICENSE.md) and [copyright](COPYRIGHT.md).
 
-Do not submit credentials, private infrastructure, business exports, personal information or unlicensed assets. Report vulnerabilities privately through the process in [SECURITY.md](SECURITY.md).
+AGPL permits commercial use subject to its terms. [Third-party obligations](THIRD_PARTY_NOTICES.md) remain applicable under either route; see the [candidate dependency assessment](docs/依赖许可风险评估.md).
+
+Contributions follow the [contribution guide](CONTRIBUTING.md) and [community standards](CODE_OF_CONDUCT.md). Report ordinary issues through [GitHub Issues](https://github.com/qq940500529/secretbridge/issues); report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
+
+---
+
+[Documentation](docs/README.md) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
