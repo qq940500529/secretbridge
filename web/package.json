@@ -1,7 +1,7 @@
 {
   "name": "@secretbridge/web",
   "private": true,
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "scripts": {
@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@radix-ui/react-tooltip": "1.2.16",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "lucide-react": "1.44.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"

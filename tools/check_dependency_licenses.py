@@ -15,10 +15,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REVIEWED_RUST_LICENSES = {
     "(MIT OR Apache-2.0) AND Unicode-3.0",
     "Apache-2.0",
+    "Apache-2.0/MIT",
     "Apache-2.0 OR BSL-1.0",
     "Apache-2.0 OR MIT",
     "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
     "BSD-3-Clause",
+    "BSD-2-Clause OR Apache-2.0",
+    "BSD-2-Clause OR Apache-2.0 OR MIT",
     "MIT",
     "MIT AND BSD-3-Clause",
     "MIT OR Apache-2.0",

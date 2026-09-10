@@ -34,7 +34,7 @@ A later milestone cannot bypass an unresolved security prerequisite.
 - [x] Enforce synthetic-only mode; real credential and execution paths are absent.
 - [ ] Verify the intended identity boundary on Windows, Linux and macOS.
 - [x] Demonstrate one-time browser pairing, exact Origin checks and rejection of invalid tokens on a loopback-only service.
-- [ ] Demonstrate PTY lifetime independent of UI and assistant connections.
+- [x] Demonstrate synthetic PTY lifetime independent of WebSocket/UI attachment, including output replay after reconnection.
 - [ ] Record unsupported environments and remaining risks.
 
 </details>
@@ -44,7 +44,7 @@ A later milestone cannot bypass an unresolved security prerequisite.
 
 - [ ] Implement credential-reference and target configuration.
 - [ ] Implement scoped approval and revocation.
-- [ ] Provide accessible bilingual navigation and clear task states.
+- [x] Provide bilingual navigation and clear task states; full accessibility verification remains a release gate.
 - [ ] Verify reconnect, input leases, output backpressure and cancellation.
 - [ ] Keep ordinary terminals separate from credential-bearing operations.
 
