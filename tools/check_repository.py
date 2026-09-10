@@ -1,5 +1,5 @@
 # SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
-# SPDX-License-Identifier: AGPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Limited public-repository hygiene checks; not a full secret scanner."""
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def check_repository(root: Path) -> list[str]:
         if path.is_symlink() or path.is_file():
             errors.extend(inspect_file(root, path))
     readme = root / "README.md"
-    if readme.exists() and "AGPL-3.0-only" not in readme.read_text(encoding="utf-8"):
+    if readme.exists() and "AGPL-3.0-or-later" not in readme.read_text(encoding="utf-8"):
         errors.append("README.md: license-identifier-missing")
     return errors
 

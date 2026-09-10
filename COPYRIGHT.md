@@ -22,7 +22,7 @@ SecretBridge（密桥）由数链创元（天津）信息技术有限责任公�
 
 ```text
 SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
-SPDX-License-Identifier: AGPL-3.0-only
+SPDX-License-Identifier: AGPL-3.0-or-later
 ```
 
 年份应反映实际创作年份，后续修改按项目维护政策记录。第三方文件不得批量替换为公司版权；保留其原始文件头，并在[第三方声明](THIRD_PARTY_NOTICES.md)中登记。

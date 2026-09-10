@@ -9,7 +9,14 @@
 
 ## 适用场景
 
-需要闭源修改、嵌入专有产品、向客户分发专有版本或经营托管服务，且希望就公司可授权内容采用区别于AGPL的条款时，可申请商业授权。符合AGPL条款的商业使用无需仅因“商用”而购买第二份许可。
+下列场景需要就公司可授权的内容取得书面商业许可：
+
+- 修改、改造或派生本项目代码后，以闭源或其他不遵守AGPL的方式商用；
+- 将本项目代码嵌入、链接、集成或打包进不按AGPL履约的商业软件、设备或安装包；
+- 以不满足AGPL适用要求的方式向客户分发专有版本或经营网络服务；
+- 实施任何超出AGPL授权范围的使用、复制、修改、分发、再许可或其他利用行为。
+
+完整遵守AGPL的商业使用仍可直接依据开源许可进行，无需仅因“商用”而购买第二份许可。
 
 商业协议可约定上述行为的许可，但必须明确实际产品、版本、使用范围和第三方排除项；不以“商业版”名称自动免除任何第三方义务。
 
@@ -47,7 +54,7 @@ GitHub账号是沟通入口，不替代公司身份或签约权限证明。未�
 
 ## English summary
 
-Commercial licenses may be issued separately by **数链创元（天津）信息技术有限责任公司** for rights it owns or is authorized to sublicense. A valid written agreement must define the covered version, proprietary use and distribution scope, exclusions and effective terms. This document is an application guide, not a commercial license grant or an executed agreement.
+Commercial licenses may be issued separately by **数链创元（天津）信息技术有限责任公司** for rights it owns or is authorized to sublicense. A written commercial license is required for proprietary commercial use of modified versions, embedding, linking or packaging in commercial software that will not comply with the AGPL, and any use beyond the open-source license. A valid agreement must define the covered version, scope, exclusions and effective terms. This document is an application guide, not a commercial license grant or an executed agreement.
 
 Start with a non-confidential licensing inquiry in the repository's Issues. Third-party licenses remain applicable.
 

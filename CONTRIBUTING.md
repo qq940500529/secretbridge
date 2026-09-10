@@ -45,13 +45,11 @@ These commands validate repository content, not the desktop application.
 | Safety | Authorization, credential lifecycle, output and target changes |
 | Compatibility | Platforms checked and platforms still untested |
 | Documentation | Updated examples, links, diagrams and status |
-| Provenance | Source/license of imported material; review of generated portions |
-
-Declare the scope of AI-assisted contributions and the review performed. Generated content remains subject to the same provenance, licensing and testing requirements as other work.
+| Provenance | Source, authorship and license of imported material |
 
 ## License and sign-off
 
-Contribute only material you have the right to submit under `AGPL-3.0-only` or documented compatible third-party terms. Read the [Developer Certificate of Origin 1.1](https://developercertificate.org/) before using `git commit -s`. Sign-off is a contributor assertion, not a copyright transfer; never sign for another person without authority.
+Contribute only material you have the right to submit under `AGPL-3.0-or-later` or documented compatible third-party terms. Read the [Developer Certificate of Origin 1.1](https://developercertificate.org/) before using `git commit -s`. Sign-off is a contributor assertion, not a copyright transfer; never sign for another person without authority.
 
 SecretBridge also offers [separate commercial licensing](COMMERCIAL_LICENSE.md) for rights controlled by 数链创元（天津）信息技术有限责任公司. A DCO sign-off or PR merge **does not grant proprietary relicensing rights or transfer copyright**. Commercial inclusion of externally owned contributions requires sufficient separate written authorization; see the [contribution and relicensing policy](docs/贡献与再许可.md). No such agreement is implied by submitting a contribution.
 

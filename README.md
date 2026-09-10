@@ -4,16 +4,22 @@
 
 **Controlled credential use for AI-assisted operations.**
 
-Windows · Linux · macOS &nbsp; | &nbsp; AGPL-3.0-only + separate commercial licensing
-
 [简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
 
-![Repository checks](https://github.com/qq940500529/secretbridge/actions/workflows/repository-checks.yml/badge.svg?branch=main)
+[![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
+[![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
+[![Project stage: design](https://img.shields.io/badge/project%20stage-design-EA7D19)](ROADMAP.md)
+
+[![Planned stack: Tauri 2](https://img.shields.io/badge/Tauri%202-24C8D8?logo=tauri&logoColor=white)](docs/开源选型与资料.md)
+[![Planned stack: Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](docs/开源选型与资料.md)
+[![Planned stack: React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](docs/开源选型与资料.md)
+[![Planned stack: TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](docs/开源选型与资料.md)
+[![Planned stack: SQLite](https://img.shields.io/badge/SQLite-07405E?logo=sqlite&logoColor=white)](docs/开源选型与资料.md)
 
 </div>
 
 > [!IMPORTANT]
-> **Design-stage project.** Documentation and repository checks are available; the desktop application, credential broker and installers are not. Platform support is a development target. Do not use real credentials.
+> **Design-stage project.** Product and engineering specifications are available; the desktop application, credential broker and installers are not. Platform support is a development target. Do not use real credentials.
 
 ## Why SecretBridge?
 
@@ -67,26 +73,19 @@ The English and Chinese homepages cover the same product scope. Detailed enginee
 | Linux | Ubuntu 24.04 · x64 · GNOME/KDE | Not implemented |
 | macOS | macOS 14+ · arm64/x64 | Not implemented |
 
-Other OS versions and architectures require their own validation. The CI badge covers repository checks on three runner families, **not application compatibility**.
+Other OS versions and architectures require separate validation. Actual support will be documented for each future release.
 
-## Work with this repository
+## Contribute
 
-Python 3.11+ and Git are sufficient for the current contribution workflow:
-
-```sh
-git clone https://github.com/qq940500529/secretbridge.git
-cd secretbridge
-python tools/check_repository.py
-python -m unittest discover -s tests -v
-```
-
-These commands validate documentation and repository hygiene. There is no application launch command yet. See [development setup](docs/开发者入门.md) for expected results, limitations and troubleshooting.
+The project is in its design stage. Contributions to product design, security review, platform integration, accessibility and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 
-Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**. Company-owned material is offered under **AGPL-3.0-only** or a **separate written commercial license**. Commercial authorization may permit proprietary use within its agreed scope; this repository does not automatically grant such authorization. See [licensing options](LICENSING.md), [commercial licensing](COMMERCIAL_LICENSE.md) and [copyright](COPYRIGHT.md).
+Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**.
 
-AGPL permits commercial use subject to its terms. [Third-party obligations](THIRD_PARTY_NOTICES.md) remain applicable under either route; see the [candidate dependency assessment](docs/依赖许可风险评估.md).
+This repository is open-source software licensed under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`). A separate written commercial license is required to use a modified version on proprietary terms, embed, link or package the code in commercial software that will not comply with the AGPL, or exercise rights beyond the open-source license. See [licensing](LICENSING.md), [commercial licensing](COMMERCIAL_LICENSE.md) and [copyright](COPYRIGHT.md).
+
+Third-party components remain subject to their own terms under either licensing path. See [third-party notices](THIRD_PARTY_NOTICES.md) and the [dependency license assessment](docs/依赖许可风险评估.md).
 
 Contributions follow the [contribution guide](CONTRIBUTING.md) and [community standards](CODE_OF_CONDUCT.md). Report ordinary issues through [GitHub Issues](https://github.com/qq940500529/secretbridge/issues); report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
 
