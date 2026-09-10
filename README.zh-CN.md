@@ -4,16 +4,22 @@
 
 **让凭据留在本机，让授权决定操作。**
 
-Windows · Linux · macOS &nbsp; | &nbsp; AGPL-3.0-only ＋另行商业授权
-
 [English](README.md) · [文档中心](docs/README.md) · [参与贡献](CONTRIBUTING.md) · [安全报告](SECURITY.md)
 
-![仓库检查](https://github.com/qq940500529/secretbridge/actions/workflows/repository-checks.yml/badge.svg?branch=main)
+[![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
+[![商业许可：可申请](https://img.shields.io/badge/商业许可-联系版权方-0A7B83)](COMMERCIAL_LICENSE.md)
+[![项目阶段：设计](https://img.shields.io/badge/项目阶段-设计中-EA7D19)](ROADMAP.md)
+
+[![规划技术栈：Tauri 2](https://img.shields.io/badge/Tauri%202-24C8D8?logo=tauri&logoColor=white)](docs/开源选型与资料.md)
+[![规划技术栈：Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](docs/开源选型与资料.md)
+[![规划技术栈：React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](docs/开源选型与资料.md)
+[![规划技术栈：TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](docs/开源选型与资料.md)
+[![规划技术栈：SQLite](https://img.shields.io/badge/SQLite-07405E?logo=sqlite&logoColor=white)](docs/开源选型与资料.md)
 
 </div>
 
 > [!IMPORTANT]
-> **当前处于设计阶段。** 已提供设计文档和仓库检查工具，尚无桌面应用、凭据代理或安装包。三平台兼容性是开发目标；请勿使用真实凭据。
+> **当前处于设计阶段。** 已提供产品与技术设计文档，尚无桌面应用、凭据代理或安装包。三平台兼容性是开发目标；请勿使用真实凭据。
 
 ## 密桥解决什么问题？
 
@@ -67,26 +73,19 @@ flowchart LR
 | Linux | Ubuntu 24.04 · x64 · GNOME/KDE | 尚未实现 |
 | macOS | macOS 14+ · arm64/x64 | 尚未实现 |
 
-其他系统版本和架构需要独立验证。首页CI徽章只表示三个系统的**仓库检查**结果，不代表应用兼容性。
+其他系统版本和架构需要独立验证。实际支持范围以未来发布版本的兼容性说明为准。
 
-## 获取仓库并运行检查
+## 参与项目
 
-当前贡献流程仅需要 Git 与 Python 3.11+：
-
-```sh
-git clone https://github.com/qq940500529/secretbridge.git
-cd secretbridge
-python tools/check_repository.py
-python -m unittest discover -s tests -v
-```
-
-这些命令检查文档与仓库内容，不会启动桌面应用。检查范围、预期输出和常见问题见[开发者入门](docs/开发者入门.md)。
+项目尚处于设计阶段，欢迎参与产品设计、安全评审、三平台适配、可访问性和文档完善。开始贡献前请阅读[贡献指南](CONTRIBUTING.md)与[开发者入门](docs/开发者入门.md)。
 
 ## 许可与社区
 
-Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**。公司自有内容采用 **AGPL-3.0-only 开源许可，或公司另行出具的书面商业许可**。取得有效商业授权后，可在协议范围内闭源商业使用；本仓库不自动授予该权限。详见[许可选择](LICENSING.md)、[商业授权](COMMERCIAL_LICENSE.md)与[版权声明](COPYRIGHT.md)。
+Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**。
 
-AGPL本身允许符合其条款的商业使用。无论选择哪条路径，都须遵循[第三方许可义务](THIRD_PARTY_NOTICES.md)；候选组件的风险见[依赖许可评估](docs/依赖许可风险评估.md)。
+本仓库采用 **GNU Affero General Public License v3.0 or later**（`AGPL-3.0-or-later`）开源许可。如需将代码改造后闭源商用，将其嵌入、链接或打包进不按AGPL履约的商业软件，或实施任何超出开源许可范围的事项，须事先联系版权方取得书面商业许可。详见[许可说明](LICENSING.md)、[商业授权](COMMERCIAL_LICENSE.md)与[版权声明](COPYRIGHT.md)。
+
+无论采用开源许可还是商业许可，第三方组件仍须遵守其各自条款，详见[第三方声明](THIRD_PARTY_NOTICES.md)与[依赖许可风险评估](docs/依赖许可风险评估.md)。
 
 普通问题通过[GitHub Issues](https://github.com/qq940500529/secretbridge/issues)提交；安全漏洞使用[私人报告流程](SECURITY.md)。贡献者应遵循[贡献指南](CONTRIBUTING.md)与[社区准则](CODE_OF_CONDUCT.md)，不要提交真实凭据或业务数据。
 

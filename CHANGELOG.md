@@ -9,7 +9,7 @@ Changes affecting contributors, project scope and future users are recorded here
 ### Licensing
 
 - Identify 数链创元（天津）信息技术有限责任公司 as the copyright holder of company-owned material.
-- Retain the unchanged AGPL v3 text and add a separate written commercial licensing route.
+- License the repository under AGPL-3.0-or-later and provide a separate written commercial licensing route for proprietary commercial use.
 - Document contribution relicensing boundaries, third-party exclusions and candidate dependency license risks.
 
 ### Documentation
@@ -25,7 +25,7 @@ Changes affecting contributors, project scope and future users are recorded here
 - Establish credential-use boundaries, persistent terminal semantics and a threat model.
 - Define Windows, Linux and macOS as implementation targets.
 - Specify platform credential/IPC/supervisor abstractions and UI/accessibility goals.
-- Adopt AGPL-3.0-only and contribution, security and release policies.
+- Adopt AGPL-3.0-or-later and contribution, security and release policies.
 - Add limited repository hygiene checks and three-OS CI for those checks.
 
 > [!NOTE]

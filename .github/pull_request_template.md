@@ -19,7 +19,6 @@ List commands or manual checks, actual outcomes and untested environments. For d
 - [ ] Local checks and tests pass.
 - [ ] No secrets, private paths or business artifacts are included.
 - [ ] Imported material has documented provenance and compatible licensing.
-- [ ] Generated or AI-assisted portions are disclosed and reviewed.
 - [ ] Relevant documentation and changelog are updated.
 - [ ] Commit sign-off follows the DCO requirements.
 - [ ] For imported or externally owned material, recorded license and provenance; did not treat DCO or PR acceptance as commercial relicensing permission.
