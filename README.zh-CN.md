@@ -8,18 +8,18 @@
 
 [![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
 [![商业许可：可申请](https://img.shields.io/badge/商业许可-联系版权方-0A7B83)](COMMERCIAL_LICENSE.md)
-[![项目阶段：设计](https://img.shields.io/badge/项目阶段-设计中-EA7D19)](ROADMAP.md)
+[![项目阶段：M0](https://img.shields.io/badge/项目阶段-M0%20安全基础-EA7D19)](ROADMAP.md)
 
-[![规划技术栈：Tauri 2](https://img.shields.io/badge/Tauri%202-24C8D8?logo=tauri&logoColor=white)](docs/开源选型与资料.md)
-[![规划技术栈：Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](docs/开源选型与资料.md)
-[![规划技术栈：React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](docs/开源选型与资料.md)
-[![规划技术栈：TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](docs/开源选型与资料.md)
-[![规划技术栈：SQLite](https://img.shields.io/badge/SQLite-07405E?logo=sqlite&logoColor=white)](docs/开源选型与资料.md)
+[![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
+[![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
+[![React](https://img.shields.io/badge/React%2019-20232A?logo=react&logoColor=61DAFB)](web/package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript%207-3178C6?logo=typescript&logoColor=white)](web/package.json)
+[![Vite](https://img.shields.io/badge/Vite%208-646CFF?logo=vite&logoColor=white)](web/package.json)
 
 </div>
 
 > [!IMPORTANT]
-> **当前处于设计阶段。** 已提供产品与技术设计文档，尚无桌面应用、凭据代理或安装包。三平台兼容性是开发目标；请勿使用真实凭据。
+> **当前处于M0安全基础阶段。** 仓库已有可运行的本机Web管理端、回环地址Rust服务与一次性浏览器配对；真实凭据保存、注入和命令执行均被禁用。请勿配置真实凭据或连接业务系统。
 
 ## 密桥解决什么问题？
 
@@ -31,9 +31,9 @@
 | 明确审批 | 执行前确认目标、参数、权限和结果范围。 |
 | 持久终端 | 窗口关闭或助手断线后，可以重新连接同一会话。 |
 | 安全返回 | 筛选结果字段、过滤输出，并保留可追溯的审计事件。 |
-| 三平台体验 | 统一操作流程，分别适配各系统的凭据、通信和进程机制。 |
+| 三平台体验 | 浏览器管理端保持一致，后台服务分别适配各系统的凭据和进程机制。 |
 
-以上为待实现能力。开发状态与准入条件见[路线图](ROADMAP.md)。
+当前只实现了合成模式状态接口、一次性配对和管理界面骨架；其余能力及准入条件见[路线图](ROADMAP.md)。
 
 ## 一次操作如何完成？
 
@@ -65,19 +65,31 @@ flowchart LR
 
 中英文首页保持相同的产品范围；详细工程文档当前以简体中文维护。
 
+## 运行M0原型
+
+需要Node.js 24、pnpm 11及Rust 1.98或更新的稳定工具链：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+cargo run -p secretbridge-server
+```
+
+服务仅监听`127.0.0.1:8787`并打开系统默认浏览器。启动令牌位于URL片段中，页面读取后立即清除；换页或刷新不会持久化会话。该原型不使用、也不计划引入桌面壳。
+
 ## 平台目标
 
 | 平台 | 首轮验证基线 | 应用状态 |
 | :--- | :--- | :--- |
-| Windows | Windows 11 · x64 | 尚未实现 |
-| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | 尚未实现 |
-| macOS | macOS 14+ · arm64/x64 | 尚未实现 |
+| Windows | Windows 11 · x64 | 本地构建与单元测试已验证 |
+| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | CI验证待完成 |
+| macOS | macOS 14+ · arm64/x64 | CI验证待完成 |
 
 其他系统版本和架构需要独立验证。实际支持范围以未来发布版本的兼容性说明为准。
 
 ## 参与项目
 
-项目尚处于设计阶段，欢迎参与产品设计、安全评审、三平台适配、可访问性和文档完善。开始贡献前请阅读[贡献指南](CONTRIBUTING.md)与[开发者入门](docs/开发者入门.md)。
+项目处于M0阶段，欢迎参与安全评审、三平台适配、可访问性、测试与文档完善。开始贡献前请阅读[贡献指南](CONTRIBUTING.md)与[开发者入门](docs/开发者入门.md)。
 
 ## 许可与社区
 

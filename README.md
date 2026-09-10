@@ -8,18 +8,18 @@
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
-[![Project stage: design](https://img.shields.io/badge/project%20stage-design-EA7D19)](ROADMAP.md)
+[![Project stage: M0](https://img.shields.io/badge/project%20stage-M0%20security%20foundation-EA7D19)](ROADMAP.md)
 
-[![Planned stack: Tauri 2](https://img.shields.io/badge/Tauri%202-24C8D8?logo=tauri&logoColor=white)](docs/开源选型与资料.md)
-[![Planned stack: Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](docs/开源选型与资料.md)
-[![Planned stack: React](https://img.shields.io/badge/React-20232A?logo=react&logoColor=61DAFB)](docs/开源选型与资料.md)
-[![Planned stack: TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](docs/开源选型与资料.md)
-[![Planned stack: SQLite](https://img.shields.io/badge/SQLite-07405E?logo=sqlite&logoColor=white)](docs/开源选型与资料.md)
+[![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
+[![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
+[![React](https://img.shields.io/badge/React%2019-20232A?logo=react&logoColor=61DAFB)](web/package.json)
+[![TypeScript](https://img.shields.io/badge/TypeScript%207-3178C6?logo=typescript&logoColor=white)](web/package.json)
+[![Vite](https://img.shields.io/badge/Vite%208-646CFF?logo=vite&logoColor=white)](web/package.json)
 
 </div>
 
 > [!IMPORTANT]
-> **Design-stage project.** Product and engineering specifications are available; the desktop application, credential broker and installers are not. Platform support is a development target. Do not use real credentials.
+> **M0 security-foundation project.** The repository now contains a runnable local Web console, loopback-only Rust service and one-time browser pairing. Real credential storage, injection and command execution are disabled. Do not configure real credentials or connect business systems.
 
 ## Why SecretBridge?
 
@@ -31,9 +31,9 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Explicit approvals | Review the target, parameters, permissions and output scope before an operation starts. |
 | Persistent terminals | Reconnect to sessions without tying their lifetime to a window or one assistant request. |
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
-| Cross-platform desktop | Consistent workflows with native credential, IPC and process backends. |
+| Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-All capabilities above are planned. See [milestone acceptance criteria](ROADMAP.md) for implementation progress.
+Only synthetic-mode status, one-time pairing and the management shell are implemented. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
 
 ## How it works
 
@@ -65,19 +65,31 @@ The assistant does not receive the stored secret. Ordinary terminals and credent
 
 The English and Chinese homepages cover the same product scope. Detailed engineering documents are currently in Simplified Chinese; English translations are welcome.
 
+## Run the M0 prototype
+
+Install Node.js 24, pnpm 11 and the stable Rust 1.98 toolchain or newer:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+cargo run -p secretbridge-server
+```
+
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The project does not use—and does not plan to introduce—a desktop shell.
+
 ## Platform targets
 
 | Platform | First validation baseline | Runtime status |
 | :--- | :--- | :--- |
-| Windows | Windows 11 · x64 | Not implemented |
-| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | Not implemented |
-| macOS | macOS 14+ · arm64/x64 | Not implemented |
+| Windows | Windows 11 · x64 | Local build and unit tests verified |
+| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | CI verification pending |
+| macOS | macOS 14+ · arm64/x64 | CI verification pending |
 
 Other OS versions and architectures require separate validation. Actual support will be documented for each future release.
 
 ## Contribute
 
-The project is in its design stage. Contributions to product design, security review, platform integration, accessibility and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is in M0. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

@@ -102,6 +102,15 @@ class RepositoryChecks(unittest.TestCase):
             path.write_bytes(b"synthetic")
             self.assertIn("export.zip: unexpected-artifact", inspect_file(root, path))
 
+    def test_application_source_types_are_checked_as_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("main.rs", "App.tsx", "styles.css", "Cargo.toml"):
+                with self.subTest(name=name):
+                    path = root / name
+                    path.write_text("synthetic", encoding="utf-8")
+                    self.assertEqual([], inspect_file(root, path))
+
     def test_required_files(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertTrue(check_repository(Path(directory)))
