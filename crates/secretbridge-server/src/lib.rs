@@ -8,6 +8,8 @@ mod terminal;
 
 use std::{
     collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -26,7 +28,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use secretbridge_core::StatusResponse;
+use secretbridge_core::{ConfigurationStorage, StatusResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -39,7 +41,8 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
-    Catalog, CatalogError, CreateCredentialReference, CreateTarget, CredentialReference, Target,
+    Catalog, CatalogError, CatalogOpenError, CreateCredentialReference, CreateTarget,
+    CredentialReference, Target, UpdateCredentialReference, UpdateTarget,
 };
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
@@ -59,15 +62,62 @@ pub struct AppState {
     session_revocations: broadcast::Sender<[u8; 32]>,
     trusted_origins: Arc<HashSet<String>>,
     catalog: Catalog,
+    configuration_storage: ConfigurationStorage,
     terminals: TerminalManager,
 }
 
+#[derive(Debug)]
+pub struct AppStateInitializationError(CatalogOpenError);
+
+impl fmt::Display for AppStateInitializationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretBridge configuration storage could not initialize")
+    }
+}
+
+impl Error for AppStateInitializationError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 impl AppState {
+    /// Creates an application state backed by an ephemeral in-memory catalog.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the process cannot initialize an in-memory SQLite connection.
     #[must_use]
     pub fn new(trusted_origins: impl IntoIterator<Item = String>) -> (Self, String) {
         let program =
             std::env::current_exe().unwrap_or_else(|_| PathBuf::from("secretbridge-server"));
-        Self::new_with_terminal_program(trusted_origins, program)
+        Self::build(
+            trusted_origins,
+            program,
+            Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
+            ConfigurationStorage::MemoryOnly,
+        )
+    }
+
+    /// Creates an application state backed by the SQLite database at `database_path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the database cannot be opened, migrated, or has a schema newer than
+    /// this service supports.
+    pub fn new_persistent(
+        trusted_origins: impl IntoIterator<Item = String>,
+        database_path: &Path,
+    ) -> Result<(Self, String), AppStateInitializationError> {
+        let program =
+            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("secretbridge-server"));
+        let catalog = Catalog::open(database_path).map_err(AppStateInitializationError)?;
+        Ok(Self::build(
+            trusted_origins,
+            program,
+            catalog,
+            ConfigurationStorage::Sqlite,
+        ))
     }
 
     #[doc(hidden)]
@@ -76,6 +126,20 @@ impl AppState {
         trusted_origins: impl IntoIterator<Item = String>,
         program: PathBuf,
     ) -> (Self, String) {
+        Self::build(
+            trusted_origins,
+            program,
+            Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
+            ConfigurationStorage::MemoryOnly,
+        )
+    }
+
+    fn build(
+        trusted_origins: impl IntoIterator<Item = String>,
+        program: PathBuf,
+        catalog: Catalog,
+        configuration_storage: ConfigurationStorage,
+    ) -> (Self, String) {
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
         let state = Self {
@@ -83,7 +147,8 @@ impl AppState {
             session_tokens: Arc::new(RwLock::new(HashMap::new())),
             session_revocations,
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
-            catalog: Catalog::default(),
+            catalog,
+            configuration_storage,
             terminals: TerminalManager::new(program),
         };
         (state, bootstrap_token)
@@ -157,13 +222,13 @@ struct TerminalListResponse {
 #[derive(Serialize)]
 struct CredentialReferenceListResponse {
     items: Vec<CredentialReference>,
-    storage: &'static str,
+    storage: ConfigurationStorage,
 }
 
 #[derive(Serialize)]
 struct TargetListResponse {
     items: Vec<Target>,
-    storage: &'static str,
+    storage: ConfigurationStorage,
 }
 
 #[derive(Deserialize)]
@@ -228,6 +293,7 @@ enum ApiError {
     ResourceInUse,
     TerminalCapacity,
     Unauthorized,
+    VersionConflict,
 }
 
 impl IntoResponse for ApiError {
@@ -273,6 +339,11 @@ impl IntoResponse for ApiError {
                 "unauthorized",
                 "Authentication failed.",
             ),
+            Self::VersionConflict => (
+                StatusCode::CONFLICT,
+                "version_conflict",
+                "The record changed after it was loaded. Reload it before saving.",
+            ),
         };
         (status, Json(ErrorResponse { code, message })).into_response()
     }
@@ -300,10 +371,13 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/credential-references/{id}",
-            delete(delete_credential_reference),
+            delete(delete_credential_reference).put(update_credential_reference),
         )
         .route("/api/v1/targets", get(list_targets).post(create_target))
-        .route("/api/v1/targets/{id}", delete(delete_target))
+        .route(
+            "/api/v1/targets/{id}",
+            delete(delete_target).put(update_target),
+        )
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
@@ -343,7 +417,10 @@ fn apply_security_headers(router: Router) -> Router {
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.active_session_count().await > 0;
-    Json(StatusResponse::synthetic_only(paired))
+    Json(StatusResponse::synthetic_only(
+        paired,
+        state.configuration_storage,
+    ))
 }
 
 async fn pair(
@@ -404,9 +481,14 @@ async fn list_credential_references(
     headers: HeaderMap,
 ) -> Result<Json<CredentialReferenceListResponse>, ApiError> {
     require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_credential_references())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
     Ok(Json(CredentialReferenceListResponse {
-        items: state.catalog.list_credential_references(),
-        storage: "memory_only",
+        items,
+        storage: state.configuration_storage,
     }))
 }
 
@@ -417,11 +499,28 @@ async fn create_credential_reference(
 ) -> Result<(StatusCode, Json<CredentialReference>), ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    let item = state
-        .catalog
-        .create_credential_reference(&request)
+    let catalog = state.catalog.clone();
+    let item = task::spawn_blocking(move || catalog.create_credential_reference(&request))
+        .await
+        .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
     Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn update_credential_reference(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateCredentialReference>,
+) -> Result<Json<CredentialReference>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let item = task::spawn_blocking(move || catalog.update_credential_reference(id, &request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(item))
 }
 
 async fn delete_credential_reference(
@@ -431,9 +530,10 @@ async fn delete_credential_reference(
 ) -> Result<StatusCode, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    state
-        .catalog
-        .delete_credential_reference(id)
+    let catalog = state.catalog.clone();
+    task::spawn_blocking(move || catalog.delete_credential_reference(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -443,9 +543,14 @@ async fn list_targets(
     headers: HeaderMap,
 ) -> Result<Json<TargetListResponse>, ApiError> {
     require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_targets())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
     Ok(Json(TargetListResponse {
-        items: state.catalog.list_targets(),
-        storage: "memory_only",
+        items,
+        storage: state.configuration_storage,
     }))
 }
 
@@ -456,11 +561,28 @@ async fn create_target(
 ) -> Result<(StatusCode, Json<Target>), ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    let target = state
-        .catalog
-        .create_target(&request)
+    let catalog = state.catalog.clone();
+    let target = task::spawn_blocking(move || catalog.create_target(&request))
+        .await
+        .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
     Ok((StatusCode::CREATED, Json(target)))
+}
+
+async fn update_target(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateTarget>,
+) -> Result<Json<Target>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let target = task::spawn_blocking(move || catalog.update_target(id, &request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(target))
 }
 
 async fn delete_target(
@@ -470,7 +592,11 @@ async fn delete_target(
 ) -> Result<StatusCode, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    state.catalog.delete_target(id).map_err(map_catalog_error)?;
+    let catalog = state.catalog.clone();
+    task::spawn_blocking(move || catalog.delete_target(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -883,6 +1009,8 @@ fn map_catalog_error(error: CatalogError) -> ApiError {
         CatalogError::CredentialReferenceNotFound | CatalogError::NotFound => ApiError::NotFound,
         CatalogError::Invalid => ApiError::BadRequest,
         CatalogError::ResourceInUse => ApiError::ResourceInUse,
+        CatalogError::Storage => ApiError::Internal,
+        CatalogError::VersionConflict => ApiError::VersionConflict,
     }
 }
 
@@ -921,12 +1049,16 @@ fn new_token() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use axum::{
         body::Body,
         http::{Request, StatusCode, header::AUTHORIZATION},
     };
     use http_body_util::BodyExt;
+    use secretbridge_core::ConfigurationStorage;
     use tower::ServiceExt;
+    use uuid::Uuid;
 
     use super::{AppState, SESSION_TTL, apply_security_headers, router};
 
@@ -935,6 +1067,20 @@ mod tests {
     fn test_app() -> (axum::Router, String) {
         let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
         (router(state), bootstrap)
+    }
+
+    #[test]
+    fn persistent_state_reports_sqlite_storage() {
+        let path = std::env::temp_dir().join(format!(
+            "secretbridge-state-test-{}.sqlite3",
+            Uuid::new_v4()
+        ));
+        let (state, _) = AppState::new_persistent([ORIGIN.to_owned()], &path)
+            .expect("persistent application state");
+
+        assert_eq!(state.configuration_storage, ConfigurationStorage::Sqlite);
+        drop(state);
+        fs::remove_file(path).expect("remove temporary database");
     }
 
     #[tokio::test]
@@ -1242,6 +1388,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_update_requires_origin_and_increments_version() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/credential-references",
+                &token,
+                ORIGIN,
+                r#"{"name":"Synthetic reference","kind":"password"}"#,
+            ))
+            .await
+            .expect("router response");
+        let item = response_json(created).await;
+        let id = item["id"].as_str().expect("credential id");
+        assert_eq!(item["version"], 1);
+
+        let missing_origin = app
+            .clone()
+            .oneshot(authenticated_request_with_body(
+                "PUT",
+                &format!("/api/v1/credential-references/{id}"),
+                &token,
+                None,
+                r#"{"name":"Blocked update","kind":"api_token","expected_version":1}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+
+        let updated = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "PUT",
+                &format!("/api/v1/credential-references/{id}"),
+                &token,
+                ORIGIN,
+                r#"{"name":"Updated reference","kind":"api_token","purpose":"Synthetic metadata","expected_version":1}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(updated.status(), StatusCode::OK);
+        let item = response_json(updated).await;
+        assert_eq!(item["name"], "Updated reference");
+        assert_eq!(item["version"], 2);
+        assert_eq!(item["secret_state"], "not_configured");
+
+        let stale = app
+            .oneshot(authenticated_json_request(
+                "PUT",
+                &format!("/api/v1/credential-references/{id}"),
+                &token,
+                ORIGIN,
+                r#"{"name":"Stale update","kind":"password","expected_version":1}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        let error = response_json(stale).await;
+        assert_eq!(error["code"], "version_conflict");
+    }
+
+    #[tokio::test]
     async fn security_headers_cover_web_fallbacks() {
         let app = apply_security_headers(axum::Router::new().fallback(|| async { "web" }));
         let response = app
@@ -1309,12 +1519,25 @@ mod tests {
         origin: &str,
         body: &str,
     ) -> Request<Body> {
-        Request::builder()
+        authenticated_request_with_body(method, uri, token, Some(origin), body)
+    }
+
+    fn authenticated_request_with_body(
+        method: &str,
+        uri: &str,
+        token: &str,
+        origin: Option<&str>,
+        body: &str,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
             .method(method)
             .uri(uri)
             .header(AUTHORIZATION, format!("Bearer {token}"))
-            .header("origin", origin)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        builder
             .body(Body::from(body.to_owned()))
             .expect("valid request")
     }

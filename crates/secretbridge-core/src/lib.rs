@@ -24,6 +24,7 @@ pub enum IdentityBoundary {
 #[serde(rename_all = "snake_case")]
 pub enum ConfigurationStorage {
     MemoryOnly,
+    Sqlite,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -40,14 +41,14 @@ pub struct StatusResponse {
 
 impl StatusResponse {
     #[must_use]
-    pub const fn synthetic_only(paired: bool) -> Self {
+    pub const fn synthetic_only(paired: bool, configuration_storage: ConfigurationStorage) -> Self {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
             release_stage: "m1_development",
             mode: RuntimeMode::SyntheticOnly,
             identity_boundary: IdentityBoundary::UnverifiedSameUser,
-            configuration_storage: ConfigurationStorage::MemoryOnly,
+            configuration_storage,
             paired,
             real_credentials_enabled: false,
         }
@@ -59,8 +60,8 @@ mod tests {
     use super::{ConfigurationStorage, IdentityBoundary, RuntimeMode, StatusResponse};
 
     #[test]
-    fn m0_status_never_claims_real_credentials() {
-        let status = StatusResponse::synthetic_only(true);
+    fn synthetic_status_never_claims_real_credentials() {
+        let status = StatusResponse::synthetic_only(true, ConfigurationStorage::MemoryOnly);
         assert_eq!(status.mode, RuntimeMode::SyntheticOnly);
         assert_eq!(
             status.identity_boundary,

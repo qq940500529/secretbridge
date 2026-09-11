@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M1 workflow development with M0 security gates still open.** The repository contains a runnable local Web console, loopback-only Rust service, one-time browser pairing, an isolated synthetic terminal, and a memory-only catalog for credential references and logical targets. The catalog accepts no secret values or network endpoints. Real credential storage, injection, business-system access and system-shell execution remain disabled.
+> **M1 workflow development with M0 security gates still open.** The repository contains a runnable local Web console, loopback-only Rust service, one-time browser pairing, an isolated synthetic terminal, and a local SQLite catalog for credential references and logical targets. The catalog accepts no secret values or network endpoints. Real credential storage, injection, business-system access and system-shell execution remain disabled.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. M1 now also provides authenticated Web pages for non-secret credential references and logical targets; these records are deliberately memory-only and disappear on service restart. PTY reconnection uses output cursors rather than replaying already-consumed bytes, concurrent attachments enforce one writer with read-only observers, and stalled browser writes are time-bounded. The status API explicitly reports the current identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
+Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. M1 now also provides authenticated Web pages and versioned SQLite persistence for non-secret credential references and logical targets. PTY reconnection uses output cursors rather than replaying already-consumed bytes, concurrent attachments enforce one writer with read-only observers, and stalled browser writes are time-bounded. The status API explicitly reports the current identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
 
 ## How it works
 
@@ -75,7 +75,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Credentials** and **Targets** pages accept only non-secret, non-endpoint metadata and clear it on restart. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The bounded `flood` and `wait` commands exist only for resilience testing. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Credentials** and **Targets** pages accept and persist only non-secret, non-endpoint metadata in the operating system's local application-data directory. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The bounded `flood` and `wait` commands exist only for resilience testing. The project does not use—and does not plan to introduce—a desktop shell.
 
 ## Platform targets
 

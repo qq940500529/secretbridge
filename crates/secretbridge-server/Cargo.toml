@@ -12,6 +12,7 @@ publish = false
 [dependencies]
 axum.workspace = true
 portable-pty.workspace = true
+rusqlite.workspace = true
 secretbridge-core = { path = "../secretbridge-core" }
 serde.workspace = true
 serde_json.workspace = true

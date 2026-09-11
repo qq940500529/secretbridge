@@ -7,10 +7,12 @@ export interface ServiceStatus {
   release_stage: string;
   mode: "synthetic_only";
   identity_boundary: "unverified_same_user";
-  configuration_storage: "memory_only";
+  configuration_storage: ConfigurationStorage;
   paired: boolean;
   real_credentials_enabled: boolean;
 }
+
+export type ConfigurationStorage = "memory_only" | "sqlite";
 
 export interface PairResponse {
   session_token: string;
@@ -42,12 +44,18 @@ export interface CredentialReference {
   purpose: string | null;
   secret_state: "not_configured";
   created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  version: number;
 }
 
 export interface CreateCredentialReference {
   name: string;
   kind: CredentialKind;
   purpose?: string;
+}
+
+export interface UpdateCredentialReference extends CreateCredentialReference {
+  expected_version: number;
 }
 
 export type TargetKind = "database" | "http_service" | "ssh_host";
@@ -61,6 +69,8 @@ export interface Target {
   description: string | null;
   credential_reference_id: string | null;
   created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  version: number;
 }
 
 export interface CreateTarget {
@@ -71,19 +81,43 @@ export interface CreateTarget {
   credential_reference_id?: string;
 }
 
-interface CatalogListResponse<T> {
+export interface UpdateTarget extends CreateTarget {
+  expected_version: number;
+}
+
+export interface CatalogListResponse<T> {
   items: T[];
-  storage: "memory_only";
+  storage: ConfigurationStorage;
 }
 
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
 
-async function readJson<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    throw new Error(`SecretBridge API returned ${response.status}`);
+export class SecretBridgeApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+  ) {
+    super(`SecretBridge API returned ${status} (${code})`);
+    this.name = "SecretBridgeApiError";
   }
+}
+
+async function requireOk(response: Response): Promise<void> {
+  if (response.ok) return;
+  let code = "request_failed";
+  try {
+    const body = (await response.json()) as { code?: unknown };
+    if (typeof body.code === "string") code = body.code;
+  } catch {
+    // Error responses may be empty or come from an intermediary.
+  }
+  throw new SecretBridgeApiError(response.status, code);
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  await requireOk(response);
   return (await response.json()) as T;
 }
 
@@ -136,15 +170,14 @@ function sessionJsonHeaders(sessionToken: string): HeadersInit {
 
 export async function listCredentialReferences(
   sessionToken: string,
-): Promise<CredentialReference[]> {
-  const response = await readJson<CatalogListResponse<CredentialReference>>(
+): Promise<CatalogListResponse<CredentialReference>> {
+  return readJson<CatalogListResponse<CredentialReference>>(
     await fetch("/api/v1/credential-references", {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),
     }),
   );
-  return response.items;
 }
 
 export async function createCredentialReference(
@@ -169,15 +202,28 @@ export async function deleteCredentialReference(
   return deleteCatalogItem(sessionToken, `/api/v1/credential-references/${id}`);
 }
 
-export async function listTargets(sessionToken: string): Promise<Target[]> {
-  const response = await readJson<CatalogListResponse<Target>>(
+export async function updateCredentialReference(
+  sessionToken: string,
+  id: string,
+  request: UpdateCredentialReference,
+): Promise<CredentialReference> {
+  return updateCatalogItem(
+    sessionToken,
+    `/api/v1/credential-references/${id}`,
+    request,
+  );
+}
+
+export async function listTargets(
+  sessionToken: string,
+): Promise<CatalogListResponse<Target>> {
+  return readJson<CatalogListResponse<Target>>(
     await fetch("/api/v1/targets", {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),
     }),
   );
-  return response.items;
 }
 
 export async function createTarget(
@@ -202,6 +248,30 @@ export async function deleteTarget(
   return deleteCatalogItem(sessionToken, `/api/v1/targets/${id}`);
 }
 
+export async function updateTarget(
+  sessionToken: string,
+  id: string,
+  request: UpdateTarget,
+): Promise<Target> {
+  return updateCatalogItem(sessionToken, `/api/v1/targets/${id}`, request);
+}
+
+async function updateCatalogItem<T>(
+  sessionToken: string,
+  path: string,
+  request: object,
+): Promise<T> {
+  return readJson<T>(
+    await fetch(path, {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
 async function deleteCatalogItem(
   sessionToken: string,
   path: string,
@@ -212,9 +282,7 @@ async function deleteCatalogItem(
     credentials: "omit",
     headers: sessionHeaders(sessionToken),
   });
-  if (!response.ok) {
-    throw new Error(`SecretBridge API returned ${response.status}`);
-  }
+  await requireOk(response);
 }
 
 export async function listTerminals(

@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.6 · persistent metadata
+
+- Persist credential-reference and logical-target metadata in a versioned SQLite schema under the operating system's local application-data directory.
+- Add full-record `PUT` updates, optimistic version checks that reject stale writes, monotonically increasing record versions and bilingual edit/cancel controls.
+- Run all SQLite work outside async executor threads; retain session authentication, exact Origin checks, field validation, capacity limits and relationship-safe deletion.
+- Keep the database schema free of secret values and network endpoints; real credential storage and business connections remain disabled.
+- Add database-reopen, update authorization, versioning and Web API-client regression tests.
+- Add locked `rusqlite` 0.40.2 with minimized features and updated third-party records; use platform application-data conventions without adding a directory helper dependency.
+
 ### 0.1.0-alpha.5 · configuration catalog
 
 - Start M1 development while retaining unresolved M0 platform isolation as a hard gate for real credentials and releases.
