@@ -7,6 +7,7 @@ import {
   ArrowRight,
   CheckCircle2,
   CircleAlert,
+  ClipboardCheck,
   Command,
   FileClock,
   Gauge,
@@ -40,6 +41,14 @@ const CredentialReferencesView = lazy(() =>
 const TargetsView = lazy(() =>
   import("./CatalogView").then((module) => ({ default: module.TargetsView })),
 );
+const ApprovalView = lazy(() =>
+  import("./ApprovalView").then((module) => ({ default: module.ApprovalView })),
+);
+const ActionTemplatesView = lazy(() =>
+  import("./ActionTemplatesView").then((module) => ({
+    default: module.ActionTemplatesView,
+  })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -49,6 +58,7 @@ interface Copy {
   dashboard: string;
   credentials: string;
   targets: string;
+  approvals: string;
   policies: string;
   terminal: string;
   audit: string;
@@ -102,6 +112,7 @@ const copy: Record<Language, Copy> = {
     dashboard: "总览",
     credentials: "凭据",
     targets: "连接目标",
+    approvals: "审批中心",
     policies: "执行策略",
     terminal: "安全终端",
     audit: "审计记录",
@@ -129,7 +140,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "继续开发范围化审批与撤销流程；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
+      "下一阶段连接合成操作请求、状态、取消与安全事件；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -155,6 +166,7 @@ const copy: Record<Language, Copy> = {
     dashboard: "Overview",
     credentials: "Credentials",
     targets: "Targets",
+    approvals: "Approvals",
     policies: "Policies",
     terminal: "Secure terminal",
     audit: "Audit log",
@@ -186,7 +198,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Continue with scoped approvals and revocation. Real credential integration remains gated on M0 cross-platform identity validation.",
+      "Next, connect synthetic operation requests, status, cancellation and safe events. Real credential integration remains gated on M0 cross-platform identity validation.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -215,6 +227,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "dashboard", icon: Gauge },
   { id: "credentials", icon: KeyRound },
   { id: "targets", icon: ServerCog },
+  { id: "approvals", icon: ClipboardCheck },
   { id: "policies", icon: Workflow },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
@@ -445,6 +458,17 @@ export function App() {
             ) : activePage === "targets" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <TargetsView language={language} sessionToken={sessionToken} />
+              </Suspense>
+            ) : activePage === "approvals" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <ApprovalView language={language} sessionToken={sessionToken} />
+              </Suspense>
+            ) : activePage === "policies" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <ActionTemplatesView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
               </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />

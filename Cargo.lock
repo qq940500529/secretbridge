@@ -942,14 +942,14 @@ dependencies = [
 
 [[package]]
 name = "secretbridge-core"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "secretbridge-server"
-version = "0.1.0-alpha.6"
+version = "0.1.0-alpha.8"
 dependencies = [
  "axum",
  "futures-util",

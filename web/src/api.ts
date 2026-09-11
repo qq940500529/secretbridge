@@ -90,6 +90,81 @@ export interface CatalogListResponse<T> {
   storage: ConfigurationStorage;
 }
 
+export type ApprovalOperation =
+  | "inspect_metadata"
+  | "synthetic_health_check";
+export type ApprovalResultScope = "status_only" | "metadata_summary";
+export type ApprovalState =
+  | "pending"
+  | "approved"
+  | "denied"
+  | "revoked"
+  | "expired";
+
+export interface ActionTemplate {
+  id: string;
+  target_id: string;
+  name: string;
+  operation: ApprovalOperation;
+  result_scope: ApprovalResultScope;
+  description: string | null;
+  timeout_seconds: number;
+  enabled: boolean;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  version: number;
+}
+
+export interface CreateActionTemplate {
+  target_id: string;
+  name: string;
+  operation: ApprovalOperation;
+  result_scope: ApprovalResultScope;
+  description?: string;
+  timeout_seconds: number;
+}
+
+export interface UpdateActionTemplate extends CreateActionTemplate {
+  enabled: boolean;
+  expected_version: number;
+}
+
+export interface Approval {
+  id: string;
+  action_template_id: string | null;
+  action_template_version: number | null;
+  target_id: string;
+  operation: ApprovalOperation;
+  result_scope: ApprovalResultScope;
+  reason: string | null;
+  state: ApprovalState;
+  decision_note: string | null;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  expires_at_unix_ms: number;
+  version: number;
+}
+
+export interface CreateApproval {
+  action_template_id: string;
+  reason?: string;
+  expires_in_seconds: number;
+}
+
+export interface DecideApproval {
+  expected_version: number;
+  note?: string;
+}
+
+export interface ApprovalListResponse extends CatalogListResponse<Approval> {
+  execution_enabled: false;
+}
+
+export interface ActionTemplateListResponse
+  extends CatalogListResponse<ActionTemplate> {
+  execution_enabled: false;
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -254,6 +329,96 @@ export async function updateTarget(
   request: UpdateTarget,
 ): Promise<Target> {
   return updateCatalogItem(sessionToken, `/api/v1/targets/${id}`, request);
+}
+
+export async function listApprovals(
+  sessionToken: string,
+): Promise<ApprovalListResponse> {
+  return readJson<ApprovalListResponse>(
+    await fetch("/api/v1/approvals", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listActionTemplates(
+  sessionToken: string,
+): Promise<ActionTemplateListResponse> {
+  return readJson<ActionTemplateListResponse>(
+    await fetch("/api/v1/action-templates", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createActionTemplate(
+  sessionToken: string,
+  request: CreateActionTemplate,
+): Promise<ActionTemplate> {
+  return readJson<ActionTemplate>(
+    await fetch("/api/v1/action-templates", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function updateActionTemplate(
+  sessionToken: string,
+  id: string,
+  request: UpdateActionTemplate,
+): Promise<ActionTemplate> {
+  return updateCatalogItem(
+    sessionToken,
+    `/api/v1/action-templates/${id}`,
+    request,
+  );
+}
+
+export async function deleteActionTemplate(
+  sessionToken: string,
+  id: string,
+): Promise<void> {
+  return deleteCatalogItem(sessionToken, `/api/v1/action-templates/${id}`);
+}
+
+export async function createApproval(
+  sessionToken: string,
+  request: CreateApproval,
+): Promise<Approval> {
+  return readJson<Approval>(
+    await fetch("/api/v1/approvals", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function decideApproval(
+  sessionToken: string,
+  id: string,
+  decision: "approve" | "deny" | "revoke",
+  request: DecideApproval,
+): Promise<Approval> {
+  return readJson<Approval>(
+    await fetch(`/api/v1/approvals/${id}/${decision}`, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
 }
 
 async function updateCatalogItem<T>(
