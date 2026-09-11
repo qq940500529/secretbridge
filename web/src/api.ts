@@ -165,6 +165,68 @@ export interface ActionTemplateListResponse
   execution_enabled: false;
 }
 
+export type RunState =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "cancelled"
+  | "failed";
+
+export interface SyntheticRun {
+  id: string;
+  approval_id: string;
+  action_template_id: string;
+  target_id: string;
+  operation: ApprovalOperation;
+  result_scope: ApprovalResultScope;
+  state: RunState;
+  result_status:
+    | "synthetic_ok"
+    | "cancelled"
+    | "service_restarted"
+    | "authorization_revoked"
+    | null;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  started_at_unix_ms: number | null;
+  finished_at_unix_ms: number | null;
+  version: number;
+}
+
+export interface SyntheticRunListResponse {
+  items: SyntheticRun[];
+  execution_mode: "synthetic_simulation";
+}
+
+export interface CreateSyntheticRunResponse {
+  run: SyntheticRun;
+  replayed: boolean;
+  execution_mode: "synthetic_simulation";
+}
+
+export type SafeEventKind =
+  | "authorization_revoked"
+  | "requested"
+  | "started"
+  | "succeeded"
+  | "cancelled"
+  | "interrupted";
+
+export interface SafeEvent {
+  id: number;
+  run_id: string;
+  sequence: number;
+  kind: SafeEventKind;
+  state: RunState;
+  message: string;
+  created_at_unix_ms: number;
+}
+
+export interface SafeEventListResponse {
+  items: SafeEvent[];
+  payload_policy: "fixed_safe_messages_only";
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -417,6 +479,91 @@ export async function decideApproval(
       credentials: "omit",
       headers: sessionJsonHeaders(sessionToken),
       body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function listSyntheticRuns(
+  sessionToken: string,
+): Promise<SyntheticRunListResponse> {
+  return readJson<SyntheticRunListResponse>(
+    await fetch("/api/v1/runs", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function getSyntheticRun(
+  sessionToken: string,
+  id: string,
+): Promise<SyntheticRun> {
+  return readJson<SyntheticRun>(
+    await fetch(`/api/v1/runs/${id}`, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createSyntheticRun(
+  sessionToken: string,
+  approvalId: string,
+  idempotencyKey: string,
+): Promise<CreateSyntheticRunResponse> {
+  return readJson<CreateSyntheticRunResponse>(
+    await fetch("/api/v1/runs", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({
+        approval_id: approvalId,
+        idempotency_key: idempotencyKey,
+      }),
+    }),
+  );
+}
+
+export async function cancelSyntheticRun(
+  sessionToken: string,
+  id: string,
+  expectedVersion: number,
+): Promise<SyntheticRun> {
+  return readJson<SyntheticRun>(
+    await fetch(`/api/v1/runs/${id}/cancel`, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+  );
+}
+
+export async function listRunSafeEvents(
+  sessionToken: string,
+  id: string,
+): Promise<SafeEventListResponse> {
+  return readJson<SafeEventListResponse>(
+    await fetch(`/api/v1/runs/${id}/events`, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listSafeEvents(
+  sessionToken: string,
+): Promise<SafeEventListResponse> {
+  return readJson<SafeEventListResponse>(
+    await fetch("/api/v1/safe-events", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
     }),
   );
 }

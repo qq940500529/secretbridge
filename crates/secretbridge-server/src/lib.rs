@@ -35,15 +35,16 @@ use subtle::ConstantTimeEq;
 use tokio::{
     sync::{RwLock, broadcast},
     task,
-    time::timeout,
+    time::{sleep, timeout},
 };
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
-    ActionTemplate, Approval, Catalog, CatalogError, CatalogOpenError, CreateActionTemplate,
-    CreateApproval, CreateCredentialReference, CreateTarget, CredentialReference, DecideApproval,
-    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
+    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
+    CreateTarget, CredentialReference, DecideApproval, SafeEvent, SyntheticRun, Target,
+    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
@@ -113,6 +114,9 @@ impl AppState {
         let program =
             std::env::current_exe().unwrap_or_else(|_| PathBuf::from("secretbridge-server"));
         let catalog = Catalog::open(database_path).map_err(AppStateInitializationError)?;
+        catalog
+            .recover_interrupted_runs()
+            .map_err(|_| AppStateInitializationError(CatalogOpenError::Recovery))?;
         Ok(Self::build(
             trusted_origins,
             program,
@@ -246,6 +250,25 @@ struct ActionTemplateListResponse {
     execution_enabled: bool,
 }
 
+#[derive(Serialize)]
+struct SyntheticRunListResponse {
+    items: Vec<SyntheticRun>,
+    execution_mode: &'static str,
+}
+
+#[derive(Serialize)]
+struct CreateSyntheticRunResponse {
+    run: SyntheticRun,
+    replayed: bool,
+    execution_mode: &'static str,
+}
+
+#[derive(Serialize)]
+struct SafeEventListResponse {
+    items: Vec<SafeEvent>,
+    payload_policy: &'static str,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -300,10 +323,14 @@ struct ErrorResponse {
 }
 
 enum ApiError {
+    ApprovalConsumed,
+    ApprovalNotUsable,
     BadRequest,
     CatalogCapacity,
     Internal,
     InvalidApprovalTransition,
+    InvalidRunTransition,
+    IdempotencyConflict,
     InvalidOrigin,
     NotFound,
     ResourceInUse,
@@ -315,6 +342,16 @@ enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
+            Self::ApprovalConsumed => (
+                StatusCode::CONFLICT,
+                "approval_consumed",
+                "The approval already has a run.",
+            ),
+            Self::ApprovalNotUsable => (
+                StatusCode::CONFLICT,
+                "approval_not_usable",
+                "The approval is not active and approved.",
+            ),
             Self::BadRequest => (
                 StatusCode::BAD_REQUEST,
                 "bad_request",
@@ -339,6 +376,16 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT,
                 "invalid_approval_transition",
                 "The approval cannot make that state transition.",
+            ),
+            Self::InvalidRunTransition => (
+                StatusCode::CONFLICT,
+                "invalid_run_transition",
+                "The run cannot make that state transition.",
+            ),
+            Self::IdempotencyConflict => (
+                StatusCode::CONFLICT,
+                "idempotency_conflict",
+                "The idempotency key belongs to another request.",
             ),
             Self::InvalidOrigin => (
                 StatusCode::FORBIDDEN,
@@ -414,6 +461,14 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/approvals/{id}/approve", post(approve_approval))
         .route("/api/v1/approvals/{id}/deny", post(deny_approval))
         .route("/api/v1/approvals/{id}/revoke", post(revoke_approval))
+        .route(
+            "/api/v1/runs",
+            get(list_synthetic_runs).post(create_synthetic_run),
+        )
+        .route("/api/v1/runs/{id}", get(get_synthetic_run))
+        .route("/api/v1/runs/{id}/cancel", post(cancel_synthetic_run))
+        .route("/api/v1/runs/{id}/events", get(list_run_safe_events))
+        .route("/api/v1/safe-events", get(list_safe_events))
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
@@ -784,6 +839,140 @@ async fn transition_approval(
     .map_err(|_| ApiError::Internal)?
     .map_err(map_catalog_error)?;
     Ok(Json(approval))
+}
+
+async fn list_synthetic_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SyntheticRunListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_synthetic_runs())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(SyntheticRunListResponse {
+        items,
+        execution_mode: "synthetic_simulation",
+    }))
+}
+
+async fn get_synthetic_run(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<SyntheticRun>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let run = task::spawn_blocking(move || catalog.get_synthetic_run(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(run))
+}
+
+async fn create_synthetic_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateSyntheticRun>,
+) -> Result<(StatusCode, Json<CreateSyntheticRunResponse>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let outcome = task::spawn_blocking(move || catalog.create_synthetic_run(&request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    let status = if outcome.replayed {
+        StatusCode::OK
+    } else {
+        let run_id = outcome.run.id;
+        let catalog = state.catalog.clone();
+        tokio::spawn(drive_synthetic_run(catalog, run_id));
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        Json(CreateSyntheticRunResponse {
+            run: outcome.run,
+            replayed: outcome.replayed,
+            execution_mode: "synthetic_simulation",
+        }),
+    ))
+}
+
+async fn drive_synthetic_run(catalog: Catalog, run_id: Uuid) {
+    sleep(Duration::from_millis(100)).await;
+    let start_catalog = catalog.clone();
+    let started = task::spawn_blocking(move || start_catalog.start_synthetic_run(run_id)).await;
+    match started {
+        Ok(Ok(_)) => {}
+        Ok(Err(CatalogError::ApprovalNotUsable)) => {
+            invalidate_synthetic_run(catalog, run_id).await;
+            return;
+        }
+        _ => return,
+    }
+    sleep(Duration::from_millis(750)).await;
+    let complete_catalog = catalog.clone();
+    let completed =
+        task::spawn_blocking(move || complete_catalog.complete_synthetic_run(run_id)).await;
+    if matches!(completed, Ok(Err(CatalogError::ApprovalNotUsable))) {
+        invalidate_synthetic_run(catalog, run_id).await;
+    }
+}
+
+async fn invalidate_synthetic_run(catalog: Catalog, run_id: Uuid) {
+    let _ = task::spawn_blocking(move || catalog.invalidate_synthetic_run(run_id)).await;
+}
+
+async fn cancel_synthetic_run(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<CancelSyntheticRun>,
+) -> Result<Json<SyntheticRun>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let run = task::spawn_blocking(move || catalog.cancel_synthetic_run(id, &request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(run))
+}
+
+async fn list_run_safe_events(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<SafeEventListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_safe_events(Some(id)))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(SafeEventListResponse {
+        items,
+        payload_policy: "fixed_safe_messages_only",
+    }))
+}
+
+async fn list_safe_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SafeEventListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_safe_events(None))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(SafeEventListResponse {
+        items,
+        payload_policy: "fixed_safe_messages_only",
+    }))
 }
 
 async fn list_terminals(
@@ -1191,10 +1380,14 @@ fn map_terminal_error(error: TerminalError) -> ApiError {
 
 fn map_catalog_error(error: CatalogError) -> ApiError {
     match error {
+        CatalogError::ApprovalConsumed => ApiError::ApprovalConsumed,
+        CatalogError::ApprovalNotUsable => ApiError::ApprovalNotUsable,
         CatalogError::Capacity => ApiError::CatalogCapacity,
         CatalogError::CredentialReferenceNotFound | CatalogError::NotFound => ApiError::NotFound,
         CatalogError::Invalid => ApiError::BadRequest,
         CatalogError::InvalidApprovalTransition => ApiError::InvalidApprovalTransition,
+        CatalogError::InvalidRunTransition => ApiError::InvalidRunTransition,
+        CatalogError::IdempotencyConflict => ApiError::IdempotencyConflict,
         CatalogError::ResourceInUse => ApiError::ResourceInUse,
         CatalogError::Storage => ApiError::Internal,
         CatalogError::VersionConflict => ApiError::VersionConflict,
@@ -1745,6 +1938,180 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn synthetic_run_api_is_idempotent_observable_and_origin_protected() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let approval_id = create_test_approved_approval(&app, &token).await;
+        let body = serde_json::json!({
+            "approval_id": approval_id,
+            "idempotency_key": "integration-run-001"
+        })
+        .to_string();
+
+        let rejected = app
+            .clone()
+            .oneshot(authenticated_request_with_body(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                None,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created = response_json(created).await;
+        assert_eq!(created["execution_mode"], "synthetic_simulation");
+        assert_eq!(created["replayed"], false);
+        let run_id = created["run"]["id"].as_str().expect("run id");
+
+        let replayed = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(replayed.status(), StatusCode::OK);
+        let replayed = response_json(replayed).await;
+        assert_eq!(replayed["replayed"], true);
+        assert_eq!(replayed["run"]["id"], run_id);
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let completed = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let completed = response_json(completed).await;
+        assert_eq!(completed["state"], "succeeded");
+        assert_eq!(completed["result_status"], "synthetic_ok");
+
+        let events = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}/events"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let events = response_json(events).await;
+        assert_eq!(events["payload_policy"], "fixed_safe_messages_only");
+        assert_eq!(events["items"].as_array().map(Vec::len), Some(3));
+
+        let consumed_body = serde_json::json!({
+            "approval_id": approval_id,
+            "idempotency_key": "integration-run-002"
+        })
+        .to_string();
+        let consumed = app
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &consumed_body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(consumed.status(), StatusCode::CONFLICT);
+        assert_eq!(response_json(consumed).await["code"], "approval_consumed");
+    }
+
+    #[tokio::test]
+    async fn synthetic_run_driver_stops_after_approval_revocation() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let approval_id = create_test_approved_approval(&app, &token).await;
+        let body = serde_json::json!({
+            "approval_id": approval_id,
+            "idempotency_key": "integration-revocation-001"
+        })
+        .to_string();
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        let created = response_json(created).await;
+        let run_id = created["run"]["id"].as_str().expect("run id");
+
+        let revoked = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{approval_id}/revoke"),
+                &token,
+                ORIGIN,
+                r#"{"expected_version":2,"note":"Authorization withdrawn during integration test"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(revoked.status(), StatusCode::OK);
+
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let stopped = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let stopped = response_json(stopped).await;
+        assert_eq!(stopped["state"], "cancelled");
+        assert_eq!(stopped["result_status"], "authorization_revoked");
+
+        let events = app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}/events"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let events = response_json(events).await;
+        let last_event = events["items"].as_array().and_then(|items| items.last());
+        assert_eq!(
+            last_event.and_then(|event| event["kind"].as_str()),
+            Some("authorization_revoked")
+        );
+    }
+
+    #[tokio::test]
     async fn security_headers_cover_web_fallbacks() {
         let app = apply_security_headers(axum::Router::new().fallback(|| async { "web" }));
         let response = app
@@ -1833,6 +2200,42 @@ mod tests {
             .as_str()
             .expect("template id")
             .to_owned()
+    }
+
+    async fn create_test_approved_approval(app: &axum::Router, token: &str) -> String {
+        let template_id = create_test_action_template(app, token).await;
+        let body = serde_json::json!({
+            "action_template_id": template_id,
+            "reason": "Synthetic integration run",
+            "expires_in_seconds": 300
+        })
+        .to_string();
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/approvals",
+                token,
+                ORIGIN,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        let approval = response_json(created).await;
+        let id = approval["id"].as_str().expect("approval id").to_owned();
+        let approved = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{id}/approve"),
+                token,
+                ORIGIN,
+                r#"{"expected_version":1,"note":"Integration scope approved"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(approved.status(), StatusCode::OK);
+        id
     }
 
     async fn response_json(response: axum::response::Response) -> serde_json::Value {

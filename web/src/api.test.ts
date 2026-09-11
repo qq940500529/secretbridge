@@ -4,8 +4,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  cancelSyntheticRun,
   createApproval,
   createActionTemplate,
+  createSyntheticRun,
   decideApproval,
   listCredentialReferences,
   updateCredentialReference,
@@ -180,5 +182,48 @@ describe("configuration API client", () => {
       expected_version: 2,
       note: "No longer needed",
     });
+  });
+
+  it("submits synthetic runs with an explicit idempotency key", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ run: { id: "run-id" }, replayed: false, execution_mode: "synthetic_simulation" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await createSyntheticRun(
+      "synthetic-session-token",
+      "approval-id",
+      "request-123",
+    );
+
+    const [path, request] = fetch.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/runs");
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(request.body as string)).toEqual({
+      approval_id: "approval-id",
+      idempotency_key: "request-123",
+    });
+    expect(request.body).not.toContain("command");
+    expect(request.body).not.toContain("argument");
+  });
+
+  it("cancels a run with optimistic version protection", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "run-id", state: "cancelled", version: 3 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await cancelSyntheticRun("synthetic-session-token", "run-id", 2);
+
+    const [path, request] = fetch.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/v1/runs/run-id/cancel");
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(request.body as string)).toEqual({ expected_version: 2 });
   });
 });
