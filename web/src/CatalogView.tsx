@@ -5,10 +5,12 @@ import {
   CircleAlert,
   KeyRound,
   LoaderCircle,
+  Pencil,
   Plus,
   ServerCog,
   ShieldCheck,
   Trash2,
+  X,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -19,6 +21,10 @@ import {
   deleteTarget,
   listCredentialReferences,
   listTargets,
+  SecretBridgeApiError,
+  updateCredentialReference,
+  updateTarget,
+  type ConfigurationStorage,
   type CredentialKind,
   type CredentialReference,
   type Target,
@@ -32,25 +38,43 @@ const sharedCopy = {
   "zh-CN": {
     memoryTitle: "当前配置只保存在服务内存中",
     memoryBody: "服务重启后自动清空。本阶段只验证配置关系，不接收真实密码、令牌、私钥或业务地址。",
+    persistentTitle: "配置已保存到本机数据库",
+    persistentBody: "这里只保存非秘密元数据。密码、令牌、私钥、主机地址和连接串仍不会写入此数据库。",
     loading: "正在读取本机配置…",
     loadError: "配置读取失败，请确认本地服务仍在线且页面会话有效。",
     saveError: "保存失败，请检查字段或重新配对页面会话。",
+    versionConflict: "这条记录已被其他页面修改，列表已重新载入。请基于最新版本再次编辑。",
     deleteError: "删除失败。该记录可能仍被引用，或页面会话已经失效。",
+    resourceInUse: "该凭据引用仍被目标使用。请先解除关联或删除相应目标。",
     delete: "删除",
     saving: "保存中…",
     add: "添加",
+    save: "保存修改",
+    edit: "编辑",
+    cancel: "取消编辑",
+    confirmDelete: "确定删除这条配置吗？",
+    version: "版本",
     empty: "还没有记录",
   },
   en: {
     memoryTitle: "Configuration is currently memory-only",
     memoryBody: "Everything is cleared on service restart. This phase validates relationships only and accepts no real passwords, tokens, private keys, or business addresses.",
+    persistentTitle: "Configuration is saved in a local database",
+    persistentBody: "Only non-secret metadata is stored. Passwords, tokens, private keys, host addresses, and connection strings are still excluded.",
     loading: "Loading local configuration…",
     loadError: "Could not load configuration. Check the local service and page session.",
     saveError: "Could not save. Check the fields or pair this page again.",
+    versionConflict: "Another page changed this record. The list has been reloaded; edit the latest version before saving again.",
     deleteError: "Could not delete. The record may still be referenced, or the page session may have expired.",
+    resourceInUse: "This credential reference is still used by a target. Unlink it or delete the target first.",
     delete: "Delete",
     saving: "Saving…",
     add: "Add",
+    save: "Save changes",
+    edit: "Edit",
+    cancel: "Cancel editing",
+    confirmDelete: "Delete this configuration record?",
+    version: "Version",
     empty: "No records yet",
   },
 } as const;
@@ -109,6 +133,9 @@ export function CredentialReferencesView({
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CredentialKind>("password");
   const [purpose, setPurpose] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingVersion, setEditingVersion] = useState<number | null>(null);
+  const [storage, setStorage] = useState<ConfigurationStorage>("memory_only");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +143,12 @@ export function CredentialReferencesView({
   useEffect(() => {
     let active = true;
     listCredentialReferences(sessionToken)
-      .then((records) => { if (active) setItems(records); })
+      .then((response) => {
+        if (active) {
+          setItems(response.items);
+          setStorage(response.storage);
+        }
+      })
       .catch(() => { if (active) setError(common.loadError); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -127,29 +159,77 @@ export function CredentialReferencesView({
     setBusy(true);
     setError(null);
     try {
-      const item = await createCredentialReference(sessionToken, {
+      const request = {
         name,
         kind,
         ...(purpose.trim() ? { purpose } : {}),
-      });
-      setItems((current) => [...current, item]);
-      setName("");
-      setPurpose("");
-    } catch {
-      setError(common.saveError);
+      };
+      if (editingId) {
+        const item = await updateCredentialReference(
+          sessionToken,
+          editingId,
+          { ...request, expected_version: editingVersion ?? 0 },
+        );
+        setItems((current) =>
+          current.map((currentItem) =>
+            currentItem.id === item.id ? item : currentItem,
+          ),
+        );
+      } else {
+        const item = await createCredentialReference(sessionToken, request);
+        setItems((current) => [...current, item]);
+      }
+      resetForm();
+    } catch (error) {
+      if (error instanceof SecretBridgeApiError && error.code === "version_conflict") {
+        try {
+          const response = await listCredentialReferences(sessionToken);
+          setItems(response.items);
+          setStorage(response.storage);
+          resetForm();
+        } catch {
+          // Keep the conflict message; a later navigation can retry the list request.
+        }
+        setError(common.versionConflict);
+      } else {
+        setError(common.saveError);
+      }
     } finally {
       setBusy(false);
     }
   }
 
   async function remove(id: string) {
+    if (!window.confirm(common.confirmDelete)) return;
     setError(null);
     try {
       await deleteCredentialReference(sessionToken, id);
       setItems((current) => current.filter((item) => item.id !== id));
-    } catch {
-      setError(common.deleteError);
+      if (editingId === id) resetForm();
+    } catch (error) {
+      setError(
+        error instanceof SecretBridgeApiError && error.code === "resource_in_use"
+          ? common.resourceInUse
+          : common.deleteError,
+      );
     }
+  }
+
+  function beginEdit(item: CredentialReference) {
+    setEditingId(item.id);
+    setEditingVersion(item.version);
+    setName(item.name);
+    setKind(item.kind);
+    setPurpose(item.purpose ?? "");
+    setError(null);
+  }
+
+  function resetForm() {
+    setEditingId(null);
+    setEditingVersion(null);
+    setName("");
+    setKind("password");
+    setPurpose("");
   }
 
   return (
@@ -158,14 +238,17 @@ export function CredentialReferencesView({
       title={text.title}
       subtitle={text.subtitle}
       language={language}
+      storage={storage}
       error={error}
     >
       <CatalogForm
-        title={text.formTitle}
+        title={editingId ? common.edit : text.formTitle}
         onSubmit={submit}
         busy={busy}
-        submitLabel={common.add}
+        submitLabel={editingId ? common.save : common.add}
         busyLabel={common.saving}
+        onCancel={editingId ? resetForm : undefined}
+        cancelLabel={common.cancel}
       >
         <Field label={text.name} htmlFor="credential-name">
           <input id="credential-name" required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder={text.namePlaceholder} className={inputClass} />
@@ -194,11 +277,19 @@ export function CredentialReferencesView({
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">{credentialKindLabels[language][item.kind]}</span>
                   <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"><ShieldCheck className="size-3.5" />{text.state}</span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+                    {common.version} {item.version}
+                  </span>
                 </div>
                 <h2 className="m-0 break-words text-base font-semibold text-slate-950">{item.name}</h2>
                 {item.purpose && <p className="mb-0 mt-2 break-words text-sm leading-6 text-slate-600">{item.purpose}</p>}
               </div>
-              <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
+              <div className="flex shrink-0 gap-2">
+                <IconButton label={common.edit} onClick={() => beginEdit(item)}>
+                  <Pencil className="size-4" />
+                </IconButton>
+                <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
+              </div>
             </div>
           </article>
         ))}
@@ -255,6 +346,9 @@ export function TargetsView({
   const [environment, setEnvironment] = useState<TargetEnvironment>("test");
   const [description, setDescription] = useState("");
   const [credentialId, setCredentialId] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingVersion, setEditingVersion] = useState<number | null>(null);
+  const [storage, setStorage] = useState<ConfigurationStorage>("memory_only");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -271,8 +365,9 @@ export function TargetsView({
     ])
       .then(([targets, references]) => {
         if (active) {
-          setItems(targets);
-          setCredentials(references);
+          setItems(targets.items);
+          setCredentials(references.items);
+          setStorage(targets.storage);
         }
       })
       .catch(() => {
@@ -291,31 +386,82 @@ export function TargetsView({
     setBusy(true);
     setError(null);
     try {
-      const item = await createTarget(sessionToken, {
+      const request = {
         name,
         kind,
         environment,
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
-      });
-      setItems((current) => [...current, item]);
-      setName("");
-      setDescription("");
-    } catch {
-      setError(common.saveError);
+      };
+      if (editingId) {
+        const item = await updateTarget(sessionToken, editingId, {
+          ...request,
+          expected_version: editingVersion ?? 0,
+        });
+        setItems((current) =>
+          current.map((currentItem) =>
+            currentItem.id === item.id ? item : currentItem,
+          ),
+        );
+      } else {
+        const item = await createTarget(sessionToken, request);
+        setItems((current) => [...current, item]);
+      }
+      resetForm();
+    } catch (error) {
+      if (error instanceof SecretBridgeApiError && error.code === "version_conflict") {
+        try {
+          const [targets, references] = await Promise.all([
+            listTargets(sessionToken),
+            listCredentialReferences(sessionToken),
+          ]);
+          setItems(targets.items);
+          setCredentials(references.items);
+          setStorage(targets.storage);
+          resetForm();
+        } catch {
+          // Keep the conflict message; a later navigation can retry the list request.
+        }
+        setError(common.versionConflict);
+      } else {
+        setError(common.saveError);
+      }
     } finally {
       setBusy(false);
     }
   }
 
   async function remove(id: string) {
+    if (!window.confirm(common.confirmDelete)) return;
     setError(null);
     try {
       await deleteTarget(sessionToken, id);
       setItems((current) => current.filter((item) => item.id !== id));
+      if (editingId === id) resetForm();
     } catch {
       setError(common.deleteError);
     }
+  }
+
+  function beginEdit(item: Target) {
+    setEditingId(item.id);
+    setEditingVersion(item.version);
+    setName(item.name);
+    setKind(item.kind);
+    setEnvironment(item.environment);
+    setDescription(item.description ?? "");
+    setCredentialId(item.credential_reference_id ?? "");
+    setError(null);
+  }
+
+  function resetForm() {
+    setEditingId(null);
+    setEditingVersion(null);
+    setName("");
+    setKind("database");
+    setEnvironment("test");
+    setDescription("");
+    setCredentialId("");
   }
 
   return (
@@ -324,14 +470,17 @@ export function TargetsView({
       title={text.title}
       subtitle={text.subtitle}
       language={language}
+      storage={storage}
       error={error}
     >
       <CatalogForm
-        title={text.formTitle}
+        title={editingId ? common.edit : text.formTitle}
         onSubmit={submit}
         busy={busy}
-        submitLabel={common.add}
+        submitLabel={editingId ? common.save : common.add}
         busyLabel={common.saving}
+        onCancel={editingId ? resetForm : undefined}
+        cancelLabel={common.cancel}
       >
         <Field label={text.name} htmlFor="target-name">
           <input
@@ -420,6 +569,9 @@ export function TargetsView({
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                     {environmentLabels[language][item.environment]}
                   </span>
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+                    {common.version} {item.version}
+                  </span>
                 </div>
                 <h2 className="m-0 break-words text-base font-semibold text-slate-950">{item.name}</h2>
                 {item.description && <p className="mb-0 mt-2 break-words text-sm leading-6 text-slate-600">{item.description}</p>}
@@ -430,7 +582,12 @@ export function TargetsView({
                     : text.noCredential}
                 </p>
               </div>
-              <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
+              <div className="flex shrink-0 gap-2">
+                <IconButton label={common.edit} onClick={() => beginEdit(item)}>
+                  <Pencil className="size-4" />
+                </IconButton>
+                <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
+              </div>
             </div>
           </article>
         ))}
@@ -447,6 +604,7 @@ function CatalogPage({
   title,
   subtitle,
   language,
+  storage,
   error,
   children,
 }: {
@@ -454,10 +612,12 @@ function CatalogPage({
   title: string;
   subtitle: string;
   language: Language;
+  storage: ConfigurationStorage;
   error: string | null;
   children: ReactNode;
 }) {
   const common = sharedCopy[language];
+  const persistent = storage === "sqlite";
   return (
     <>
       <div className="mb-6">
@@ -468,8 +628,12 @@ function CatalogPage({
       <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
         <CircleAlert className="mt-0.5 size-5 shrink-0 text-amber-700" />
         <div>
-          <p className="m-0 text-sm font-semibold">{common.memoryTitle}</p>
-          <p className="mb-0 mt-1 text-sm leading-6 text-amber-900/75">{common.memoryBody}</p>
+          <p className="m-0 text-sm font-semibold">
+            {persistent ? common.persistentTitle : common.memoryTitle}
+          </p>
+          <p className="mb-0 mt-1 text-sm leading-6 text-amber-900/75">
+            {persistent ? common.persistentBody : common.memoryBody}
+          </p>
         </div>
       </div>
       {error && (
@@ -482,7 +646,7 @@ function CatalogPage({
   );
 }
 
-function CatalogForm({ title, onSubmit, busy, submitLabel, busyLabel, children }: { title: string; onSubmit: (event: FormEvent) => void; busy: boolean; submitLabel: string; busyLabel: string; children: ReactNode }) {
+function CatalogForm({ title, onSubmit, busy, submitLabel, busyLabel, onCancel, cancelLabel, children }: { title: string; onSubmit: (event: FormEvent) => void; busy: boolean; submitLabel: string; busyLabel: string; onCancel?: () => void; cancelLabel: string; children: ReactNode }) {
   return (
     <form onSubmit={onSubmit} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex items-center gap-3">
@@ -494,6 +658,12 @@ function CatalogForm({ title, onSubmit, busy, submitLabel, busyLabel, children }
         {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
         {busy ? busyLabel : submitLabel}
       </button>
+      {onCancel && (
+        <button type="button" onClick={onCancel} disabled={busy} className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60">
+          <X className="size-4" />
+          {cancelLabel}
+        </button>
+      )}
     </form>
   );
 }
@@ -527,6 +697,14 @@ function DeleteButton({ label, onClick }: { label: string; onClick: () => void }
   return (
     <button type="button" onClick={onClick} className="inline-flex size-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700" aria-label={label} title={label}>
       <Trash2 className="size-4" />
+    </button>
+  );
+}
+
+function IconButton({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} className="inline-flex size-9 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition hover:border-cyan-200 hover:bg-cyan-50 hover:text-cyan-700" aria-label={label} title={label}>
+      {children}
     </button>
   );
 }

@@ -83,6 +83,7 @@ interface Copy {
   unverifiedSameUser: string;
   configurationStorage: string;
   memoryOnly: string;
+  localDatabase: string;
   realCredentials: string;
   disabled: string;
   enabled: string;
@@ -128,7 +129,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "完善配置持久化、编辑与审批流程；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
+      "继续开发范围化审批与撤销流程；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -137,6 +138,7 @@ const copy: Record<Language, Copy> = {
     unverifiedSameUser: "同用户兼容模式（未验证隔离）",
     configurationStorage: "配置存储",
     memoryOnly: "仅内存（重启清空）",
+    localDatabase: "本机 SQLite 数据库",
     realCredentials: "真实凭据",
     disabled: "未启用",
     enabled: "已启用",
@@ -184,7 +186,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Add configuration persistence, editing, and approvals. Real credential integration remains gated on M0 cross-platform identity validation.",
+      "Continue with scoped approvals and revocation. Real credential integration remains gated on M0 cross-platform identity validation.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -193,6 +195,7 @@ const copy: Record<Language, Copy> = {
     unverifiedSameUser: "Same-user compatibility (not isolated)",
     configurationStorage: "Configuration storage",
     memoryOnly: "Memory-only (cleared on restart)",
+    localDatabase: "Local SQLite database",
     realCredentials: "Real credentials",
     disabled: "Disabled",
     enabled: "Enabled",
@@ -581,9 +584,11 @@ function Dashboard({
             <StatusDatum
               label={text.configurationStorage}
               value={
-                status?.configuration_storage === "memory_only"
-                  ? text.memoryOnly
-                  : "—"
+                status?.configuration_storage === "sqlite"
+                  ? text.localDatabase
+                  : status?.configuration_storage === "memory_only"
+                    ? text.memoryOnly
+                    : "—"
               }
             />
             <StatusDatum

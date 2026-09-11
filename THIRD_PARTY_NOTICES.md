@@ -20,6 +20,8 @@ This inventory describes material included in the repository. Technologies discu
 | xterm.js 6.0.0 / Fit addon 0.11.0 | Browser terminal runtime, MIT | Copyright and MIT terms must be retained with distributed Web assets |
 | portable-pty 0.9.0 | Cross-platform PTY runtime, MIT | Preserve the crate license and upstream copyright notice with distributed service packages |
 | SHA-2 0.10.9 | In-memory token digest runtime, MIT OR Apache-2.0 | Record the chosen license path and preserve applicable terms and notices |
+| rusqlite 0.40.2 / libsqlite3-sys 0.38.2 | SQLite binding and bundled native build, MIT | Preserve upstream MIT notices; only the `bundled` feature is enabled |
+| SQLite 3.53.2 | Bundled non-secret metadata database, public domain per upstream | Record the exact bundled source version and upstream provenance in release materials |
 | TypeScript 7.0.2 | Build tooling, Apache-2.0 | Preserve the license and any applicable notices when distributing covered material |
 | lightningcss 1.32 / 1.33 and platform packages | Transitive CSS build tooling, MPL-2.0 | Not part of the current browser runtime bundle; preserve MPL-covered files, notices and corresponding-source rights if those files are distributed |
 

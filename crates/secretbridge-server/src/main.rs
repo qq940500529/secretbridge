@@ -6,9 +6,10 @@
 use std::{
     env,
     ffi::OsStr,
+    fs,
     io::{self, BufRead, Write},
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -52,7 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
 
-    let (state, bootstrap_token) = AppState::new(trusted_origins);
+    let data_directory = data_directory()?;
+    create_private_data_directory(&data_directory)?;
+    let database_path = data_directory.join("secretbridge.sqlite3");
+    let (state, bootstrap_token) = AppState::new_persistent(trusted_origins, &database_path)?;
     let web_root =
         env::var_os("SECRETBRIDGE_WEB_ROOT").map_or_else(default_web_root, PathBuf::from);
     let app = router_with_web(state, web_root);
@@ -65,6 +69,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+fn data_directory() -> Result<PathBuf, &'static str> {
+    let override_path = env::var_os("SECRETBRIDGE_DATA_DIR");
+    resolve_data_directory(override_path.as_deref())
+}
+
+fn resolve_data_directory(override_path: Option<&OsStr>) -> Result<PathBuf, &'static str> {
+    let path = if let Some(path) = override_path {
+        PathBuf::from(path)
+    } else {
+        default_data_directory()
+            .ok_or("the operating system did not provide a local application data directory")?
+    };
+    if !path.is_absolute() {
+        return Err("the SecretBridge data directory must be an absolute path");
+    }
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn default_data_directory() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("SecretBridge"))
+}
+
+#[cfg(target_os = "macos")]
+fn default_data_directory() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from).map(|path| {
+        path.join("Library")
+            .join("Application Support")
+            .join("SecretBridge")
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_data_directory() -> Option<PathBuf> {
+    env::var_os("XDG_DATA_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join("secretbridge"))
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|path| path.join(".local").join("share").join("secretbridge"))
+        })
+}
+
+#[cfg(not(any(windows, unix)))]
+fn default_data_directory() -> Option<PathBuf> {
+    None
+}
+
+fn create_private_data_directory(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
     Ok(())
 }
 
@@ -178,9 +243,9 @@ fn require_loopback(address: SocketAddr) -> Result<SocketAddr, &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{ffi::OsStr, net::SocketAddr};
 
-    use super::{bounded_argument, require_loopback};
+    use super::{bounded_argument, require_loopback, resolve_data_directory};
 
     #[test]
     fn loopback_bind_addresses_are_allowed() {
@@ -207,5 +272,16 @@ mod tests {
         assert_eq!(bounded_argument("flood 65537", "flood", 65_536), None);
         assert_eq!(bounded_argument("flood 1 extra", "flood", 65_536), None);
         assert_eq!(bounded_argument("flood 0", "flood", 65_536), None);
+    }
+
+    #[test]
+    fn relative_data_directory_overrides_are_rejected() {
+        assert!(resolve_data_directory(Some(OsStr::new("relative-data"))).is_err());
+    }
+
+    #[test]
+    fn absolute_data_directory_overrides_are_accepted() {
+        let path = std::env::temp_dir().join("secretbridge-data-override-test");
+        assert_eq!(resolve_data_directory(Some(path.as_os_str())), Ok(path));
     }
 }
