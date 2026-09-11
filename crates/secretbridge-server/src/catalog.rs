@@ -11,17 +11,20 @@ use std::{
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
 const MAX_TARGETS: i64 = 128;
 const MAX_APPROVALS: i64 = 512;
 const MAX_ACTION_TEMPLATES: i64 = 256;
+const MAX_RUNS: i64 = 1_024;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
 const MAX_APPROVAL_TTL_SECONDS: u64 = 3_600;
+const MAX_IDEMPOTENCY_KEY_CHARS: usize = 96;
 
 #[derive(Clone)]
 pub struct Catalog {
@@ -31,6 +34,7 @@ pub struct Catalog {
 #[derive(Debug)]
 pub enum CatalogOpenError {
     Database(rusqlite::Error),
+    Recovery,
     UnsupportedSchema(i64),
 }
 
@@ -38,6 +42,7 @@ impl fmt::Display for CatalogOpenError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Database(_) => formatter.write_str("the configuration database could not open"),
+            Self::Recovery => formatter.write_str("interrupted runs could not be recovered"),
             Self::UnsupportedSchema(version) => {
                 write!(
                     formatter,
@@ -52,7 +57,7 @@ impl Error for CatalogOpenError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Database(error) => Some(error),
-            Self::UnsupportedSchema(_) => None,
+            Self::Recovery | Self::UnsupportedSchema(_) => None,
         }
     }
 }
@@ -365,16 +370,135 @@ pub struct DecideApproval {
     note: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Queued,
+    Running,
+    Succeeded,
+    Cancelled,
+    Failed,
+}
+
+impl RunState {
+    const fn as_storage(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+
+    fn from_storage(value: &str) -> rusqlite::Result<Self> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "running" => Ok(Self::Running),
+            "succeeded" => Ok(Self::Succeeded),
+            "cancelled" => Ok(Self::Cancelled),
+            "failed" => Ok(Self::Failed),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyntheticRun {
+    pub id: Uuid,
+    pub approval_id: Uuid,
+    pub action_template_id: Uuid,
+    pub target_id: Uuid,
+    pub operation: ApprovalOperation,
+    pub result_scope: ApprovalResultScope,
+    pub state: RunState,
+    pub result_status: Option<String>,
+    pub created_at_unix_ms: u64,
+    pub updated_at_unix_ms: u64,
+    pub started_at_unix_ms: Option<u64>,
+    pub finished_at_unix_ms: Option<u64>,
+    pub version: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSyntheticRun {
+    approval_id: Uuid,
+    idempotency_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelSyntheticRun {
+    expected_version: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafeEventKind {
+    AuthorizationRevoked,
+    Requested,
+    Started,
+    Succeeded,
+    Cancelled,
+    Interrupted,
+}
+
+impl SafeEventKind {
+    const fn as_storage(self) -> &'static str {
+        match self {
+            Self::AuthorizationRevoked => "authorization_revoked",
+            Self::Requested => "requested",
+            Self::Started => "started",
+            Self::Succeeded => "succeeded",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    fn from_storage(value: &str) -> rusqlite::Result<Self> {
+        match value {
+            "authorization_revoked" => Ok(Self::AuthorizationRevoked),
+            "requested" => Ok(Self::Requested),
+            "started" => Ok(Self::Started),
+            "succeeded" => Ok(Self::Succeeded),
+            "cancelled" => Ok(Self::Cancelled),
+            "interrupted" => Ok(Self::Interrupted),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SafeEvent {
+    pub id: u64,
+    pub run_id: Uuid,
+    pub sequence: u64,
+    pub kind: SafeEventKind,
+    pub state: RunState,
+    pub message: String,
+    pub created_at_unix_ms: u64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogError {
+    ApprovalConsumed,
+    ApprovalNotUsable,
     Capacity,
     CredentialReferenceNotFound,
     Invalid,
     InvalidApprovalTransition,
+    InvalidRunTransition,
+    IdempotencyConflict,
     NotFound,
     ResourceInUse,
     Storage,
     VersionConflict,
+}
+
+pub struct CreateRunOutcome {
+    pub run: SyntheticRun,
+    pub replayed: bool,
 }
 
 impl Catalog {
@@ -457,7 +581,36 @@ impl Catalog {
                  );
                  CREATE INDEX approvals_target_idx ON approvals(target_id);
                  CREATE INDEX approvals_state_idx ON approvals(state);
-                 PRAGMA user_version = 3;
+                 CREATE TABLE synthetic_runs (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(id) ON DELETE RESTRICT,
+                    idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
+                    action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
+                    target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    updated_at_unix_ms INTEGER NOT NULL,
+                    started_at_unix_ms INTEGER,
+                    finished_at_unix_ms INTEGER,
+                    version INTEGER NOT NULL CHECK (version >= 1)
+                 );
+                 CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+                 CREATE TABLE safe_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES synthetic_runs(id) ON DELETE RESTRICT,
+                    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+                    kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
+                    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    UNIQUE(run_id, sequence)
+                 );
+                 CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
+                 CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
+                 PRAGMA user_version = 4;
                  COMMIT;",
             )?;
         }
@@ -495,7 +648,36 @@ impl Catalog {
                  );
                  CREATE INDEX approvals_target_idx ON approvals(target_id);
                  CREATE INDEX approvals_state_idx ON approvals(state);
-                 PRAGMA user_version = 3;
+                 CREATE TABLE synthetic_runs (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(id) ON DELETE RESTRICT,
+                    idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
+                    action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
+                    target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    updated_at_unix_ms INTEGER NOT NULL,
+                    started_at_unix_ms INTEGER,
+                    finished_at_unix_ms INTEGER,
+                    version INTEGER NOT NULL CHECK (version >= 1)
+                 );
+                 CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+                 CREATE TABLE safe_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES synthetic_runs(id) ON DELETE RESTRICT,
+                    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+                    kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
+                    state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    UNIQUE(run_id, sequence)
+                 );
+                 CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
+                 CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
+                 PRAGMA user_version = 4;
                  COMMIT;",
             )?;
         }
@@ -521,6 +703,9 @@ impl Catalog {
                  PRAGMA user_version = 3;
                  COMMIT;",
             )?;
+        }
+        if version == 2 || version == 3 {
+            create_run_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -967,6 +1152,289 @@ impl Catalog {
         approval_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
+    pub fn list_synthetic_runs(&self) -> Result<Vec<SyntheticRun>, CatalogError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, approval_id, action_template_id, target_id, operation,
+                        result_scope, state, result_status, created_at_unix_ms,
+                        updated_at_unix_ms, started_at_unix_ms,
+                        finished_at_unix_ms, version
+                   FROM synthetic_runs
+                  ORDER BY created_at_unix_ms DESC, id",
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        statement
+            .query_map([], synthetic_run_from_row)
+            .map_err(|_| CatalogError::Storage)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| CatalogError::Storage)
+    }
+
+    pub fn get_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        synthetic_run_by_id(&self.lock(), id)?.ok_or(CatalogError::NotFound)
+    }
+
+    pub fn create_synthetic_run(
+        &self,
+        request: &CreateSyntheticRun,
+    ) -> Result<CreateRunOutcome, CatalogError> {
+        let idempotency_key = normalize_idempotency_key(&request.idempotency_key)?;
+        let idempotency_key_hash = format!("{:x}", Sha256::digest(idempotency_key.as_bytes()));
+        let mut connection = self.lock();
+        let now = now_unix_ms_i64()?;
+        expire_approvals(&connection, now)?;
+        if let Some(existing) =
+            synthetic_run_by_idempotency_key_hash(&connection, &idempotency_key_hash)?
+        {
+            if existing.approval_id != request.approval_id {
+                return Err(CatalogError::IdempotencyConflict);
+            }
+            return Ok(CreateRunOutcome {
+                run: existing,
+                replayed: true,
+            });
+        }
+        if synthetic_run_by_approval(&connection, request.approval_id)?.is_some() {
+            return Err(CatalogError::ApprovalConsumed);
+        }
+        let approval = approval_by_id(&connection, request.approval_id)?
+            .filter(|approval| approval.state == ApprovalState::Approved)
+            .ok_or(CatalogError::ApprovalNotUsable)?;
+        let template_id = approval
+            .action_template_id
+            .ok_or(CatalogError::ApprovalNotUsable)?;
+        ensure_capacity(&connection, "synthetic_runs", MAX_RUNS)?;
+        let id = Uuid::new_v4();
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO synthetic_runs
+                    (id, approval_id, idempotency_key_hash, action_template_id, target_id,
+                     operation, result_scope, state, result_status, created_at_unix_ms,
+                     updated_at_unix_ms, started_at_unix_ms, finished_at_unix_ms, version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', NULL, ?8, ?8, NULL, NULL, 1)",
+                params![
+                    id.to_string(),
+                    approval.id.to_string(),
+                    idempotency_key_hash,
+                    template_id.to_string(),
+                    approval.target_id.to_string(),
+                    approval.operation.as_storage(),
+                    approval.result_scope.as_storage(),
+                    now
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        insert_safe_event(
+            &transaction,
+            id,
+            1,
+            SafeEventKind::Requested,
+            RunState::Queued,
+            "request accepted",
+            now,
+        )?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        Ok(CreateRunOutcome {
+            run: synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::Storage)?,
+            replayed: false,
+        })
+    }
+
+    pub fn start_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run(
+            id,
+            None,
+            &[RunState::Queued],
+            RunState::Running,
+            None,
+            SafeEventKind::Started,
+            "synthetic run started",
+        )
+    }
+
+    pub fn complete_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run(
+            id,
+            None,
+            &[RunState::Running],
+            RunState::Succeeded,
+            Some("synthetic_ok"),
+            SafeEventKind::Succeeded,
+            "synthetic run completed",
+        )
+    }
+
+    pub fn cancel_synthetic_run(
+        &self,
+        id: Uuid,
+        request: &CancelSyntheticRun,
+    ) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run(
+            id,
+            Some(request.expected_version),
+            &[RunState::Queued, RunState::Running],
+            RunState::Cancelled,
+            Some("cancelled"),
+            SafeEventKind::Cancelled,
+            "run cancelled",
+        )
+    }
+
+    pub fn invalidate_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run(
+            id,
+            None,
+            &[RunState::Queued, RunState::Running],
+            RunState::Cancelled,
+            Some("authorization_revoked"),
+            SafeEventKind::AuthorizationRevoked,
+            "authorization no longer active",
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "run transitions keep state, result and safe-event data atomic"
+    )]
+    fn transition_run(
+        &self,
+        id: Uuid,
+        expected_version: Option<u64>,
+        allowed_states: &[RunState],
+        next_state: RunState,
+        result_status: Option<&str>,
+        event_kind: SafeEventKind,
+        event_message: &str,
+    ) -> Result<SyntheticRun, CatalogError> {
+        let mut connection = self.lock();
+        let now = now_unix_ms_i64()?;
+        expire_approvals(&connection, now)?;
+        let current = synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        if expected_version.is_some_and(|expected| expected != current.version) {
+            return Err(CatalogError::VersionConflict);
+        }
+        if !allowed_states.contains(&current.state) {
+            return Err(CatalogError::InvalidRunTransition);
+        }
+        if matches!(next_state, RunState::Running | RunState::Succeeded)
+            && !approval_by_id(&connection, current.approval_id)?
+                .is_some_and(|approval| approval.state == ApprovalState::Approved)
+        {
+            return Err(CatalogError::ApprovalNotUsable);
+        }
+        let started_at = (next_state == RunState::Running).then_some(now);
+        let finished_at = matches!(
+            next_state,
+            RunState::Succeeded | RunState::Cancelled | RunState::Failed
+        )
+        .then_some(now);
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        let changed = transaction
+            .execute(
+                "UPDATE synthetic_runs
+                    SET state = ?1, result_status = ?2, updated_at_unix_ms = ?3,
+                        started_at_unix_ms = COALESCE(?4, started_at_unix_ms),
+                        finished_at_unix_ms = COALESCE(?5, finished_at_unix_ms),
+                        version = version + 1
+                  WHERE id = ?6 AND version = ?7",
+                params![
+                    next_state.as_storage(),
+                    result_status,
+                    now,
+                    started_at,
+                    finished_at,
+                    id.to_string(),
+                    i64::try_from(current.version).map_err(|_| CatalogError::Storage)?
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        if changed == 0 {
+            return Err(CatalogError::VersionConflict);
+        }
+        insert_safe_event(
+            &transaction,
+            id,
+            current.version + 1,
+            event_kind,
+            next_state,
+            event_message,
+            now,
+        )?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn list_safe_events(&self, run_id: Option<Uuid>) -> Result<Vec<SafeEvent>, CatalogError> {
+        let connection = self.lock();
+        if let Some(id) = run_id {
+            synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        }
+        let (query, parameter) = run_id.map_or(
+            (
+                "SELECT id, run_id, sequence, kind, state, message, created_at_unix_ms
+                   FROM safe_events ORDER BY created_at_unix_ms DESC, id DESC",
+                None,
+            ),
+            |id| {
+                (
+                    "SELECT id, run_id, sequence, kind, state, message, created_at_unix_ms
+                       FROM safe_events WHERE run_id = ?1 ORDER BY sequence",
+                    Some(id.to_string()),
+                )
+            },
+        );
+        let mut statement = connection
+            .prepare(query)
+            .map_err(|_| CatalogError::Storage)?;
+        let mapped = if let Some(parameter) = parameter {
+            statement.query_map([parameter], safe_event_from_row)
+        } else {
+            statement.query_map([], safe_event_from_row)
+        }
+        .map_err(|_| CatalogError::Storage)?;
+        mapped
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| CatalogError::Storage)
+    }
+
+    pub fn recover_interrupted_runs(&self) -> Result<usize, CatalogError> {
+        let ids = {
+            let connection = self.lock();
+            let mut statement = connection
+                .prepare("SELECT id FROM synthetic_runs WHERE state IN ('queued', 'running')")
+                .map_err(|_| CatalogError::Storage)?;
+            statement
+                .query_map([], |row| uuid_from_row(row, 0))
+                .map_err(|_| CatalogError::Storage)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|_| CatalogError::Storage)?
+        };
+        let mut recovered = 0;
+        for id in ids {
+            if self
+                .transition_run(
+                    id,
+                    None,
+                    &[RunState::Queued, RunState::Running],
+                    RunState::Failed,
+                    Some("service_restarted"),
+                    SafeEventKind::Interrupted,
+                    "service restarted before completion",
+                )
+                .is_ok()
+            {
+                recovered += 1;
+            }
+        }
+        Ok(recovered)
+    }
+
     pub fn delete_target(&self, id: Uuid) -> Result<(), CatalogError> {
         let connection = self.lock();
         let references = connection
@@ -992,6 +1460,43 @@ impl Catalog {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn create_run_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE synthetic_runs (
+            id TEXT PRIMARY KEY NOT NULL,
+            approval_id TEXT NOT NULL UNIQUE REFERENCES approvals(id) ON DELETE RESTRICT,
+            idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
+            action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
+            target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+            result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL,
+            started_at_unix_ms INTEGER,
+            finished_at_unix_ms INTEGER,
+            version INTEGER NOT NULL CHECK (version >= 1)
+         );
+         CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+         CREATE TABLE safe_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES synthetic_runs(id) ON DELETE RESTRICT,
+            sequence INTEGER NOT NULL CHECK (sequence >= 1),
+            kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
+            state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+            message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+            created_at_unix_ms INTEGER NOT NULL,
+            UNIQUE(run_id, sequence)
+         );
+         CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
+         CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
+         PRAGMA user_version = 4;
+         COMMIT;",
+    )
 }
 
 fn credential_by_id(
@@ -1125,6 +1630,117 @@ fn approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
     })
 }
 
+fn synthetic_run_by_id(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<Option<SyntheticRun>, CatalogError> {
+    connection
+        .query_row(
+            "SELECT id, approval_id, action_template_id, target_id, operation,
+                    result_scope, state, result_status, created_at_unix_ms,
+                    updated_at_unix_ms, started_at_unix_ms,
+                    finished_at_unix_ms, version
+               FROM synthetic_runs WHERE id = ?1",
+            [id.to_string()],
+            synthetic_run_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)
+}
+
+fn synthetic_run_by_idempotency_key_hash(
+    connection: &Connection,
+    key: &str,
+) -> Result<Option<SyntheticRun>, CatalogError> {
+    connection
+        .query_row(
+            "SELECT id, approval_id, action_template_id, target_id, operation,
+                    result_scope, state, result_status, created_at_unix_ms,
+                    updated_at_unix_ms, started_at_unix_ms,
+                    finished_at_unix_ms, version
+               FROM synthetic_runs WHERE idempotency_key_hash = ?1",
+            [key],
+            synthetic_run_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)
+}
+
+fn synthetic_run_by_approval(
+    connection: &Connection,
+    approval_id: Uuid,
+) -> Result<Option<SyntheticRun>, CatalogError> {
+    connection
+        .query_row(
+            "SELECT id, approval_id, action_template_id, target_id, operation,
+                    result_scope, state, result_status, created_at_unix_ms,
+                    updated_at_unix_ms, started_at_unix_ms,
+                    finished_at_unix_ms, version
+               FROM synthetic_runs WHERE approval_id = ?1",
+            [approval_id.to_string()],
+            synthetic_run_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)
+}
+
+fn synthetic_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SyntheticRun> {
+    Ok(SyntheticRun {
+        id: uuid_from_row(row, 0)?,
+        approval_id: uuid_from_row(row, 1)?,
+        action_template_id: uuid_from_row(row, 2)?,
+        target_id: uuid_from_row(row, 3)?,
+        operation: ApprovalOperation::from_storage(&row.get::<_, String>(4)?)?,
+        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(5)?)?,
+        state: RunState::from_storage(&row.get::<_, String>(6)?)?,
+        result_status: row.get(7)?,
+        created_at_unix_ms: u64_from_row(row, 8)?,
+        updated_at_unix_ms: u64_from_row(row, 9)?,
+        started_at_unix_ms: optional_u64_from_row(row, 10)?,
+        finished_at_unix_ms: optional_u64_from_row(row, 11)?,
+        version: u64_from_row(row, 12)?,
+    })
+}
+
+fn safe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SafeEvent> {
+    Ok(SafeEvent {
+        id: u64_from_row(row, 0)?,
+        run_id: uuid_from_row(row, 1)?,
+        sequence: u64_from_row(row, 2)?,
+        kind: SafeEventKind::from_storage(&row.get::<_, String>(3)?)?,
+        state: RunState::from_storage(&row.get::<_, String>(4)?)?,
+        message: row.get(5)?,
+        created_at_unix_ms: u64_from_row(row, 6)?,
+    })
+}
+
+fn insert_safe_event(
+    connection: &Connection,
+    run_id: Uuid,
+    sequence: u64,
+    kind: SafeEventKind,
+    state: RunState,
+    message: &str,
+    created_at: i64,
+) -> Result<(), CatalogError> {
+    connection
+        .execute(
+            "INSERT INTO safe_events
+                (run_id, sequence, kind, state, message, created_at_unix_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                run_id.to_string(),
+                i64::try_from(sequence).map_err(|_| CatalogError::Storage)?,
+                kind.as_storage(),
+                state.as_storage(),
+                message,
+                created_at
+            ],
+        )
+        .map(|_| ())
+        .map_err(|_| CatalogError::Storage)
+}
+
 fn expire_approvals(connection: &Connection, now: i64) -> Result<(), CatalogError> {
     connection
         .execute(
@@ -1147,12 +1763,19 @@ fn u64_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> 
         .map_err(|_| rusqlite::Error::InvalidQuery)
 }
 
+fn optional_u64_from_row(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u64>> {
+    row.get::<_, Option<i64>>(index)?
+        .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
+        .transpose()
+}
+
 fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result<(), CatalogError> {
     let statement = match table {
         "credential_references" => "SELECT COUNT(*) FROM credential_references",
         "targets" => "SELECT COUNT(*) FROM targets",
         "approvals" => "SELECT COUNT(*) FROM approvals",
         "action_templates" => "SELECT COUNT(*) FROM action_templates",
+        "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -1161,6 +1784,19 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
     (count < maximum)
         .then_some(())
         .ok_or(CatalogError::Capacity)
+}
+
+fn normalize_idempotency_key(value: &str) -> Result<String, CatalogError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > MAX_IDEMPOTENCY_KEY_CHARS
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.:".contains(character))
+    {
+        return Err(CatalogError::Invalid);
+    }
+    Ok(value.to_owned())
 }
 
 fn ensure_target_exists(connection: &Connection, id: Uuid) -> Result<(), CatalogError> {
@@ -1230,10 +1866,11 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        ApprovalOperation, ApprovalResultScope, ApprovalState, Catalog, CatalogError,
-        CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateTarget,
-        CredentialKind, DecideApproval, TargetEnvironment, TargetKind, UpdateActionTemplate,
-        UpdateCredentialReference, UpdateTarget,
+        ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
+        CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
+        CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, RunState, SafeEventKind,
+        TargetEnvironment, TargetKind, UpdateActionTemplate, UpdateCredentialReference,
+        UpdateTarget,
     };
 
     #[test]
@@ -1457,7 +2094,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     #[test]
@@ -1516,7 +2153,208 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            3
+            4
+        );
+    }
+
+    #[test]
+    fn version_three_database_migrates_to_synthetic_runs() {
+        let database = TemporaryDatabase::new();
+        drop(Catalog::open(&database.path).expect("create current catalog"));
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "DROP TABLE safe_events;
+                     DROP TABLE synthetic_runs;
+                     PRAGMA user_version = 3;",
+                )
+                .expect("restore version three layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v3 catalog");
+        let approval = create_approved_workflow(&catalog);
+        let run = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "v3-migration-check".to_owned(),
+            })
+            .expect("create run after migration")
+            .run;
+        assert_eq!(run.state, RunState::Queued);
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            4
+        );
+    }
+
+    #[test]
+    fn synthetic_runs_are_idempotent_single_use_and_cancellable() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let approval = create_approved_workflow(&catalog);
+        let request = CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: "request-001".to_owned(),
+        };
+        let created = catalog
+            .create_synthetic_run(&request)
+            .expect("create synthetic run");
+        assert!(!created.replayed);
+        assert_eq!(created.run.state, RunState::Queued);
+
+        let replayed = catalog
+            .create_synthetic_run(&request)
+            .expect("replay idempotent request");
+        assert!(replayed.replayed);
+        assert_eq!(replayed.run.id, created.run.id);
+        let other_approval = create_approved_workflow(&catalog);
+        assert!(matches!(
+            catalog.create_synthetic_run(&CreateSyntheticRun {
+                approval_id: other_approval.id,
+                idempotency_key: "request-001".to_owned(),
+            }),
+            Err(CatalogError::IdempotencyConflict)
+        ));
+        assert!(matches!(
+            catalog.create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "request-002".to_owned(),
+            }),
+            Err(CatalogError::ApprovalConsumed)
+        ));
+
+        let running = catalog
+            .start_synthetic_run(created.run.id)
+            .expect("start synthetic run");
+        assert_eq!(running.state, RunState::Running);
+        assert_eq!(running.version, 2);
+        assert!(matches!(
+            catalog.cancel_synthetic_run(
+                running.id,
+                &CancelSyntheticRun {
+                    expected_version: 1,
+                },
+            ),
+            Err(CatalogError::VersionConflict)
+        ));
+        let cancelled = catalog
+            .cancel_synthetic_run(
+                running.id,
+                &CancelSyntheticRun {
+                    expected_version: 2,
+                },
+            )
+            .expect("cancel synthetic run");
+        assert_eq!(cancelled.state, RunState::Cancelled);
+        assert_eq!(cancelled.result_status.as_deref(), Some("cancelled"));
+        assert!(matches!(
+            catalog.complete_synthetic_run(cancelled.id),
+            Err(CatalogError::InvalidRunTransition)
+        ));
+        let events = catalog
+            .list_safe_events(Some(cancelled.id))
+            .expect("list safe events");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, SafeEventKind::Requested);
+        assert_eq!(events[2].kind, SafeEventKind::Cancelled);
+    }
+
+    #[test]
+    fn synthetic_runs_stop_when_authorization_is_no_longer_active() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+
+        let queued_approval = create_approved_workflow(&catalog);
+        let queued = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: queued_approval.id,
+                idempotency_key: "revoked-before-start".to_owned(),
+            })
+            .expect("create queued run")
+            .run;
+        catalog
+            .revoke_approval(
+                queued_approval.id,
+                &DecideApproval {
+                    expected_version: queued_approval.version,
+                    note: Some("Authorization withdrawn".to_owned()),
+                },
+            )
+            .expect("revoke queued authorization");
+        assert!(matches!(
+            catalog.start_synthetic_run(queued.id),
+            Err(CatalogError::ApprovalNotUsable)
+        ));
+        let stopped = catalog
+            .invalidate_synthetic_run(queued.id)
+            .expect("stop queued run");
+        assert_eq!(stopped.state, RunState::Cancelled);
+        assert_eq!(
+            stopped.result_status.as_deref(),
+            Some("authorization_revoked")
+        );
+
+        let running_approval = create_approved_workflow(&catalog);
+        let running = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: running_approval.id,
+                idempotency_key: "revoked-while-running".to_owned(),
+            })
+            .expect("create running run")
+            .run;
+        catalog
+            .start_synthetic_run(running.id)
+            .expect("start synthetic run");
+        catalog
+            .revoke_approval(
+                running_approval.id,
+                &DecideApproval {
+                    expected_version: running_approval.version,
+                    note: Some("Authorization withdrawn during run".to_owned()),
+                },
+            )
+            .expect("revoke running authorization");
+        assert!(matches!(
+            catalog.complete_synthetic_run(running.id),
+            Err(CatalogError::ApprovalNotUsable)
+        ));
+        let stopped = catalog
+            .invalidate_synthetic_run(running.id)
+            .expect("stop running run");
+        assert_eq!(stopped.state, RunState::Cancelled);
+        let events = catalog
+            .list_safe_events(Some(stopped.id))
+            .expect("list authorization events");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[2].kind, SafeEventKind::AuthorizationRevoked);
+        assert_eq!(events[2].message, "authorization no longer active");
+    }
+
+    #[test]
+    fn active_runs_recover_as_failed_after_restart() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let approval = create_approved_workflow(&catalog);
+        let run = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "restart-check".to_owned(),
+            })
+            .expect("create run")
+            .run;
+        catalog.start_synthetic_run(run.id).expect("start run");
+
+        assert_eq!(catalog.recover_interrupted_runs().expect("recover runs"), 1);
+        let recovered = catalog.get_synthetic_run(run.id).expect("recovered run");
+        assert_eq!(recovered.state, RunState::Failed);
+        assert_eq!(
+            recovered.result_status.as_deref(),
+            Some("service_restarted")
+        );
+        assert_eq!(
+            catalog.recover_interrupted_runs().expect("repeat recovery"),
+            0
         );
     }
 
@@ -1605,6 +2443,22 @@ mod tests {
                 expires_in_seconds: 300,
             })
             .expect("synthetic approval")
+    }
+
+    fn create_approved_workflow(catalog: &Catalog) -> super::Approval {
+        let credential = create_credential(catalog);
+        let target = create_target(catalog, credential.id);
+        let template = create_action_template(catalog, target.id);
+        let approval = create_approval(catalog, template.id);
+        catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: Some("Approved for synthetic run test".to_owned()),
+                },
+            )
+            .expect("approve synthetic workflow")
     }
 
     struct TemporaryDatabase {

@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M1 workflow development with M0 security gates still open.** The repository contains a runnable local Web console, loopback-only Rust service, one-time browser pairing, an isolated synthetic terminal, and a local SQLite catalog for credential references, logical targets, controlled-action templates and scoped approval records. Configuration accepts no secret values or network endpoints, and templates or approvals cannot trigger execution. Real credential storage, injection, business-system access and system-shell execution remain disabled.
+> **M1 workflow development with M0 security gates still open.** The repository contains a runnable local Web console, loopback-only Rust service, one-time browser pairing, an isolated synthetic terminal, and local SQLite persistence for credential references, logical targets, controlled-action templates, scoped approvals, synthetic runs and safe events. Configuration accepts no secret values or network endpoints; runs simulate internal state and cannot trigger real operations. Real credential storage, injection, business-system access and system-shell execution remain disabled.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. M1 now also provides authenticated Web pages and versioned SQLite persistence for non-secret credential references, logical targets, controlled-action templates and scoped approval records. An enabled template binds a fixed synthetic operation and result scope to one target; each approval snapshots that template version and scope for a 1–60 minute lifetime. It can be approved, denied, revoked or automatically expired, but cannot execute an operation. PTY reconnection uses output cursors rather than replaying already-consumed bytes, concurrent attachments enforce one writer with read-only observers, and stalled browser writes are time-bounded. The status API explicitly reports the current identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
+Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. M1 now also provides authenticated Web pages and versioned SQLite persistence for the non-secret workflow. An enabled template binds a fixed synthetic operation and result scope to one target; each approval snapshots that scope and may create at most one idempotent synthetic run. Runs expose queued, running, succeeded, cancelled, authorization-stopped or restart-interrupted status and fixed server-generated safe events. Approval validity is rechecked before start and completion. These are short internal state simulations: no process, network, credential or operation argument is involved. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and stalled browser writes are time-bounded. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
 
 ## How it works
 
@@ -75,7 +75,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Credentials**, **Targets**, **Policies** and **Approvals** pages accept and persist only non-secret, non-endpoint configuration in the operating system's local application-data directory. Templates and approvals have no execute control or command/network execution endpoint. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The bounded `flood` and `wait` commands exist only for resilience testing. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Credentials**, **Targets**, **Policies**, **Approvals**, **Runs** and **Audit** pages handle only non-secret, non-endpoint configuration and fixed safe state. Synthetic runs have no command or network execution endpoint. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The bounded `flood` and `wait` commands exist only for resilience testing. The project does not use—and does not plan to introduce—a desktop shell.
 
 ## Platform targets
 

@@ -6,6 +6,17 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.9 · observable synthetic runs
+
+- Connect approved controlled-action templates to a persistent, single-use synthetic run lifecycle with queued, running, succeeded, cancelled and restart-interrupted states.
+- Add caller-supplied idempotency keys stored only as SHA-256 digests: an identical retry returns the original run, conflicting reuse is rejected and one approval cannot authorize multiple runs.
+- Add optimistic cancellation, automatic short synthetic completion and startup recovery that marks unfinished persisted runs as failed instead of silently resuming or duplicating work.
+- Revalidate approval state before both start and completion; a revoked or expired authorization safely stops its queued or running simulation and emits a fixed authorization event.
+- Persist server-generated safe events with monotonic per-run sequences and a database-enforced fixed-message allowlist; no terminal output, business payload, argument, endpoint or credential can enter the event stream.
+- Add authenticated run/status/cancellation and safe-event APIs, with exact Origin checks on mutations and explicit `synthetic_simulation` and `fixed_safe_messages_only` response markers.
+- Add bilingual Runs and Audit pages with active-state polling, per-run event inspection, filters and clear non-execution notices.
+- Advance the SQLite schema to version 4 with migrations from versions 1, 2 and 3, plus lifecycle, idempotency, cancellation, recovery, API and Web-client regression tests.
+
 ### 0.1.0-alpha.8 · controlled action templates
 
 - Add persistent controlled-action templates that bind an enabled fixed synthetic operation and result scope to one logical target, a 1–300 second planned timeout and versioned descriptive metadata.

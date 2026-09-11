@@ -17,6 +17,7 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
+  PlayCircle,
   ServerCog,
   Settings,
   ShieldCheck,
@@ -49,6 +50,12 @@ const ActionTemplatesView = lazy(() =>
     default: module.ActionTemplatesView,
   })),
 );
+const OperationsView = lazy(() =>
+  import("./OperationsView").then((module) => ({ default: module.OperationsView })),
+);
+const AuditView = lazy(() =>
+  import("./AuditView").then((module) => ({ default: module.AuditView })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -59,6 +66,7 @@ interface Copy {
   credentials: string;
   targets: string;
   approvals: string;
+  operations: string;
   policies: string;
   terminal: string;
   audit: string;
@@ -113,6 +121,7 @@ const copy: Record<Language, Copy> = {
     credentials: "凭据",
     targets: "连接目标",
     approvals: "审批中心",
+    operations: "运行任务",
     policies: "执行策略",
     terminal: "安全终端",
     audit: "审计记录",
@@ -140,7 +149,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "下一阶段连接合成操作请求、状态、取消与安全事件；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
+      "下一阶段继续开发策略评估、运行状态订阅与审计保留控制；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -167,6 +176,7 @@ const copy: Record<Language, Copy> = {
     credentials: "Credentials",
     targets: "Targets",
     approvals: "Approvals",
+    operations: "Runs",
     policies: "Policies",
     terminal: "Secure terminal",
     audit: "Audit log",
@@ -198,7 +208,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Next, connect synthetic operation requests, status, cancellation and safe events. Real credential integration remains gated on M0 cross-platform identity validation.",
+      "Next, add policy evaluation, run-status subscriptions and audit-retention controls. Real credential integration remains gated on M0 cross-platform identity validation.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -228,6 +238,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "credentials", icon: KeyRound },
   { id: "targets", icon: ServerCog },
   { id: "approvals", icon: ClipboardCheck },
+  { id: "operations", icon: PlayCircle },
   { id: "policies", icon: Workflow },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
@@ -469,6 +480,14 @@ export function App() {
                   language={language}
                   sessionToken={sessionToken}
                 />
+              </Suspense>
+            ) : activePage === "operations" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <OperationsView language={language} sessionToken={sessionToken} />
+              </Suspense>
+            ) : activePage === "audit" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <AuditView language={language} sessionToken={sessionToken} />
               </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />
