@@ -112,7 +112,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "继续验证三平台PTY、输入租约和安全输出背压，再进入凭据引用与审批流程。",
+      "继续验证三平台身份隔离、慢消费者压力与可访问性，再进入凭据引用和审批流程。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -160,7 +160,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Validate the PTY on all three platforms, then add input leases and bounded safe-output flows before credential references and approvals.",
+      "Validate cross-platform identity isolation, slow-consumer limits, and accessibility before adding credential references and approvals.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",

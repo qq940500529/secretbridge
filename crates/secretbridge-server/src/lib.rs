@@ -38,7 +38,8 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use terminal::{
-    TerminalError, TerminalEvent, TerminalHandle, TerminalManager, TerminalStatus, TerminalSummary,
+    TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
+    TerminalSummary,
 };
 
 const BEARER_PREFIX: &str = "Bearer ";
@@ -149,9 +150,19 @@ struct TerminalListResponse {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
-    Authenticate { token: String },
-    Input { data: String },
-    Resize { rows: u16, cols: u16 },
+    Authenticate {
+        token: String,
+        client_id: Uuid,
+        request_input: bool,
+        cursor: Option<u64>,
+    },
+    Input {
+        data: String,
+    },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     Terminate,
 }
 
@@ -162,6 +173,10 @@ enum ServerTerminalMessage {
         terminal_id: Uuid,
         mode: &'static str,
         status: TerminalStatus,
+        replay_from: u64,
+        next_cursor: u64,
+        replay_truncated: bool,
+        input_granted: bool,
     },
     Exited {
         exit_code: u32,
@@ -172,7 +187,8 @@ enum ServerTerminalMessage {
         message: &'static str,
     },
     OutputLagged {
-        dropped_messages: u64,
+        oldest_cursor: u64,
+        next_cursor: u64,
     },
 }
 
@@ -387,42 +403,25 @@ async fn attach_terminal(
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     validate_origin(&headers, &state)?;
-    let terminal = state.terminals.get(id).map_err(map_terminal_error)?;
     Ok(upgrade
         .max_message_size(MAX_WEBSOCKET_MESSAGE_BYTES)
-        .on_upgrade(move |socket| terminal_socket(socket, state, terminal))
+        .on_upgrade(move |socket| terminal_socket(socket, state, id))
         .into_response())
 }
 
-async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal: TerminalHandle) {
+async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal_id: Uuid) {
     let mut revocations = state.session_revocations.subscribe();
-    let Some((session_digest, expires_in_seconds)) =
-        authenticate_terminal_socket(&mut socket, &state).await
-    else {
+    let Some(prepared) = prepare_terminal_socket(&mut socket, &state, terminal_id).await else {
         return;
     };
-
-    let (summary, backlog, mut events) = terminal.snapshot_and_subscribe();
-    if send_server_message(
-        &mut socket,
-        &ServerTerminalMessage::Ready {
-            terminal_id: summary.id,
-            mode: "synthetic_only",
-            status: summary.status,
-        },
-    )
-    .await
-    .is_err()
-    {
+    if !prepared.running {
         return;
     }
-    if !backlog.is_empty() && socket.send(Message::Binary(backlog.into())).await.is_err() {
-        return;
-    }
-    if summary.status != TerminalStatus::Running {
-        return;
-    }
-    let session_expiry = tokio::time::sleep(Duration::from_secs(expires_in_seconds));
+    let terminal = prepared.terminal;
+    let mut events = prepared.events;
+    let mut expected_cursor = prepared.expected_cursor;
+    let authentication = prepared.authentication;
+    let session_expiry = tokio::time::sleep(Duration::from_secs(authentication.expires_in_seconds));
     tokio::pin!(session_expiry);
 
     loop {
@@ -439,9 +438,14 @@ async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal: Termi
             }
             revoked = revocations.recv() => {
                 let is_revoked = match revoked {
-                    Ok(revoked_digest) => constant_time_equal(&session_digest, &revoked_digest),
+                    Ok(revoked_digest) => {
+                        constant_time_equal(&authentication.session_digest, &revoked_digest)
+                    }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        state.authenticate_digest(&session_digest).await.is_none()
+                        state
+                            .authenticate_digest(&authentication.session_digest)
+                            .await
+                            .is_none()
                     }
                     Err(broadcast::error::RecvError::Closed) => true,
                 };
@@ -463,7 +467,12 @@ async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal: Termi
                 }
             }
             event = events.recv() => {
-                if !handle_terminal_event(&mut socket, event).await {
+                if !handle_terminal_event(
+                    &mut socket,
+                    &terminal,
+                    &mut expected_cursor,
+                    event,
+                ).await {
                     break;
                 }
             }
@@ -471,17 +480,96 @@ async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal: Termi
     }
 }
 
+struct PreparedTerminal {
+    terminal: Arc<TerminalConnection>,
+    events: broadcast::Receiver<TerminalEvent>,
+    expected_cursor: u64,
+    authentication: SocketAuthentication,
+    running: bool,
+}
+
+async fn prepare_terminal_socket(
+    socket: &mut WebSocket,
+    state: &AppState,
+    terminal_id: Uuid,
+) -> Option<PreparedTerminal> {
+    let authentication = authenticate_terminal_socket(socket, state).await?;
+    let terminal = state.terminals.attach(
+        terminal_id,
+        authentication.client_id,
+        authentication.request_input,
+        authentication.cursor,
+    );
+    let Ok((terminal, snapshot)) = terminal else {
+        let _ = send_server_message(
+            socket,
+            &ServerTerminalMessage::Error {
+                code: "terminal_not_found",
+                message: "The synthetic terminal does not exist.",
+            },
+        )
+        .await;
+        return None;
+    };
+    if send_server_message(
+        socket,
+        &ServerTerminalMessage::Ready {
+            terminal_id: snapshot.summary.id,
+            mode: "synthetic_only",
+            status: snapshot.summary.status,
+            replay_from: snapshot.replay_from,
+            next_cursor: snapshot.next_cursor,
+            replay_truncated: snapshot.replay_truncated,
+            input_granted: snapshot.input_granted,
+        },
+    )
+    .await
+    .is_err()
+    {
+        return None;
+    }
+    if !snapshot.output.is_empty()
+        && socket
+            .send(Message::Binary(snapshot.output.into()))
+            .await
+            .is_err()
+    {
+        return None;
+    }
+    Some(PreparedTerminal {
+        terminal: Arc::new(terminal),
+        events: snapshot.events,
+        expected_cursor: snapshot.next_cursor,
+        authentication,
+        running: snapshot.summary.status == TerminalStatus::Running,
+    })
+}
+
+struct SocketAuthentication {
+    session_digest: [u8; 32],
+    expires_in_seconds: u64,
+    client_id: Uuid,
+    request_input: bool,
+    cursor: Option<u64>,
+}
+
 async fn authenticate_terminal_socket(
     socket: &mut WebSocket,
     state: &AppState,
-) -> Option<([u8; 32], u64)> {
+) -> Option<SocketAuthentication> {
     let authenticated = match timeout(WEBSOCKET_AUTH_TIMEOUT, socket.recv()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
             serde_json::from_str::<ClientTerminalMessage>(&text).ok()
         }
         _ => None,
     };
-    let Some(ClientTerminalMessage::Authenticate { token }) = authenticated else {
+    let Some(ClientTerminalMessage::Authenticate {
+        token,
+        client_id,
+        request_input,
+        cursor,
+    }) = authenticated
+    else {
         let _ = send_server_message(
             socket,
             &ServerTerminalMessage::Error {
@@ -506,18 +594,36 @@ async fn authenticate_terminal_socket(
         let _ = socket.send(Message::Close(None)).await;
         return None;
     };
-    Some((digest, expires_in_seconds))
+    Some(SocketAuthentication {
+        session_digest: digest,
+        expires_in_seconds,
+        client_id,
+        request_input,
+        cursor,
+    })
 }
 
 async fn handle_terminal_event(
     socket: &mut WebSocket,
+    terminal: &TerminalConnection,
+    expected_cursor: &mut u64,
     event: Result<TerminalEvent, broadcast::error::RecvError>,
 ) -> bool {
     match event {
-        Ok(TerminalEvent::Output(output)) => socket
-            .send(Message::Binary(output.to_vec().into()))
-            .await
-            .is_ok(),
+        Ok(TerminalEvent::Output { cursor, data }) => {
+            if cursor != *expected_cursor {
+                return send_output_gap(socket, terminal).await;
+            }
+            let sent = socket
+                .send(Message::Binary(data.to_vec().into()))
+                .await
+                .is_ok();
+            if sent {
+                *expected_cursor = (*expected_cursor)
+                    .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+            }
+            sent
+        }
         Ok(TerminalEvent::Exited(exit_code)) => {
             let _ = send_server_message(socket, &ServerTerminalMessage::Exited { exit_code }).await;
             false
@@ -537,19 +643,27 @@ async fn handle_terminal_event(
             .await;
             false
         }
-        Err(broadcast::error::RecvError::Lagged(dropped_messages)) => send_server_message(
-            socket,
-            &ServerTerminalMessage::OutputLagged { dropped_messages },
-        )
-        .await
-        .is_ok(),
+        Err(broadcast::error::RecvError::Lagged(_)) => send_output_gap(socket, terminal).await,
         Err(broadcast::error::RecvError::Closed) => false,
     }
 }
 
+async fn send_output_gap(socket: &mut WebSocket, terminal: &TerminalConnection) -> bool {
+    let (oldest_cursor, next_cursor) = terminal.output_bounds();
+    let _ = send_server_message(
+        socket,
+        &ServerTerminalMessage::OutputLagged {
+            oldest_cursor,
+            next_cursor,
+        },
+    )
+    .await;
+    false
+}
+
 async fn handle_client_message(
     socket: &mut WebSocket,
-    terminal: &TerminalHandle,
+    terminal: &Arc<TerminalConnection>,
     message: Message,
 ) -> bool {
     let Message::Text(text) = message else {
@@ -567,7 +681,7 @@ async fn handle_client_message(
         return true;
     };
 
-    let terminal = terminal.clone();
+    let terminal = Arc::clone(terminal);
     let result = match message {
         ClientTerminalMessage::Input { data } => {
             task::spawn_blocking(move || terminal.write(data.as_bytes())).await
@@ -591,19 +705,23 @@ async fn handle_client_message(
         }
     };
 
-    if let Ok(Ok(())) = result {
-        true
-    } else {
-        let _ = send_server_message(
-            socket,
-            &ServerTerminalMessage::Error {
-                code: "terminal_operation_failed",
-                message: "The synthetic terminal operation failed.",
-            },
-        )
-        .await;
-        true
-    }
+    let error = match result {
+        Ok(Ok(())) => return true,
+        Ok(Err(TerminalError::InputLeaseRequired)) => ServerTerminalMessage::Error {
+            code: "input_lease_required",
+            message: "This connection has read-only access.",
+        },
+        Ok(Err(TerminalError::InvalidInput)) => ServerTerminalMessage::Error {
+            code: "input_too_large",
+            message: "The terminal input is too large.",
+        },
+        _ => ServerTerminalMessage::Error {
+            code: "terminal_operation_failed",
+            message: "The synthetic terminal operation failed.",
+        },
+    };
+    let _ = send_server_message(socket, &error).await;
+    true
 }
 
 async fn send_server_message(
@@ -625,7 +743,10 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<u64, A
 fn map_terminal_error(error: TerminalError) -> ApiError {
     match error {
         TerminalError::Capacity => ApiError::Conflict,
-        TerminalError::InvalidSize | TerminalError::Closed => ApiError::BadRequest,
+        TerminalError::InvalidInput
+        | TerminalError::InvalidSize
+        | TerminalError::InputLeaseRequired
+        | TerminalError::Closed => ApiError::BadRequest,
         TerminalError::NotFound => ApiError::NotFound,
         TerminalError::SpawnFailed => ApiError::Internal,
     }

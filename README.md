@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
+Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. PTY reconnection uses output cursors rather than replaying already-consumed bytes, and concurrent attachments enforce one writer with read-only observers. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
 
 ## How it works
 
@@ -75,7 +75,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Secure terminal** page runs only SecretBridge's built-in echo/status process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Secure terminal** page runs only SecretBridge's built-in echo/status process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The project does not use—and does not plan to introduce—a desktop shell.
 
 ## Platform targets
 
