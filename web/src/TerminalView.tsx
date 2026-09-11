@@ -28,8 +28,13 @@ interface ServerMessage {
   type: "ready" | "exited" | "terminated" | "error" | "output_lagged";
   status?: TerminalStatus;
   exit_code?: number;
+  code?: string;
   message?: string;
-  dropped_messages?: number;
+  replay_from?: number;
+  next_cursor?: number;
+  replay_truncated?: boolean;
+  input_granted?: boolean;
+  oldest_cursor?: number;
 }
 
 const labels = {
@@ -52,6 +57,10 @@ const labels = {
     failed: "失败",
     loadingError: "无法读取终端会话，请确认本页仍处于已配对状态。",
     operationError: "终端操作失败，请稍后重试。",
+    writeAccess: "已取得输入权",
+    readOnly: "只读连接",
+    olderOutputDiscarded: "更早的输出已超过保留上限，当前从最早可用位置恢复。",
+    recoveringOutput: "检测到输出缺口，正在按游标恢复。",
   },
   en: {
     title: "Synthetic secure terminal",
@@ -72,6 +81,10 @@ const labels = {
     failed: "Failed",
     loadingError: "Unable to read terminal sessions. Confirm that this page is still paired.",
     operationError: "The terminal operation failed. Try again.",
+    writeAccess: "Input lease granted",
+    readOnly: "Read-only connection",
+    olderOutputDiscarded: "Older output exceeded the retention limit; replay starts at the oldest available cursor.",
+    recoveringOutput: "An output gap was detected. Reconnecting from the last cursor.",
   },
 } as const;
 
@@ -91,12 +104,19 @@ export function TerminalView({
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAllowedRef = useRef(false);
   const readyRef = useRef(false);
+  const inputGrantedRef = useRef(false);
+  const cursorByTerminalRef = useRef(new Map<string, number>());
+  const clientIdRef = useRef(crypto.randomUUID());
+  const textRef = useRef(text);
   const mountedRef = useRef(true);
   const [terminals, setTerminals] = useState<TerminalSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [socketState, setSocketState] = useState<SocketState>("disconnected");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inputGranted, setInputGranted] = useState(false);
+
+  textRef.current = text;
 
   useEffect(() => {
     selectedRef.current = selectedId;
@@ -111,7 +131,7 @@ export function TerminalView({
   }, []);
 
   const connect = useCallback(
-    (terminalId: string) => {
+    (terminalId: string, resume = false) => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -123,7 +143,13 @@ export function TerminalView({
         previousSocket.close();
       }
       readyRef.current = false;
+      inputGrantedRef.current = false;
+      setInputGranted(false);
       reconnectAllowedRef.current = true;
+      if (!resume) {
+        cursorByTerminalRef.current.delete(terminalId);
+        terminalRef.current?.reset();
+      }
       setSelectedId(terminalId);
       selectedRef.current = terminalId;
       setSocketState("connecting");
@@ -134,11 +160,21 @@ export function TerminalView({
       socketRef.current = socket;
 
       socket.onopen = () => {
-        socket.send(JSON.stringify({ type: "authenticate", token: sessionToken }));
+        socket.send(
+          JSON.stringify({
+            type: "authenticate",
+            token: sessionToken,
+            client_id: clientIdRef.current,
+            request_input: true,
+            cursor: cursorByTerminalRef.current.get(terminalId) ?? null,
+          }),
+        );
       };
       socket.onmessage = (event) => {
         if (typeof event.data !== "string") {
           const bytes = new Uint8Array(event.data as ArrayBuffer);
+          const cursor = cursorByTerminalRef.current.get(terminalId) ?? 0;
+          cursorByTerminalRef.current.set(terminalId, cursor + bytes.byteLength);
           terminalRef.current?.write(bytes);
           return;
         }
@@ -151,9 +187,16 @@ export function TerminalView({
           return;
         }
         if (message.type === "ready") {
-          terminalRef.current?.reset();
+          cursorByTerminalRef.current.set(terminalId, message.replay_from ?? 0);
           readyRef.current = true;
+          inputGrantedRef.current = message.input_granted === true;
+          setInputGranted(inputGrantedRef.current);
           setSocketState("connected");
+          if (message.replay_truncated) {
+            terminalRef.current?.writeln(
+              `\r\n[${textRef.current.olderOutputDiscarded}]\r\n`,
+            );
+          }
           if (message.status) {
             updateStatus(terminalId, message.status);
             reconnectAllowedRef.current = message.status === "running";
@@ -167,23 +210,30 @@ export function TerminalView({
           updateStatus(terminalId, "terminated");
         } else if (message.type === "output_lagged") {
           terminalRef.current?.writeln(
-            `\r\n[output lagged: ${message.dropped_messages ?? 0} messages]`,
+            `\r\n[${textRef.current.recoveringOutput}]`,
           );
+          reconnectAllowedRef.current = true;
+          socket.close();
         } else if (message.type === "error") {
-          reconnectAllowedRef.current = false;
-          setSocketState("error");
-          terminalRef.current?.writeln(`\r\n[${message.message ?? text.operationError}]`);
+          const leaseError = message.code === "input_lease_required";
+          reconnectAllowedRef.current = leaseError;
+          if (!leaseError) setSocketState("error");
+          terminalRef.current?.writeln(
+            `\r\n[${message.message ?? textRef.current.operationError}]`,
+          );
         }
       };
       socket.onerror = () => setSocketState("error");
       socket.onclose = () => {
         readyRef.current = false;
+        inputGrantedRef.current = false;
+        setInputGranted(false);
         if (socketRef.current !== socket) return;
         socketRef.current = null;
         if (!mountedRef.current || selectedRef.current !== terminalId) return;
         setSocketState("disconnected");
         if (reconnectAllowedRef.current) {
-          reconnectTimerRef.current = window.setTimeout(() => connect(terminalId), 1200);
+          reconnectTimerRef.current = window.setTimeout(() => connect(terminalId, true), 1200);
         }
       };
     },
@@ -214,14 +264,22 @@ export function TerminalView({
 
     const input = terminal.onData((data) => {
       const socket = socketRef.current;
-      if (readyRef.current && socket?.readyState === WebSocket.OPEN) {
+      if (
+        readyRef.current &&
+        inputGrantedRef.current &&
+        socket?.readyState === WebSocket.OPEN
+      ) {
         socket.send(JSON.stringify({ type: "input", data }));
       }
     });
     const resize = new ResizeObserver(() => {
       fit.fit();
       const socket = socketRef.current;
-      if (readyRef.current && socket?.readyState === WebSocket.OPEN) {
+      if (
+        readyRef.current &&
+        inputGrantedRef.current &&
+        socket?.readyState === WebSocket.OPEN
+      ) {
         socket.send(
           JSON.stringify({ type: "resize", rows: terminal.rows, cols: terminal.cols }),
         );
@@ -255,7 +313,7 @@ export function TerminalView({
         if (!active) return;
         setTerminals(items);
         const candidate = [...items].reverse().find((item) => item.status === "running");
-        if (candidate) connect(candidate.id);
+        if (candidate) connect(candidate.id, false);
       })
       .catch(() => active && setError(text.loadingError));
     return () => {
@@ -271,7 +329,7 @@ export function TerminalView({
     try {
       const created = await createTerminal(sessionToken, terminal.rows, terminal.cols);
       setTerminals((current) => [...current, created]);
-      connect(created.id);
+      connect(created.id, false);
     } catch {
       setError(text.operationError);
     } finally {
@@ -341,7 +399,7 @@ export function TerminalView({
               <button
                 type="button"
                 key={terminal.id}
-                onClick={() => connect(terminal.id)}
+                onClick={() => connect(terminal.id, false)}
                 className={`w-full rounded-xl border p-3 text-left transition ${
                   selectedId === terminal.id
                     ? "border-cyan-300 bg-cyan-50"
@@ -376,11 +434,22 @@ export function TerminalView({
               />
               {text[socketState]}
             </span>
+            {selectedId && socketState === "connected" && (
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  inputGranted
+                    ? "bg-emerald-400/15 text-emerald-200"
+                    : "bg-amber-400/15 text-amber-200"
+                }`}
+              >
+                {inputGranted ? text.writeAccess : text.readOnly}
+              </span>
+            )}
             <div className="flex gap-2">
               <button
                 type="button"
                 disabled={!selectedId || busy}
-                onClick={() => selectedId && connect(selectedId)}
+                onClick={() => selectedId && connect(selectedId, true)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-3 text-xs font-medium text-slate-200 hover:bg-white/15 disabled:opacity-40"
               >
                 {socketState === "connecting" ? (

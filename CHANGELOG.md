@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.3 · supervised reconnect
+
+- Add one-writer input leases: the first client receives input control, concurrent clients attach read-only, and reconnecting the same in-memory client safely replaces its earlier connection.
+- Replace whole-buffer replay with monotonic byte cursors so a reconnect receives only output not yet observed by that page.
+- Report retained-output truncation and live broadcast gaps explicitly; reconnect resumes from the last client cursor within a bounded 64 KiB buffer.
+- Extend the end-to-end PTY test to cover cursor replay, read-only enforcement, lease release, cancellation and immediate browser-session revocation.
+- Add visible bilingual input-lease and replay-recovery states to the terminal UI.
+
 ### 0.1.0-alpha.2 · synthetic terminal lifecycle
 
 - Add an isolated, built-in synthetic PTY with bounded dimensions, input, retained output and concurrent-session capacity.

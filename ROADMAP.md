@@ -35,7 +35,7 @@ A later milestone cannot bypass an unresolved security prerequisite.
 - [ ] Verify the intended identity boundary on Windows, Linux and macOS.
 - [x] Demonstrate one-time browser pairing, exact Origin checks and rejection of invalid tokens on a loopback-only service.
 - [x] Demonstrate synthetic PTY lifetime independent of WebSocket/UI attachment, including output replay after reconnection.
-- [ ] Record unsupported environments and remaining risks.
+- [x] Record unsupported environments, verified evidence and remaining risks in the [M0 validation record](docs/M0验证记录.md).
 
 </details>
 
@@ -46,6 +46,7 @@ A later milestone cannot bypass an unresolved security prerequisite.
 - [ ] Implement scoped approval and revocation.
 - [x] Provide bilingual navigation and clear task states; full accessibility verification remains a release gate.
 - [ ] Verify reconnect, input leases, output backpressure and cancellation.
+  - Implemented in synthetic mode: cursor-based reconnect, single-writer leases, bounded replay with explicit gap/truncation signals, and cancellation; slow-consumer stress limits remain to be measured.
 - [ ] Keep ordinary terminals separate from credential-bearing operations.
 
 </details>

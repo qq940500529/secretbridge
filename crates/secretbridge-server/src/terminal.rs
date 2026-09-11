@@ -41,13 +41,25 @@ struct TerminalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    backlog: Arc<Mutex<VecDeque<u8>>>,
+    output: Arc<Mutex<OutputBuffer>>,
+    input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
+}
+
+struct InputLease {
+    client_id: Uuid,
+    connection_id: Uuid,
+}
+
+struct OutputBuffer {
+    oldest_cursor: u64,
+    next_cursor: u64,
+    bytes: VecDeque<u8>,
 }
 
 #[derive(Clone, Debug)]
 pub enum TerminalEvent {
-    Output(Arc<[u8]>),
+    Output { cursor: u64, data: Arc<[u8]> },
     Exited(u32),
     Terminated,
     Failed,
@@ -74,6 +86,8 @@ pub struct TerminalSummary {
 pub enum TerminalError {
     Capacity,
     Closed,
+    InputLeaseRequired,
+    InvalidInput,
     InvalidSize,
     NotFound,
     SpawnFailed,
@@ -128,7 +142,7 @@ impl TerminalManager {
         drop(pair.slave);
 
         let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
-        let backlog = Arc::new(Mutex::new(VecDeque::with_capacity(BACKLOG_LIMIT)));
+        let output = Arc::new(Mutex::new(OutputBuffer::new()));
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let session = Arc::new(TerminalSession {
             id,
@@ -137,7 +151,8 @@ impl TerminalManager {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
             killer: Mutex::new(killer),
-            backlog: Arc::clone(&backlog),
+            output: Arc::clone(&output),
+            input_lease: Mutex::new(None),
             events: events.clone(),
         });
 
@@ -152,8 +167,16 @@ impl TerminalManager {
                         Ok(0) => break,
                         Ok(count) => {
                             let chunk: Arc<[u8]> = Arc::from(&buffer[..count]);
-                            append_backlog(&backlog, &chunk);
-                            let _ = reader_events.send(TerminalEvent::Output(chunk));
+                            let mut output_guard = output
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let cursor = output_guard.append(&chunk);
+                            // Keep append and publication atomic with respect to attach snapshots.
+                            let _ = reader_events.send(TerminalEvent::Output {
+                                cursor,
+                                data: chunk,
+                            });
+                            drop(output_guard);
                         }
                         Err(_) => {
                             if reader_status.load(Ordering::Acquire) == STATUS_RUNNING {
@@ -201,12 +224,43 @@ impl TerminalManager {
         sessions
     }
 
-    pub fn get(&self, id: Uuid) -> Result<TerminalHandle, TerminalError> {
-        self.read_sessions()
+    pub fn attach(
+        &self,
+        id: Uuid,
+        client_id: Uuid,
+        request_input: bool,
+        cursor: Option<u64>,
+    ) -> Result<(TerminalConnection, TerminalSnapshot), TerminalError> {
+        let session = self
+            .read_sessions()
             .get(&id)
             .cloned()
-            .map(|session| TerminalHandle { session })
-            .ok_or(TerminalError::NotFound)
+            .ok_or(TerminalError::NotFound)?;
+        let connection_id = Uuid::new_v4();
+        let input_granted = session.acquire_input(client_id, connection_id, request_input);
+        let output = session
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let events = session.events.subscribe();
+        let replay = output.snapshot(cursor);
+        let snapshot = TerminalSnapshot {
+            summary: session.summary(),
+            replay_from: replay.replay_from,
+            next_cursor: replay.next_cursor,
+            replay_truncated: replay.truncated,
+            output: replay.output,
+            events,
+            input_granted,
+        };
+        drop(output);
+        Ok((
+            TerminalConnection {
+                session,
+                connection_id,
+            },
+            snapshot,
+        ))
     }
 
     pub fn remove(&self, id: Uuid) -> Result<(), TerminalError> {
@@ -232,35 +286,37 @@ impl TerminalManager {
     }
 }
 
-#[derive(Clone)]
-pub struct TerminalHandle {
-    session: Arc<TerminalSession>,
+pub struct TerminalSnapshot {
+    pub summary: TerminalSummary,
+    pub replay_from: u64,
+    pub next_cursor: u64,
+    pub replay_truncated: bool,
+    pub output: Vec<u8>,
+    pub events: broadcast::Receiver<TerminalEvent>,
+    pub input_granted: bool,
 }
 
-impl TerminalHandle {
-    #[must_use]
-    pub fn summary(&self) -> TerminalSummary {
-        self.session.summary()
-    }
+pub struct TerminalConnection {
+    session: Arc<TerminalSession>,
+    connection_id: Uuid,
+}
 
+impl TerminalConnection {
     #[must_use]
-    pub fn snapshot_and_subscribe(
-        &self,
-    ) -> (TerminalSummary, Vec<u8>, broadcast::Receiver<TerminalEvent>) {
-        let backlog = self
+    pub fn output_bounds(&self) -> (u64, u64) {
+        let output = self
             .session
-            .backlog
+            .output
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let events = self.session.events.subscribe();
-        let snapshot = backlog.iter().copied().collect();
-        (self.summary(), snapshot, events)
+        (output.oldest_cursor, output.next_cursor)
     }
 
     pub fn write(&self, input: &[u8]) -> Result<(), TerminalError> {
         if input.len() > 4096 {
-            return Err(TerminalError::Closed);
+            return Err(TerminalError::InvalidInput);
         }
+        self.ensure_input_lease()?;
         self.session.ensure_running()?;
         let mut writer = self
             .session
@@ -275,6 +331,7 @@ impl TerminalHandle {
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
         validate_size(rows, cols)?;
+        self.ensure_input_lease()?;
         self.session.ensure_running()?;
         self.session
             .master
@@ -290,7 +347,21 @@ impl TerminalHandle {
     }
 
     pub fn terminate(&self) -> Result<(), TerminalError> {
+        self.ensure_input_lease()?;
         self.session.terminate()
+    }
+
+    fn ensure_input_lease(&self) -> Result<(), TerminalError> {
+        self.session
+            .owns_input(self.connection_id)
+            .then_some(())
+            .ok_or(TerminalError::InputLeaseRequired)
+    }
+}
+
+impl Drop for TerminalConnection {
+    fn drop(&mut self) {
+        self.session.release_input(self.connection_id);
     }
 }
 
@@ -308,6 +379,54 @@ impl TerminalSession {
         (self.status.load(Ordering::Acquire) == STATUS_RUNNING)
             .then_some(())
             .ok_or(TerminalError::Closed)
+    }
+
+    fn acquire_input(&self, client_id: Uuid, connection_id: Uuid, requested: bool) -> bool {
+        if !requested {
+            return false;
+        }
+        let mut lease = self
+            .input_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match lease.as_ref() {
+            None => {
+                *lease = Some(InputLease {
+                    client_id,
+                    connection_id,
+                });
+                true
+            }
+            Some(existing) if existing.client_id == client_id => {
+                *lease = Some(InputLease {
+                    client_id,
+                    connection_id,
+                });
+                true
+            }
+            Some(_) => false,
+        }
+    }
+
+    fn owns_input(&self, connection_id: Uuid) -> bool {
+        self.input_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|lease| lease.connection_id == connection_id)
+    }
+
+    fn release_input(&self, connection_id: Uuid) {
+        let mut lease = self
+            .input_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if lease
+            .as_ref()
+            .is_some_and(|lease| lease.connection_id == connection_id)
+        {
+            *lease = None;
+        }
     }
 
     fn terminate(&self) -> Result<(), TerminalError> {
@@ -355,17 +474,66 @@ fn validate_size(rows: u16, cols: u16) -> Result<(), TerminalError> {
         .ok_or(TerminalError::InvalidSize)
 }
 
-fn append_backlog(backlog: &Mutex<VecDeque<u8>>, chunk: &[u8]) {
-    let mut backlog = backlog
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let overflow = backlog
-        .len()
-        .saturating_add(chunk.len())
-        .saturating_sub(BACKLOG_LIMIT);
-    let drain_count = overflow.min(backlog.len());
-    backlog.drain(..drain_count);
-    backlog.extend(chunk);
+struct OutputReplay {
+    replay_from: u64,
+    next_cursor: u64,
+    truncated: bool,
+    output: Vec<u8>,
+}
+
+impl OutputBuffer {
+    fn new() -> Self {
+        Self {
+            oldest_cursor: 0,
+            next_cursor: 0,
+            bytes: VecDeque::with_capacity(BACKLOG_LIMIT),
+        }
+    }
+
+    fn append(&mut self, chunk: &[u8]) -> u64 {
+        let cursor = self.next_cursor;
+        self.next_cursor = self
+            .next_cursor
+            .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        let overflow = self
+            .bytes
+            .len()
+            .saturating_add(chunk.len())
+            .saturating_sub(BACKLOG_LIMIT);
+        let drain_count = overflow.min(self.bytes.len());
+        self.bytes.drain(..drain_count);
+        self.oldest_cursor = self
+            .oldest_cursor
+            .saturating_add(u64::try_from(drain_count).unwrap_or(u64::MAX));
+        if chunk.len() > BACKLOG_LIMIT {
+            let retained = &chunk[chunk.len() - BACKLOG_LIMIT..];
+            self.bytes.clear();
+            self.bytes.extend(retained);
+            self.oldest_cursor = self.next_cursor.saturating_sub(BACKLOG_LIMIT as u64);
+        } else {
+            self.bytes.extend(chunk);
+        }
+        cursor
+    }
+
+    fn snapshot(&self, requested_cursor: Option<u64>) -> OutputReplay {
+        let (replay_from, truncated) = match requested_cursor {
+            Some(cursor) if (self.oldest_cursor..=self.next_cursor).contains(&cursor) => {
+                (cursor, false)
+            }
+            Some(_) => (self.oldest_cursor, true),
+            None => (self.oldest_cursor, self.oldest_cursor > 0),
+        };
+        let skip = usize::try_from(replay_from.saturating_sub(self.oldest_cursor))
+            .unwrap_or(self.bytes.len())
+            .min(self.bytes.len());
+        OutputReplay {
+            replay_from,
+            next_cursor: self.next_cursor,
+            truncated,
+            output: self.bytes.iter().skip(skip).copied().collect(),
+        }
+    }
 }
 
 fn terminal_status(value: u8) -> TerminalStatus {
@@ -387,9 +555,7 @@ fn now_unix_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex};
-
-    use super::{BACKLOG_LIMIT, TerminalError, append_backlog, validate_size};
+    use super::{BACKLOG_LIMIT, OutputBuffer, TerminalError, validate_size};
 
     #[test]
     fn terminal_size_has_safe_bounds() {
@@ -400,12 +566,25 @@ mod tests {
 
     #[test]
     fn backlog_retains_only_the_newest_bytes() {
-        let backlog = Mutex::new(VecDeque::new());
-        append_backlog(&backlog, &vec![1; BACKLOG_LIMIT]);
-        append_backlog(&backlog, &[2, 3]);
-        let backlog = backlog.into_inner().expect("backlog lock");
-        assert_eq!(backlog.len(), BACKLOG_LIMIT);
-        assert_eq!(backlog[BACKLOG_LIMIT - 2], 2);
-        assert_eq!(backlog[BACKLOG_LIMIT - 1], 3);
+        let mut output = OutputBuffer::new();
+        output.append(&vec![1; BACKLOG_LIMIT]);
+        output.append(&[2, 3]);
+        let replay = output.snapshot(Some(0));
+        assert_eq!(replay.output.len(), BACKLOG_LIMIT);
+        assert_eq!(replay.output[BACKLOG_LIMIT - 2], 2);
+        assert_eq!(replay.output[BACKLOG_LIMIT - 1], 3);
+        assert_eq!(replay.replay_from, 2);
+        assert_eq!(replay.next_cursor, (BACKLOG_LIMIT + 2) as u64);
+        assert!(replay.truncated);
+    }
+
+    #[test]
+    fn valid_cursor_replays_only_missing_output() {
+        let mut output = OutputBuffer::new();
+        output.append(b"first second");
+        let replay = output.snapshot(Some(6));
+        assert_eq!(replay.replay_from, 6);
+        assert_eq!(replay.output, b"second");
+        assert!(!replay.truncated);
     }
 }
