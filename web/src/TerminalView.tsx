@@ -33,6 +33,8 @@ interface ServerMessage {
   replay_from?: number;
   next_cursor?: number;
   replay_truncated?: boolean;
+  retained_bytes?: number;
+  retention_capacity?: number;
   input_granted?: boolean;
   oldest_cursor?: number;
 }
@@ -386,7 +388,10 @@ export function TerminalView({
       </div>
 
       {error && (
-        <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+        <p
+          role="alert"
+          className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+        >
           {error}
         </p>
       )}
@@ -424,6 +429,7 @@ export function TerminalView({
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-950 px-4 py-3">
             <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-300">
               <span
+                aria-hidden="true"
                 className={`size-2 rounded-full ${
                   socketState === "connected"
                     ? "bg-emerald-400"
@@ -469,7 +475,12 @@ export function TerminalView({
               </button>
             </div>
           </div>
-          <div ref={hostRef} className="h-[32rem] p-3" aria-label={text.title} />
+          <div
+            ref={hostRef}
+            role="region"
+            className="h-[32rem] p-3"
+            aria-label={text.title}
+          />
         </article>
       </div>
     </section>

@@ -45,6 +45,7 @@ use terminal::{
 const BEARER_PREFIX: &str = "Bearer ";
 const SESSION_TTL: Duration = Duration::from_mins(30);
 const WEBSOCKET_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
+const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 8 * 1024;
 
 #[derive(Clone)]
@@ -176,6 +177,8 @@ enum ServerTerminalMessage {
         replay_from: u64,
         next_cursor: u64,
         replay_truncated: bool,
+        retained_bytes: usize,
+        retention_capacity: usize,
         input_granted: bool,
     },
     Exited {
@@ -520,6 +523,8 @@ async fn prepare_terminal_socket(
             replay_from: snapshot.replay_from,
             next_cursor: snapshot.next_cursor,
             replay_truncated: snapshot.replay_truncated,
+            retained_bytes: snapshot.retained_bytes,
+            retention_capacity: snapshot.retention_capacity,
             input_granted: snapshot.input_granted,
         },
     )
@@ -529,8 +534,7 @@ async fn prepare_terminal_socket(
         return None;
     }
     if !snapshot.output.is_empty()
-        && socket
-            .send(Message::Binary(snapshot.output.into()))
+        && send_socket_message(socket, Message::Binary(snapshot.output.into()))
             .await
             .is_err()
     {
@@ -578,7 +582,7 @@ async fn authenticate_terminal_socket(
             },
         )
         .await;
-        let _ = socket.send(Message::Close(None)).await;
+        let _ = send_socket_message(socket, Message::Close(None)).await;
         return None;
     };
     let digest = token_digest(&token);
@@ -591,7 +595,7 @@ async fn authenticate_terminal_socket(
             },
         )
         .await;
-        let _ = socket.send(Message::Close(None)).await;
+        let _ = send_socket_message(socket, Message::Close(None)).await;
         return None;
     };
     Some(SocketAuthentication {
@@ -614,8 +618,7 @@ async fn handle_terminal_event(
             if cursor != *expected_cursor {
                 return send_output_gap(socket, terminal).await;
             }
-            let sent = socket
-                .send(Message::Binary(data.to_vec().into()))
+            let sent = send_socket_message(socket, Message::Binary(data.to_vec().into()))
                 .await
                 .is_ok();
             if sent {
@@ -727,9 +730,16 @@ async fn handle_client_message(
 async fn send_server_message(
     socket: &mut WebSocket,
     message: &ServerTerminalMessage,
-) -> Result<(), axum::Error> {
+) -> Result<(), ()> {
     let text = serde_json::to_string(message).expect("server terminal message is serializable");
-    socket.send(Message::Text(text.into())).await
+    send_socket_message(socket, Message::Text(text.into())).await
+}
+
+async fn send_socket_message(socket: &mut WebSocket, message: Message) -> Result<(), ()> {
+    match timeout(WEBSOCKET_SEND_TIMEOUT, socket.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => Err(()),
+    }
 }
 
 async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<u64, ApiError> {
@@ -824,6 +834,7 @@ mod tests {
             .to_bytes();
         let status: serde_json::Value = serde_json::from_slice(&bytes).expect("status JSON");
         assert_eq!(status["mode"], "synthetic_only");
+        assert_eq!(status["identity_boundary"], "unverified_same_user");
         assert_eq!(status["real_credentials_enabled"], false);
     }
 

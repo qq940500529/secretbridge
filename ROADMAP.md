@@ -45,8 +45,8 @@ A later milestone cannot bypass an unresolved security prerequisite.
 - [ ] Implement credential-reference and target configuration.
 - [ ] Implement scoped approval and revocation.
 - [x] Provide bilingual navigation and clear task states; full accessibility verification remains a release gate.
-- [ ] Verify reconnect, input leases, output backpressure and cancellation.
-  - Implemented in synthetic mode: cursor-based reconnect, single-writer leases, bounded replay with explicit gap/truncation signals, and cancellation; slow-consumer stress limits remain to be measured.
+- [x] Verify reconnect, input leases, bounded output backpressure and cancellation in synthetic mode.
+  - Evidence covers cursor recovery, single-writer leases, a non-reading client during a 2 MiB output flood, 64 KiB retained replay, five-second outbound send limits and cancellation of a waiting child. Credential-bearing adapters must repeat the applicable tests in later milestones.
 - [ ] Keep ordinary terminals separate from credential-bearing operations.
 
 </details>

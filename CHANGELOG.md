@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.4 · resilience boundary
+
+- Report the current OS identity posture as `unverified_same_user` through the status API and dashboard instead of implying verified process isolation.
+- Bound every server-to-browser WebSocket send to five seconds so a stalled reader cannot hold a terminal attachment indefinitely.
+- Add bounded `flood` and `wait` commands to the synthetic terminal for repeatable output-pressure and cancellation tests without exposing a system shell.
+- Extend the PTY integration test with a 2 MiB non-reading-client scenario, 64 KiB replay-bound assertions, cursor truncation evidence and cancellation of a sleeping child.
+- Improve narrow-viewport and 200% zoom behavior, add a skip link and accessible names, expose connection changes as status updates, and honor reduced-motion preferences.
+
 ### 0.1.0-alpha.3 · supervised reconnect
 
 - Add one-writer input leases: the first client receives input control, concurrent clients attach read-only, and reconnecting the same in-memory client safely replaces its earlier connection.
@@ -55,7 +63,7 @@ Changes affecting contributors, project scope and future users are recorded here
 - Add limited repository hygiene checks and three-OS CI for those checks.
 
 > [!NOTE]
-> The M0 prototype has only been run locally on Windows. Linux/macOS CI and native platform functions remain unverified until their checks complete.
+> Synthetic paths run in Windows, Linux and macOS CI. Native identity isolation, credential stores and business-system adapters remain unverified and disabled.
 
 ---
 

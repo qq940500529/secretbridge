@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use axum::{
     body::Body,
@@ -113,14 +116,48 @@ async fn websocket_can_detach_reattach_and_observe_revocation() {
         .await
         .expect("release input lease connection");
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let (mut next_writer, ready) = connect(&url, &origin, &token, second_client, None).await;
+    let (next_writer, ready) = connect(&url, &origin, &token, second_client, None).await;
     assert_eq!(ready["input_granted"], true);
+    let mut next_writer =
+        assert_output_flood_and_truncation(&url, &origin, &token, second_client, next_writer).await;
 
     assert_terminal_cancellation(control.clone(), address, &origin, &token).await;
     revoke_and_assert(control, &token, &origin, &mut next_writer).await;
 
     server.abort();
     let _ = server.await;
+}
+
+async fn assert_output_flood_and_truncation(
+    url: &str,
+    origin: &str,
+    token: &str,
+    client_id: uuid::Uuid,
+    mut writer: TestSocket,
+) -> TestSocket {
+    writer
+        .send(Message::Text(
+            serde_json::json!({"type": "input", "data": "flood 2097152\r\n"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("request synthetic output flood");
+    // Deliberately stop reading while the child emits more than the broadcast and
+    // replay capacities. A new attachment must remain responsive and explicit.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (mut recovered, ready) = connect(url, origin, token, client_id, Some(0)).await;
+    drop(writer);
+    assert_eq!(ready["input_granted"], true);
+    assert_eq!(ready["replay_truncated"], true);
+    assert_eq!(ready["retained_bytes"], 64 * 1024);
+    assert_eq!(ready["retention_capacity"], 64 * 1024);
+    let replay_from = ready["replay_from"].as_u64().expect("replay start");
+    let next_cursor = ready["next_cursor"].as_u64().expect("next cursor");
+    assert_eq!(next_cursor - replay_from, 64 * 1024);
+    let _ = read_until(&mut recovered, b"flood complete bytes=2097152").await;
+    recovered
 }
 
 async fn assert_terminal_cancellation(
@@ -145,7 +182,18 @@ async fn assert_terminal_cancellation(
     let url = format!("ws://{address}/api/v1/terminals/{id}/attach");
     let (mut socket, ready) = connect(&url, origin, token, uuid::Uuid::new_v4(), None).await;
     assert_eq!(ready["input_granted"], true);
+    let _ = read_until(&mut socket, b"SecretBridge synthetic terminal").await;
+    socket
+        .send(Message::Text(
+            serde_json::json!({"type": "input", "data": "wait 30000\r\n"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .expect("start synthetic wait");
+    let _ = read_until(&mut socket, b"wait begin milliseconds=30000").await;
 
+    let cancellation_started = Instant::now();
     let deleted = control
         .oneshot(authenticated_request(
             "DELETE",
@@ -158,6 +206,7 @@ async fn assert_terminal_cancellation(
         .expect("terminal cancellation response");
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
     assert!(wait_for_message_type(&mut socket, "terminated").await);
+    assert!(cancellation_started.elapsed() < Duration::from_secs(5));
 }
 
 type TestSocket =
@@ -242,7 +291,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let mut output = Vec::new();
-    for _ in 0..100 {
+    for _ in 0..1024 {
         let message = timeout(Duration::from_secs(5), socket.next())
             .await
             .expect("websocket output timeout")

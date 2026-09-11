@@ -14,12 +14,19 @@ pub enum RuntimeMode {
     SyntheticOnly,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityBoundary {
+    UnverifiedSameUser,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StatusResponse {
     pub product: &'static str,
     pub api_version: &'static str,
     pub release_stage: &'static str,
     pub mode: RuntimeMode,
+    pub identity_boundary: IdentityBoundary,
     pub paired: bool,
     pub real_credentials_enabled: bool,
 }
@@ -32,6 +39,7 @@ impl StatusResponse {
             api_version: API_VERSION,
             release_stage: "m0",
             mode: RuntimeMode::SyntheticOnly,
+            identity_boundary: IdentityBoundary::UnverifiedSameUser,
             paired,
             real_credentials_enabled: false,
         }
@@ -40,12 +48,16 @@ impl StatusResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeMode, StatusResponse};
+    use super::{IdentityBoundary, RuntimeMode, StatusResponse};
 
     #[test]
     fn m0_status_never_claims_real_credentials() {
         let status = StatusResponse::synthetic_only(true);
         assert_eq!(status.mode, RuntimeMode::SyntheticOnly);
+        assert_eq!(
+            status.identity_boundary,
+            IdentityBoundary::UnverifiedSameUser
+        );
         assert!(!status.real_credentials_enabled);
     }
 }
