@@ -51,6 +51,7 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         requestError: "运行请求失败，请检查审批是否仍有效。",
         consumed: "该审批已被使用；列表已经刷新。",
         conflict: "运行已发生变化，列表已经刷新。",
+        policyDenied: "模板或目标已变化，策略拒绝使用旧审批；请重新提交审批。",
         cancel: "取消运行",
         events: "安全事件",
         hideEvents: "收起事件",
@@ -58,7 +59,7 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         version: "版本",
         approvalVersion: "审批版本",
         states: { queued: "已排队", running: "运行中", succeeded: "已成功", cancelled: "已取消", failed: "已中断" } satisfies Record<RunState, string>,
-        results: { synthetic_ok: "合成检查正常", cancelled: "用户取消", service_restarted: "服务重启时中断", authorization_revoked: "授权已失效，运行安全停止" } as Record<string, string>,
+        results: { synthetic_ok: "合成检查正常", cancelled: "用户取消", service_restarted: "服务重启时中断", authorization_revoked: "授权或策略已失效，运行安全停止" } as Record<string, string>,
       }
     : {
         eyebrow: "M1 · Synthetic runs",
@@ -78,6 +79,7 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         requestError: "The run request failed. Check that the approval is still active.",
         consumed: "That approval was already used. The list has been refreshed.",
         conflict: "The run changed. The list has been refreshed.",
+        policyDenied: "The template or target changed. Policy denied the stale approval; submit a new approval.",
         cancel: "Cancel run",
         events: "Safe events",
         hideEvents: "Hide events",
@@ -85,7 +87,7 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         version: "Version",
         approvalVersion: "Approval version",
         states: { queued: "Queued", running: "Running", succeeded: "Succeeded", cancelled: "Cancelled", failed: "Interrupted" } satisfies Record<RunState, string>,
-        results: { synthetic_ok: "Synthetic check OK", cancelled: "Cancelled by user", service_restarted: "Interrupted by service restart", authorization_revoked: "Stopped because authorization is no longer active" } as Record<string, string>,
+        results: { synthetic_ok: "Synthetic check OK", cancelled: "Cancelled by user", service_restarted: "Interrupted by service restart", authorization_revoked: "Stopped because authorization or policy is no longer active" } as Record<string, string>,
       };
   const [runs, setRuns] = useState<SyntheticRun[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -147,6 +149,9 @@ export function OperationsView({ language, sessionToken }: { language: Language;
       if (caught instanceof SecretBridgeApiError && ["approval_consumed", "idempotency_conflict"].includes(caught.code)) {
         await refresh().catch(() => undefined);
         setError(text.consumed);
+      } else if (caught instanceof SecretBridgeApiError && caught.code === "policy_denied") {
+        await refresh().catch(() => undefined);
+        setError(text.policyDenied);
       } else { setError(text.requestError); }
     } finally { setBusy(false); }
   }

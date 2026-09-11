@@ -134,6 +134,7 @@ export interface Approval {
   action_template_id: string | null;
   action_template_version: number | null;
   target_id: string;
+  target_version: number;
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   reason: string | null;
@@ -165,6 +166,31 @@ export interface ActionTemplateListResponse
   execution_enabled: false;
 }
 
+export type PolicyDecision = "eligible_for_approval" | "denied";
+export type PolicyReasonCode = "fixed_synthetic_scope" | "template_disabled";
+export type PolicyRequirement =
+  | "explicit_approval"
+  | "no_parameters"
+  | "single_use"
+  | "synthetic_only"
+  | "transition_revalidation";
+
+export interface PolicyEvaluation {
+  policy_version: "synthetic-policy-v1";
+  decision: PolicyDecision;
+  reason_codes: PolicyReasonCode[];
+  requirements: PolicyRequirement[];
+  action_template_id: string;
+  action_template_version: number;
+  target_id: string;
+  target_version: number;
+  target_environment: TargetEnvironment;
+  operation: ApprovalOperation;
+  result_scope: ApprovalResultScope;
+  timeout_seconds: number;
+  execution_mode: "synthetic_simulation";
+}
+
 export type RunState =
   | "queued"
   | "running"
@@ -177,6 +203,7 @@ export interface SyntheticRun {
   approval_id: string;
   action_template_id: string;
   target_id: string;
+  target_version: number;
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   state: RunState;
@@ -410,6 +437,19 @@ export async function listActionTemplates(
 ): Promise<ActionTemplateListResponse> {
   return readJson<ActionTemplateListResponse>(
     await fetch("/api/v1/action-templates", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function evaluateActionTemplate(
+  sessionToken: string,
+  id: string,
+): Promise<PolicyEvaluation> {
+  return readJson<PolicyEvaluation>(
+    await fetch(`/api/v1/action-templates/${id}/policy-evaluation`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

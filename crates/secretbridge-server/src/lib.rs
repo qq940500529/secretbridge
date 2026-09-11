@@ -43,8 +43,8 @@ use uuid::Uuid;
 use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
-    CreateTarget, CredentialReference, DecideApproval, SafeEvent, SyntheticRun, Target,
-    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent, SyntheticRun,
+    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
@@ -333,6 +333,7 @@ enum ApiError {
     IdempotencyConflict,
     InvalidOrigin,
     NotFound,
+    PolicyDenied,
     ResourceInUse,
     TerminalCapacity,
     Unauthorized,
@@ -397,6 +398,11 @@ impl IntoResponse for ApiError {
                 "not_found",
                 "The requested resource was not found.",
             ),
+            Self::PolicyDenied => (
+                StatusCode::CONFLICT,
+                "policy_denied",
+                "The current synthetic policy does not allow this transition.",
+            ),
             Self::ResourceInUse => (
                 StatusCode::CONFLICT,
                 "resource_in_use",
@@ -453,6 +459,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/action-templates/{id}",
             delete(delete_action_template).put(update_action_template),
+        )
+        .route(
+            "/api/v1/action-templates/{id}/policy-evaluation",
+            get(evaluate_action_template),
         )
         .route(
             "/api/v1/approvals",
@@ -708,6 +718,20 @@ async fn list_action_templates(
     }))
 }
 
+async fn evaluate_action_template(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PolicyEvaluation>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let evaluation = task::spawn_blocking(move || catalog.evaluate_action_template(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(evaluation))
+}
+
 async fn create_action_template(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -907,7 +931,7 @@ async fn drive_synthetic_run(catalog: Catalog, run_id: Uuid) {
     let started = task::spawn_blocking(move || start_catalog.start_synthetic_run(run_id)).await;
     match started {
         Ok(Ok(_)) => {}
-        Ok(Err(CatalogError::ApprovalNotUsable)) => {
+        Ok(Err(CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied)) => {
             invalidate_synthetic_run(catalog, run_id).await;
             return;
         }
@@ -917,7 +941,12 @@ async fn drive_synthetic_run(catalog: Catalog, run_id: Uuid) {
     let complete_catalog = catalog.clone();
     let completed =
         task::spawn_blocking(move || complete_catalog.complete_synthetic_run(run_id)).await;
-    if matches!(completed, Ok(Err(CatalogError::ApprovalNotUsable))) {
+    if matches!(
+        completed,
+        Ok(Err(
+            CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied
+        ))
+    ) {
         invalidate_synthetic_run(catalog, run_id).await;
     }
 }
@@ -1388,6 +1417,7 @@ fn map_catalog_error(error: CatalogError) -> ApiError {
         CatalogError::InvalidApprovalTransition => ApiError::InvalidApprovalTransition,
         CatalogError::InvalidRunTransition => ApiError::InvalidRunTransition,
         CatalogError::IdempotencyConflict => ApiError::IdempotencyConflict,
+        CatalogError::PolicyDenied => ApiError::PolicyDenied,
         CatalogError::ResourceInUse => ApiError::ResourceInUse,
         CatalogError::Storage => ApiError::Internal,
         CatalogError::VersionConflict => ApiError::VersionConflict,
@@ -1832,6 +1862,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn policy_evaluation_api_is_explainable_and_session_protected() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let template_id = create_test_action_template(&app, &token).await;
+        let path = format!("/api/v1/action-templates/{template_id}/policy-evaluation");
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&path)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let evaluation = app
+            .oneshot(authenticated_request("GET", &path, &token, None))
+            .await
+            .expect("router response");
+        assert_eq!(evaluation.status(), StatusCode::OK);
+        let evaluation = response_json(evaluation).await;
+        assert_eq!(evaluation["policy_version"], "synthetic-policy-v1");
+        assert_eq!(evaluation["decision"], "eligible_for_approval");
+        assert_eq!(evaluation["execution_mode"], "synthetic_simulation");
+        assert_eq!(evaluation["action_template_version"], 1);
+        assert_eq!(evaluation["target_version"], 1);
+        assert_eq!(evaluation["requirements"].as_array().map(Vec::len), Some(5));
+    }
+
+    #[tokio::test]
     async fn approval_api_is_scoped_versioned_and_never_executes() {
         let (app, bootstrap) = test_app();
         let token = pair_test_session(&app, &bootstrap).await;
@@ -1873,6 +1936,7 @@ mod tests {
         assert_eq!(approval["version"], 1);
         assert_eq!(approval["action_template_id"], template_id);
         assert_eq!(approval["action_template_version"], 1);
+        assert_eq!(approval["target_version"], 1);
         let approval_id = approval["id"].as_str().expect("approval id");
 
         let approved = app

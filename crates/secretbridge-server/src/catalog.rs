@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
+const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
 const MAX_TARGETS: i64 = 128;
 const MAX_APPROVALS: i64 = 512;
@@ -315,6 +316,47 @@ pub struct UpdateActionTemplate {
     expected_version: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyDecision {
+    EligibleForApproval,
+    Denied,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyReasonCode {
+    FixedSyntheticScope,
+    TemplateDisabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyRequirement {
+    ExplicitApproval,
+    NoParameters,
+    SingleUse,
+    SyntheticOnly,
+    TransitionRevalidation,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PolicyEvaluation {
+    pub policy_version: &'static str,
+    pub decision: PolicyDecision,
+    pub reason_codes: Vec<PolicyReasonCode>,
+    pub requirements: Vec<PolicyRequirement>,
+    pub action_template_id: Uuid,
+    pub action_template_version: u64,
+    pub target_id: Uuid,
+    pub target_version: u64,
+    pub target_environment: TargetEnvironment,
+    pub operation: ApprovalOperation,
+    pub result_scope: ApprovalResultScope,
+    pub timeout_seconds: u64,
+    pub execution_mode: &'static str,
+}
+
 impl ApprovalState {
     const fn as_storage(self) -> &'static str {
         match self {
@@ -344,6 +386,7 @@ pub struct Approval {
     pub action_template_id: Option<Uuid>,
     pub action_template_version: Option<u64>,
     pub target_id: Uuid,
+    pub target_version: u64,
     pub operation: ApprovalOperation,
     pub result_scope: ApprovalResultScope,
     pub reason: Option<String>,
@@ -409,6 +452,7 @@ pub struct SyntheticRun {
     pub approval_id: Uuid,
     pub action_template_id: Uuid,
     pub target_id: Uuid,
+    pub target_version: u64,
     pub operation: ApprovalOperation,
     pub result_scope: ApprovalResultScope,
     pub state: RunState,
@@ -491,6 +535,7 @@ pub enum CatalogError {
     InvalidRunTransition,
     IdempotencyConflict,
     NotFound,
+    PolicyDenied,
     ResourceInUse,
     Storage,
     VersionConflict,
@@ -569,6 +614,7 @@ impl Catalog {
                     action_template_id TEXT REFERENCES action_templates(id) ON DELETE RESTRICT,
                     action_template_version INTEGER,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
@@ -587,6 +633,7 @@ impl Catalog {
                     idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
                     action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
@@ -610,7 +657,7 @@ impl Catalog {
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 PRAGMA user_version = 4;
+                 PRAGMA user_version = 5;
                  COMMIT;",
             )?;
         }
@@ -636,6 +683,7 @@ impl Catalog {
                     action_template_id TEXT REFERENCES action_templates(id) ON DELETE RESTRICT,
                     action_template_version INTEGER,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
@@ -654,6 +702,7 @@ impl Catalog {
                     idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
                     action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
@@ -677,7 +726,7 @@ impl Catalog {
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 PRAGMA user_version = 4;
+                 PRAGMA user_version = 5;
                  COMMIT;",
             )?;
         }
@@ -706,6 +755,9 @@ impl Catalog {
         }
         if version == 2 || version == 3 {
             create_run_schema(&connection)?;
+        }
+        if (2..=4).contains(&version) {
+            migrate_policy_snapshot_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -921,6 +973,14 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)
     }
 
+    pub fn evaluate_action_template(&self, id: Uuid) -> Result<PolicyEvaluation, CatalogError> {
+        let connection = self.lock();
+        let template = action_template_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        let target =
+            target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
+        Ok(policy_evaluation(&template, &target))
+    }
+
     pub fn create_action_template(
         &self,
         request: &CreateActionTemplate,
@@ -1028,7 +1088,7 @@ impl Catalog {
         expire_approvals(&connection, now_unix_ms_i64()?)?;
         let mut statement = connection
             .prepare(
-                "SELECT id, action_template_id, action_template_version, target_id,
+                "SELECT id, action_template_id, action_template_version, target_id, target_version,
                         operation, result_scope, reason, state, decision_note,
                         created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version
                    FROM approvals
@@ -1054,6 +1114,8 @@ impl Catalog {
         let template = action_template_by_id(&connection, request.action_template_id)?
             .filter(|template| template.enabled)
             .ok_or(CatalogError::NotFound)?;
+        let target =
+            target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
         let id = Uuid::new_v4();
         let now = now_unix_ms_i64()?;
         let ttl_ms = i64::try_from(request.expires_in_seconds)
@@ -1064,15 +1126,16 @@ impl Catalog {
         connection
             .execute(
                 "INSERT INTO approvals
-                    (id, action_template_id, action_template_version, target_id,
+                    (id, action_template_id, action_template_version, target_id, target_version,
                      operation, result_scope, reason, state, decision_note,
                      created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', NULL, ?8, ?8, ?9, 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, ?9, ?9, ?10, 1)",
                 params![
                     id.to_string(),
                     template.id.to_string(),
                     i64::try_from(template.version).map_err(|_| CatalogError::Storage)?,
                     template.target_id.to_string(),
+                    i64::try_from(target.version).map_err(|_| CatalogError::Storage)?,
                     template.operation.as_storage(),
                     template.result_scope.as_storage(),
                     reason,
@@ -1130,6 +1193,9 @@ impl Catalog {
         if current.state != expected_state {
             return Err(CatalogError::InvalidApprovalTransition);
         }
+        if next_state == ApprovalState::Approved {
+            ensure_approval_policy(&connection, &current)?;
+        }
         let changed = connection
             .execute(
                 "UPDATE approvals
@@ -1156,7 +1222,7 @@ impl Catalog {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT id, approval_id, action_template_id, target_id, operation,
+                "SELECT id, approval_id, action_template_id, target_id, target_version, operation,
                         result_scope, state, result_status, created_at_unix_ms,
                         updated_at_unix_ms, started_at_unix_ms,
                         finished_at_unix_ms, version
@@ -1201,6 +1267,7 @@ impl Catalog {
         let approval = approval_by_id(&connection, request.approval_id)?
             .filter(|approval| approval.state == ApprovalState::Approved)
             .ok_or(CatalogError::ApprovalNotUsable)?;
+        ensure_approval_policy(&connection, &approval)?;
         let template_id = approval
             .action_template_id
             .ok_or(CatalogError::ApprovalNotUsable)?;
@@ -1212,16 +1279,17 @@ impl Catalog {
         transaction
             .execute(
                 "INSERT INTO synthetic_runs
-                    (id, approval_id, idempotency_key_hash, action_template_id, target_id,
+                    (id, approval_id, idempotency_key_hash, action_template_id, target_id, target_version,
                      operation, result_scope, state, result_status, created_at_unix_ms,
                      updated_at_unix_ms, started_at_unix_ms, finished_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', NULL, ?8, ?8, NULL, NULL, 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'queued', NULL, ?9, ?9, NULL, NULL, 1)",
                 params![
                     id.to_string(),
                     approval.id.to_string(),
                     idempotency_key_hash,
                     template_id.to_string(),
                     approval.target_id.to_string(),
+                    i64::try_from(approval.target_version).map_err(|_| CatalogError::Storage)?,
                     approval.operation.as_storage(),
                     approval.result_scope.as_storage(),
                     now
@@ -1320,11 +1388,19 @@ impl Catalog {
         if !allowed_states.contains(&current.state) {
             return Err(CatalogError::InvalidRunTransition);
         }
-        if matches!(next_state, RunState::Running | RunState::Succeeded)
-            && !approval_by_id(&connection, current.approval_id)?
-                .is_some_and(|approval| approval.state == ApprovalState::Approved)
-        {
-            return Err(CatalogError::ApprovalNotUsable);
+        if matches!(next_state, RunState::Running | RunState::Succeeded) {
+            let approval = approval_by_id(&connection, current.approval_id)?
+                .filter(|approval| approval.state == ApprovalState::Approved)
+                .ok_or(CatalogError::ApprovalNotUsable)?;
+            ensure_approval_policy(&connection, &approval)?;
+            if approval.action_template_id != Some(current.action_template_id)
+                || approval.target_id != current.target_id
+                || approval.target_version != current.target_version
+                || approval.operation != current.operation
+                || approval.result_scope != current.result_scope
+            {
+                return Err(CatalogError::PolicyDenied);
+            }
         }
         let started_at = (next_state == RunState::Running).then_some(now);
         let finished_at = matches!(
@@ -1499,6 +1575,94 @@ fn create_run_schema(connection: &Connection) -> rusqlite::Result<()> {
     )
 }
 
+fn migrate_policy_snapshot_schema(connection: &Connection) -> rusqlite::Result<()> {
+    let mut migration = String::from("BEGIN IMMEDIATE;");
+    if !column_exists(connection, "approvals", "target_version")? {
+        migration.push_str("ALTER TABLE approvals ADD COLUMN target_version INTEGER;");
+    }
+    if !column_exists(connection, "synthetic_runs", "target_version")? {
+        migration.push_str("ALTER TABLE synthetic_runs ADD COLUMN target_version INTEGER;");
+    }
+    migration.push_str(
+        "UPDATE approvals
+            SET target_version = (SELECT version FROM targets WHERE targets.id = approvals.target_id)
+          WHERE target_version IS NULL;
+         UPDATE synthetic_runs
+            SET target_version = (SELECT target_version FROM approvals WHERE approvals.id = synthetic_runs.approval_id)
+          WHERE target_version IS NULL;
+         PRAGMA user_version = 5;
+         COMMIT;",
+    );
+    connection.execute_batch(&migration)
+}
+
+fn column_exists(
+    connection: &Connection,
+    table: &'static str,
+    column: &str,
+) -> rusqlite::Result<bool> {
+    let query =
+        format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)");
+    connection.query_row(&query, [column], |row| row.get(0))
+}
+
+fn policy_evaluation(template: &ActionTemplate, target: &Target) -> PolicyEvaluation {
+    PolicyEvaluation {
+        policy_version: SYNTHETIC_POLICY_VERSION,
+        decision: if template.enabled {
+            PolicyDecision::EligibleForApproval
+        } else {
+            PolicyDecision::Denied
+        },
+        reason_codes: vec![if template.enabled {
+            PolicyReasonCode::FixedSyntheticScope
+        } else {
+            PolicyReasonCode::TemplateDisabled
+        }],
+        requirements: vec![
+            PolicyRequirement::ExplicitApproval,
+            PolicyRequirement::NoParameters,
+            PolicyRequirement::SingleUse,
+            PolicyRequirement::SyntheticOnly,
+            PolicyRequirement::TransitionRevalidation,
+        ],
+        action_template_id: template.id,
+        action_template_version: template.version,
+        target_id: target.id,
+        target_version: target.version,
+        target_environment: target.environment,
+        operation: template.operation,
+        result_scope: template.result_scope,
+        timeout_seconds: template.timeout_seconds,
+        execution_mode: "synthetic_simulation",
+    }
+}
+
+fn ensure_approval_policy(
+    connection: &Connection,
+    approval: &Approval,
+) -> Result<(), CatalogError> {
+    let template_id = approval
+        .action_template_id
+        .ok_or(CatalogError::PolicyDenied)?;
+    let template_version = approval
+        .action_template_version
+        .ok_or(CatalogError::PolicyDenied)?;
+    let template =
+        action_template_by_id(connection, template_id)?.ok_or(CatalogError::PolicyDenied)?;
+    let target = target_by_id(connection, approval.target_id)?.ok_or(CatalogError::PolicyDenied)?;
+    if !template.enabled
+        || template.version != template_version
+        || template.target_id != approval.target_id
+        || template.operation != approval.operation
+        || template.result_scope != approval.result_scope
+        || target.version != approval.target_version
+    {
+        return Err(CatalogError::PolicyDenied);
+    }
+    Ok(())
+}
+
 fn credential_by_id(
     connection: &Connection,
     id: Uuid,
@@ -1595,7 +1759,7 @@ fn action_template_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionT
 fn approval_by_id(connection: &Connection, id: Uuid) -> Result<Option<Approval>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, action_template_id, action_template_version, target_id,
+            "SELECT id, action_template_id, action_template_version, target_id, target_version,
                     operation, result_scope, reason, state, decision_note,
                     created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version
                FROM approvals WHERE id = ?1",
@@ -1618,15 +1782,16 @@ fn approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
             .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
             .transpose()?,
         target_id: uuid_from_row(row, 3)?,
-        operation: ApprovalOperation::from_storage(&row.get::<_, String>(4)?)?,
-        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(5)?)?,
-        reason: row.get(6)?,
-        state: ApprovalState::from_storage(&row.get::<_, String>(7)?)?,
-        decision_note: row.get(8)?,
-        created_at_unix_ms: u64_from_row(row, 9)?,
-        updated_at_unix_ms: u64_from_row(row, 10)?,
-        expires_at_unix_ms: u64_from_row(row, 11)?,
-        version: u64_from_row(row, 12)?,
+        target_version: u64_from_row(row, 4)?,
+        operation: ApprovalOperation::from_storage(&row.get::<_, String>(5)?)?,
+        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(6)?)?,
+        reason: row.get(7)?,
+        state: ApprovalState::from_storage(&row.get::<_, String>(8)?)?,
+        decision_note: row.get(9)?,
+        created_at_unix_ms: u64_from_row(row, 10)?,
+        updated_at_unix_ms: u64_from_row(row, 11)?,
+        expires_at_unix_ms: u64_from_row(row, 12)?,
+        version: u64_from_row(row, 13)?,
     })
 }
 
@@ -1636,7 +1801,7 @@ fn synthetic_run_by_id(
 ) -> Result<Option<SyntheticRun>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, approval_id, action_template_id, target_id, operation,
+            "SELECT id, approval_id, action_template_id, target_id, target_version, operation,
                     result_scope, state, result_status, created_at_unix_ms,
                     updated_at_unix_ms, started_at_unix_ms,
                     finished_at_unix_ms, version
@@ -1654,7 +1819,7 @@ fn synthetic_run_by_idempotency_key_hash(
 ) -> Result<Option<SyntheticRun>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, approval_id, action_template_id, target_id, operation,
+            "SELECT id, approval_id, action_template_id, target_id, target_version, operation,
                     result_scope, state, result_status, created_at_unix_ms,
                     updated_at_unix_ms, started_at_unix_ms,
                     finished_at_unix_ms, version
@@ -1672,7 +1837,7 @@ fn synthetic_run_by_approval(
 ) -> Result<Option<SyntheticRun>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, approval_id, action_template_id, target_id, operation,
+            "SELECT id, approval_id, action_template_id, target_id, target_version, operation,
                     result_scope, state, result_status, created_at_unix_ms,
                     updated_at_unix_ms, started_at_unix_ms,
                     finished_at_unix_ms, version
@@ -1690,15 +1855,16 @@ fn synthetic_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Synthetic
         approval_id: uuid_from_row(row, 1)?,
         action_template_id: uuid_from_row(row, 2)?,
         target_id: uuid_from_row(row, 3)?,
-        operation: ApprovalOperation::from_storage(&row.get::<_, String>(4)?)?,
-        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(5)?)?,
-        state: RunState::from_storage(&row.get::<_, String>(6)?)?,
-        result_status: row.get(7)?,
-        created_at_unix_ms: u64_from_row(row, 8)?,
-        updated_at_unix_ms: u64_from_row(row, 9)?,
-        started_at_unix_ms: optional_u64_from_row(row, 10)?,
-        finished_at_unix_ms: optional_u64_from_row(row, 11)?,
-        version: u64_from_row(row, 12)?,
+        target_version: u64_from_row(row, 4)?,
+        operation: ApprovalOperation::from_storage(&row.get::<_, String>(5)?)?,
+        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(6)?)?,
+        state: RunState::from_storage(&row.get::<_, String>(7)?)?,
+        result_status: row.get(8)?,
+        created_at_unix_ms: u64_from_row(row, 9)?,
+        updated_at_unix_ms: u64_from_row(row, 10)?,
+        started_at_unix_ms: optional_u64_from_row(row, 11)?,
+        finished_at_unix_ms: optional_u64_from_row(row, 12)?,
+        version: u64_from_row(row, 13)?,
     })
 }
 
@@ -1868,7 +2034,8 @@ mod tests {
     use super::{
         ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
         CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
-        CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, RunState, SafeEventKind,
+        CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, PolicyDecision,
+        PolicyReasonCode, PolicyRequirement, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
         TargetEnvironment, TargetKind, UpdateActionTemplate, UpdateCredentialReference,
         UpdateTarget,
     };
@@ -2094,7 +2261,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     #[test]
@@ -2148,12 +2315,13 @@ mod tests {
         assert_eq!(records[0].id, approval_id);
         assert_eq!(records[0].action_template_id, None);
         assert_eq!(records[0].action_template_version, None);
+        assert_eq!(records[0].target_version, 1);
         assert_eq!(
             catalog
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            4
+            5
         );
     }
 
@@ -2187,7 +2355,45 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            4
+            5
+        );
+    }
+
+    #[test]
+    fn version_four_database_backfills_policy_target_snapshots() {
+        let database = TemporaryDatabase::new();
+        let (run_id, target_version) = {
+            let catalog = Catalog::open(&database.path).expect("create current catalog");
+            let approval = create_approved_workflow(&catalog);
+            let run = catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: "v4-policy-snapshot".to_owned(),
+                })
+                .expect("create run")
+                .run;
+            (run.id, approval.target_version)
+        };
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "ALTER TABLE synthetic_runs DROP COLUMN target_version;
+                     ALTER TABLE approvals DROP COLUMN target_version;
+                     PRAGMA user_version = 4;",
+                )
+                .expect("restore version four layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v4 catalog");
+        let run = catalog.get_synthetic_run(run_id).expect("migrated run");
+        assert_eq!(run.target_version, target_version);
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            5
         );
     }
 
@@ -2398,6 +2604,101 @@ mod tests {
             catalog.delete_action_template(template.id),
             Err(CatalogError::ResourceInUse)
         );
+    }
+
+    #[test]
+    fn policy_evaluation_is_explainable_and_fails_closed_on_version_drift() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        let target = create_target(&catalog, credential.id);
+        let template = create_action_template(&catalog, target.id);
+        let evaluation = catalog
+            .evaluate_action_template(template.id)
+            .expect("evaluate template");
+        assert_eq!(evaluation.policy_version, SYNTHETIC_POLICY_VERSION);
+        assert_eq!(evaluation.decision, PolicyDecision::EligibleForApproval);
+        assert_eq!(
+            evaluation.reason_codes,
+            vec![PolicyReasonCode::FixedSyntheticScope]
+        );
+        assert_eq!(evaluation.target_version, target.version);
+        assert!(
+            evaluation
+                .requirements
+                .contains(&PolicyRequirement::TransitionRevalidation)
+        );
+
+        let pending = create_approval(&catalog, template.id);
+        catalog
+            .update_target(
+                target.id,
+                &UpdateTarget {
+                    name: target.name.clone(),
+                    kind: target.kind,
+                    environment: target.environment,
+                    description: Some("Changed after approval request".to_owned()),
+                    credential_reference_id: target.credential_reference_id,
+                    expected_version: target.version,
+                },
+            )
+            .expect("update target");
+        assert!(matches!(
+            catalog.approve_approval(
+                pending.id,
+                &DecideApproval {
+                    expected_version: pending.version,
+                    note: None,
+                },
+            ),
+            Err(CatalogError::PolicyDenied)
+        ));
+
+        let second_target = create_target(&catalog, credential.id);
+        let second_template = create_action_template(&catalog, second_target.id);
+        let approval = create_approval(&catalog, second_template.id);
+        let approved = catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: Some("Policy reviewed".to_owned()),
+                },
+            )
+            .expect("approve request");
+        let run = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approved.id,
+                idempotency_key: "policy-drift-run".to_owned(),
+            })
+            .expect("create run")
+            .run;
+        catalog
+            .update_action_template(
+                second_template.id,
+                &UpdateActionTemplate {
+                    target_id: second_target.id,
+                    name: second_template.name.clone(),
+                    operation: second_template.operation,
+                    result_scope: second_template.result_scope,
+                    description: second_template.description.clone(),
+                    timeout_seconds: second_template.timeout_seconds,
+                    enabled: false,
+                    expected_version: second_template.version,
+                },
+            )
+            .expect("disable template");
+        let denied = catalog
+            .evaluate_action_template(second_template.id)
+            .expect("evaluate disabled template");
+        assert_eq!(denied.decision, PolicyDecision::Denied);
+        assert_eq!(
+            denied.reason_codes,
+            vec![PolicyReasonCode::TemplateDisabled]
+        );
+        assert!(matches!(
+            catalog.start_synthetic_run(run.id),
+            Err(CatalogError::PolicyDenied)
+        ));
     }
 
     fn create_credential(catalog: &Catalog) -> super::CredentialReference {

@@ -9,6 +9,7 @@ import {
   createActionTemplate,
   createSyntheticRun,
   decideApproval,
+  evaluateActionTemplate,
   listCredentialReferences,
   updateCredentialReference,
 } from "./api";
@@ -157,6 +158,42 @@ describe("configuration API client", () => {
     });
     expect(body).not.toHaveProperty("command");
     expect(body).not.toHaveProperty("endpoint");
+  });
+
+  it("reads an explainable synthetic policy evaluation without mutation", async () => {
+    const evaluation = {
+      policy_version: "synthetic-policy-v1",
+      decision: "eligible_for_approval",
+      reason_codes: ["fixed_synthetic_scope"],
+      requirements: ["explicit_approval", "synthetic_only"],
+      action_template_id: "template-id",
+      action_template_version: 2,
+      target_id: "target-id",
+      target_version: 3,
+      target_environment: "test",
+      operation: "inspect_metadata",
+      result_scope: "metadata_summary",
+      timeout_seconds: 15,
+      execution_mode: "synthetic_simulation",
+    };
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(evaluation), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      evaluateActionTemplate("synthetic-session-token", "template-id"),
+    ).resolves.toEqual(evaluation);
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/action-templates/template-id/policy-evaluation",
+      expect.objectContaining({ cache: "no-store", credentials: "omit" }),
+    );
+    const [, request] = fetch.mock.calls[0] as [string, RequestInit];
+    expect(request.method).toBeUndefined();
+    expect(request.body).toBeUndefined();
   });
 
   it("sends optimistic versions with approval decisions", async () => {

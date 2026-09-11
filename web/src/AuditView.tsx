@@ -33,7 +33,7 @@ export function AuditView({ language, sessionToken }: { language: Language; sess
         target: "目标",
         template: "模板",
         sequence: "序号",
-        kinds: { authorization_revoked: "授权失效后安全停止", requested: "请求已接受", started: "合成运行已开始", succeeded: "合成运行已完成", cancelled: "运行已取消", interrupted: "服务重启导致中断" } satisfies Record<SafeEventKind, string>,
+        kinds: { authorization_revoked: "授权或策略失效后安全停止", requested: "请求已接受", started: "合成运行已开始", succeeded: "合成运行已完成", cancelled: "运行已取消", interrupted: "服务重启导致中断" } satisfies Record<SafeEventKind, string>,
       }
     : {
         eyebrow: "M1 · Safe events",
@@ -48,7 +48,7 @@ export function AuditView({ language, sessionToken }: { language: Language; sess
         target: "Target",
         template: "Template",
         sequence: "Sequence",
-        kinds: { authorization_revoked: "Stopped after authorization expired or was revoked", requested: "Request accepted", started: "Synthetic run started", succeeded: "Synthetic run completed", cancelled: "Run cancelled", interrupted: "Interrupted by service restart" } satisfies Record<SafeEventKind, string>,
+        kinds: { authorization_revoked: "Stopped after authorization or policy became inactive", requested: "Request accepted", started: "Synthetic run started", succeeded: "Synthetic run completed", cancelled: "Run cancelled", interrupted: "Interrupted by service restart" } satisfies Record<SafeEventKind, string>,
       };
   const [events, setEvents] = useState<SafeEvent[]>([]);
   const [runs, setRuns] = useState<SyntheticRun[]>([]);
