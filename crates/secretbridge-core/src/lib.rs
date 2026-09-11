@@ -20,6 +20,12 @@ pub enum IdentityBoundary {
     UnverifiedSameUser,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationStorage {
+    MemoryOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct StatusResponse {
     pub product: &'static str,
@@ -27,6 +33,7 @@ pub struct StatusResponse {
     pub release_stage: &'static str,
     pub mode: RuntimeMode,
     pub identity_boundary: IdentityBoundary,
+    pub configuration_storage: ConfigurationStorage,
     pub paired: bool,
     pub real_credentials_enabled: bool,
 }
@@ -37,9 +44,10 @@ impl StatusResponse {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
-            release_stage: "m0",
+            release_stage: "m1_development",
             mode: RuntimeMode::SyntheticOnly,
             identity_boundary: IdentityBoundary::UnverifiedSameUser,
+            configuration_storage: ConfigurationStorage::MemoryOnly,
             paired,
             real_credentials_enabled: false,
         }
@@ -48,7 +56,7 @@ impl StatusResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{IdentityBoundary, RuntimeMode, StatusResponse};
+    use super::{ConfigurationStorage, IdentityBoundary, RuntimeMode, StatusResponse};
 
     #[test]
     fn m0_status_never_claims_real_credentials() {
@@ -57,6 +65,10 @@ mod tests {
         assert_eq!(
             status.identity_boundary,
             IdentityBoundary::UnverifiedSameUser
+        );
+        assert_eq!(
+            status.configuration_storage,
+            ConfigurationStorage::MemoryOnly
         );
         assert!(!status.real_credentials_enabled);
     }

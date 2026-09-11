@@ -7,6 +7,7 @@ export interface ServiceStatus {
   release_stage: string;
   mode: "synthetic_only";
   identity_boundary: "unverified_same_user";
+  configuration_storage: "memory_only";
   paired: boolean;
   real_credentials_enabled: boolean;
 }
@@ -30,6 +31,49 @@ export interface TerminalSummary {
   created_at_unix_ms: number;
   status: TerminalStatus;
   mode: "synthetic_only";
+}
+
+export type CredentialKind = "password" | "api_token" | "ssh_key";
+
+export interface CredentialReference {
+  id: string;
+  name: string;
+  kind: CredentialKind;
+  purpose: string | null;
+  secret_state: "not_configured";
+  created_at_unix_ms: number;
+}
+
+export interface CreateCredentialReference {
+  name: string;
+  kind: CredentialKind;
+  purpose?: string;
+}
+
+export type TargetKind = "database" | "http_service" | "ssh_host";
+export type TargetEnvironment = "development" | "test" | "production";
+
+export interface Target {
+  id: string;
+  name: string;
+  kind: TargetKind;
+  environment: TargetEnvironment;
+  description: string | null;
+  credential_reference_id: string | null;
+  created_at_unix_ms: number;
+}
+
+export interface CreateTarget {
+  name: string;
+  kind: TargetKind;
+  environment: TargetEnvironment;
+  description?: string;
+  credential_reference_id?: string;
+}
+
+interface CatalogListResponse<T> {
+  items: T[];
+  storage: "memory_only";
 }
 
 interface TerminalListResponse {
@@ -83,6 +127,96 @@ function sessionHeaders(sessionToken: string): HeadersInit {
   return { Authorization: `Bearer ${sessionToken}` };
 }
 
+function sessionJsonHeaders(sessionToken: string): HeadersInit {
+  return {
+    ...sessionHeaders(sessionToken),
+    "Content-Type": "application/json",
+  };
+}
+
+export async function listCredentialReferences(
+  sessionToken: string,
+): Promise<CredentialReference[]> {
+  const response = await readJson<CatalogListResponse<CredentialReference>>(
+    await fetch("/api/v1/credential-references", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+  return response.items;
+}
+
+export async function createCredentialReference(
+  sessionToken: string,
+  request: CreateCredentialReference,
+): Promise<CredentialReference> {
+  return readJson<CredentialReference>(
+    await fetch("/api/v1/credential-references", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function deleteCredentialReference(
+  sessionToken: string,
+  id: string,
+): Promise<void> {
+  return deleteCatalogItem(sessionToken, `/api/v1/credential-references/${id}`);
+}
+
+export async function listTargets(sessionToken: string): Promise<Target[]> {
+  const response = await readJson<CatalogListResponse<Target>>(
+    await fetch("/api/v1/targets", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+  return response.items;
+}
+
+export async function createTarget(
+  sessionToken: string,
+  request: CreateTarget,
+): Promise<Target> {
+  return readJson<Target>(
+    await fetch("/api/v1/targets", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function deleteTarget(
+  sessionToken: string,
+  id: string,
+): Promise<void> {
+  return deleteCatalogItem(sessionToken, `/api/v1/targets/${id}`);
+}
+
+async function deleteCatalogItem(
+  sessionToken: string,
+  path: string,
+): Promise<void> {
+  const response = await fetch(path, {
+    method: "DELETE",
+    cache: "no-store",
+    credentials: "omit",
+    headers: sessionHeaders(sessionToken),
+  });
+  if (!response.ok) {
+    throw new Error(`SecretBridge API returned ${response.status}`);
+  }
+}
+
 export async function listTerminals(
   sessionToken: string,
 ): Promise<TerminalSummary[]> {
@@ -107,8 +241,7 @@ export async function createTerminal(
       cache: "no-store",
       credentials: "omit",
       headers: {
-        ...sessionHeaders(sessionToken),
-        "Content-Type": "application/json",
+        ...sessionJsonHeaders(sessionToken),
       },
       body: JSON.stringify({ rows, cols }),
     }),

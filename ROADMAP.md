@@ -2,7 +2,7 @@
 
 [Home](README.md) / Roadmap
 
-Milestones describe acceptance gates rather than promised dates. The current phase is **M0 security foundation**: a synthetic-only Web console and loopback Rust service are implemented, while credential handling and command execution remain disabled.
+Milestones describe acceptance gates rather than promised dates. **M1 workflow development is now in progress alongside the remaining M0 platform validation.** Development may overlap, but unresolved M0 security gates still block real credentials, business-system connections and release claims.
 
 ## Progress at a glance
 
@@ -10,7 +10,7 @@ Milestones describe acceptance gates rather than promised dates. The current pha
 | :--- | :--- | :--- |
 | Foundation | Architecture, threat model, platform/UI targets and repository governance | Available |
 | M0 · Feasibility | Synthetic credential and isolation experiments | In progress |
-| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | Planned |
+| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | In progress |
 | M2 · Controlled operations | Scoped adapter and MCP integration | Planned |
 | M3 · Security pilot | Approved low-privilege testing and independent review | Planned |
 | M4 · Distribution | Validated packages, source correspondence and recovery | Planned |
@@ -24,7 +24,7 @@ flowchart LR
     E --> F["M4<br/>Distribute"]
 ```
 
-A later milestone cannot bypass an unresolved security prerequisite.
+A later milestone may be developed in synthetic mode, but cannot enable security-dependent behavior or pass release gates while its prerequisite remains unresolved.
 
 ## Acceptance criteria
 
@@ -43,6 +43,7 @@ A later milestone cannot bypass an unresolved security prerequisite.
 <summary>M1 — Local Web workflow</summary>
 
 - [ ] Implement credential-reference and target configuration.
+  - `0.1.0-alpha.5` adds authenticated, memory-only metadata creation, listing, relationship validation and deletion. Persistence, editing and native secret storage remain pending; the API accepts no secret value or network endpoint.
 - [ ] Implement scoped approval and revocation.
 - [x] Provide bilingual navigation and clear task states; full accessibility verification remains a release gate.
 - [x] Verify reconnect, input leases, bounded output backpressure and cancellation in synthetic mode.

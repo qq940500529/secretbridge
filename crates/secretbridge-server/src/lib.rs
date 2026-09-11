@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod catalog;
 mod terminal;
 
 use std::{
@@ -37,6 +38,9 @@ use tokio::{
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
+use catalog::{
+    Catalog, CatalogError, CreateCredentialReference, CreateTarget, CredentialReference, Target,
+};
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
     TerminalSummary,
@@ -54,6 +58,7 @@ pub struct AppState {
     session_tokens: Arc<RwLock<HashMap<[u8; 32], Instant>>>,
     session_revocations: broadcast::Sender<[u8; 32]>,
     trusted_origins: Arc<HashSet<String>>,
+    catalog: Catalog,
     terminals: TerminalManager,
 }
 
@@ -78,6 +83,7 @@ impl AppState {
             session_tokens: Arc::new(RwLock::new(HashMap::new())),
             session_revocations,
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
+            catalog: Catalog::default(),
             terminals: TerminalManager::new(program),
         };
         (state, bootstrap_token)
@@ -148,6 +154,18 @@ struct TerminalListResponse {
     terminals: Vec<TerminalSummary>,
 }
 
+#[derive(Serialize)]
+struct CredentialReferenceListResponse {
+    items: Vec<CredentialReference>,
+    storage: &'static str,
+}
+
+#[derive(Serialize)]
+struct TargetListResponse {
+    items: Vec<Target>,
+    storage: &'static str,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -203,10 +221,12 @@ struct ErrorResponse {
 
 enum ApiError {
     BadRequest,
-    Conflict,
+    CatalogCapacity,
     Internal,
     InvalidOrigin,
     NotFound,
+    ResourceInUse,
+    TerminalCapacity,
     Unauthorized,
 }
 
@@ -218,7 +238,12 @@ impl IntoResponse for ApiError {
                 "bad_request",
                 "The request is invalid.",
             ),
-            Self::Conflict => (
+            Self::CatalogCapacity => (
+                StatusCode::CONFLICT,
+                "catalog_capacity_reached",
+                "The configuration catalog limit has been reached.",
+            ),
+            Self::TerminalCapacity => (
                 StatusCode::CONFLICT,
                 "capacity_reached",
                 "The synthetic terminal limit has been reached.",
@@ -237,6 +262,11 @@ impl IntoResponse for ApiError {
                 StatusCode::NOT_FOUND,
                 "not_found",
                 "The requested resource was not found.",
+            ),
+            Self::ResourceInUse => (
+                StatusCode::CONFLICT,
+                "resource_in_use",
+                "The resource is still referenced and cannot be deleted.",
             ),
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -264,6 +294,16 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session", get(session).delete(revoke_session))
+        .route(
+            "/api/v1/credential-references",
+            get(list_credential_references).post(create_credential_reference),
+        )
+        .route(
+            "/api/v1/credential-references/{id}",
+            delete(delete_credential_reference),
+        )
+        .route("/api/v1/targets", get(list_targets).post(create_target))
+        .route("/api/v1/targets/{id}", delete(delete_target))
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
@@ -357,6 +397,81 @@ async fn revoke_session(
         .await
         .then_some(StatusCode::NO_CONTENT)
         .ok_or(ApiError::Unauthorized)
+}
+
+async fn list_credential_references(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CredentialReferenceListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    Ok(Json(CredentialReferenceListResponse {
+        items: state.catalog.list_credential_references(),
+        storage: "memory_only",
+    }))
+}
+
+async fn create_credential_reference(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateCredentialReference>,
+) -> Result<(StatusCode, Json<CredentialReference>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let item = state
+        .catalog
+        .create_credential_reference(&request)
+        .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(item)))
+}
+
+async fn delete_credential_reference(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    state
+        .catalog
+        .delete_credential_reference(id)
+        .map_err(map_catalog_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_targets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<TargetListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    Ok(Json(TargetListResponse {
+        items: state.catalog.list_targets(),
+        storage: "memory_only",
+    }))
+}
+
+async fn create_target(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTarget>,
+) -> Result<(StatusCode, Json<Target>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let target = state
+        .catalog
+        .create_target(&request)
+        .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(target)))
+}
+
+async fn delete_target(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    state.catalog.delete_target(id).map_err(map_catalog_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_terminals(
@@ -752,13 +867,22 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<u64, A
 
 fn map_terminal_error(error: TerminalError) -> ApiError {
     match error {
-        TerminalError::Capacity => ApiError::Conflict,
+        TerminalError::Capacity => ApiError::TerminalCapacity,
         TerminalError::InvalidInput
         | TerminalError::InvalidSize
         | TerminalError::InputLeaseRequired
         | TerminalError::Closed => ApiError::BadRequest,
         TerminalError::NotFound => ApiError::NotFound,
         TerminalError::SpawnFailed => ApiError::Internal,
+    }
+}
+
+fn map_catalog_error(error: CatalogError) -> ApiError {
+    match error {
+        CatalogError::Capacity => ApiError::CatalogCapacity,
+        CatalogError::CredentialReferenceNotFound | CatalogError::NotFound => ApiError::NotFound,
+        CatalogError::Invalid => ApiError::BadRequest,
+        CatalogError::ResourceInUse => ApiError::ResourceInUse,
     }
 }
 
@@ -835,6 +959,7 @@ mod tests {
         let status: serde_json::Value = serde_json::from_slice(&bytes).expect("status JSON");
         assert_eq!(status["mode"], "synthetic_only");
         assert_eq!(status["identity_boundary"], "unverified_same_user");
+        assert_eq!(status["configuration_storage"], "memory_only");
         assert_eq!(status["real_credentials_enabled"], false);
     }
 
@@ -978,6 +1103,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_relationships_are_session_protected_and_deletable_in_order() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/credential-references",
+                &token,
+                ORIGIN,
+                r#"{"name":"Synthetic database operator","kind":"password","purpose":"Test-only metadata"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let credential = response_json(created).await;
+        assert_eq!(credential["secret_state"], "not_configured");
+        assert!(credential.get("secret").is_none());
+        let credential_id = credential["id"].as_str().expect("credential id");
+
+        let target_body = serde_json::json!({
+            "name": "Synthetic reporting database",
+            "kind": "database",
+            "environment": "test",
+            "description": "No network address is accepted in this alpha",
+            "credential_reference_id": credential_id,
+        })
+        .to_string();
+        let target = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/targets",
+                &token,
+                ORIGIN,
+                &target_body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(target.status(), StatusCode::CREATED);
+        let target = response_json(target).await;
+        let target_id = target["id"].as_str().expect("target id");
+
+        let in_use = app
+            .clone()
+            .oneshot(authenticated_request(
+                "DELETE",
+                &format!("/api/v1/credential-references/{credential_id}"),
+                &token,
+                Some(ORIGIN),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(in_use.status(), StatusCode::CONFLICT);
+
+        let targets = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/targets",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(targets.status(), StatusCode::OK);
+        let body = targets
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let targets: serde_json::Value = serde_json::from_slice(&body).expect("targets JSON");
+        assert_eq!(targets["storage"], "memory_only");
+        assert_eq!(targets["items"].as_array().map(Vec::len), Some(1));
+
+        let deleted_target = app
+            .clone()
+            .oneshot(authenticated_request(
+                "DELETE",
+                &format!("/api/v1/targets/{target_id}"),
+                &token,
+                Some(ORIGIN),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(deleted_target.status(), StatusCode::NO_CONTENT);
+
+        let deleted_credential = app
+            .oneshot(authenticated_request(
+                "DELETE",
+                &format!("/api/v1/credential-references/{credential_id}"),
+                &token,
+                Some(ORIGIN),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(deleted_credential.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn credential_reference_api_rejects_secret_fields() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let response = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/credential-references",
+                &token,
+                ORIGIN,
+                r#"{"name":"Rejected input","kind":"api_token","secret":"synthetic-placeholder"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let list = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/credential-references",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let body = list
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let list: serde_json::Value = serde_json::from_slice(&body).expect("list JSON");
+        assert_eq!(list["storage"], "memory_only");
+        assert_eq!(list["items"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[tokio::test]
     async fn security_headers_cover_web_fallbacks() {
         let app = apply_security_headers(axum::Router::new().fallback(|| async { "web" }));
         let response = app
@@ -1007,6 +1271,52 @@ mod tests {
             builder = builder.header("origin", origin);
         }
         builder.body(Body::empty()).expect("valid request")
+    }
+
+    async fn pair_test_session(app: &axum::Router, bootstrap: &str) -> String {
+        let paired = app
+            .clone()
+            .oneshot(pair_request(bootstrap, Some(ORIGIN)))
+            .await
+            .expect("router response");
+        let body = paired
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        let pair: serde_json::Value = serde_json::from_slice(&body).expect("pair JSON");
+        pair["session_token"]
+            .as_str()
+            .expect("session token")
+            .to_owned()
+    }
+
+    async fn response_json(response: axum::response::Response) -> serde_json::Value {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response body")
+            .to_bytes();
+        serde_json::from_slice(&body).expect("response JSON")
+    }
+
+    fn authenticated_json_request(
+        method: &str,
+        uri: &str,
+        token: &str,
+        origin: &str,
+        body: &str,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .header("origin", origin)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_owned()))
+            .expect("valid request")
     }
 
     fn authenticated_request(

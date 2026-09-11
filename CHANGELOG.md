@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.5 · configuration catalog
+
+- Start M1 development while retaining unresolved M0 platform isolation as a hard gate for real credentials and releases.
+- Add authenticated, memory-only credential-reference and logical-target APIs with strict field validation, bounded capacity and relationship-safe deletion.
+- Reject secret-bearing fields at the credential-reference API boundary; keep every reference in `not_configured` state.
+- Add bilingual Web forms and lists for credential references and logical targets, with persistent warnings that restart clears data and no business address is accepted.
+- Report `m1_development` and `memory_only` configuration storage through the service status API.
+
 ### 0.1.0-alpha.4 · resilience boundary
 
 - Report the current OS identity posture as `unverified_same_user` through the status API and dashboard instead of implying verified process isolation.
