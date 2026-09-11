@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 axum.workspace = true
+keyring.workspace = true
 portable-pty.workspace = true
 rusqlite.workspace = true
 secretbridge-core = { path = "../secretbridge-core" }
@@ -24,6 +25,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 webbrowser.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

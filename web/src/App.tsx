@@ -129,9 +129,9 @@ const copy: Record<Language, Copy> = {
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
     stage: "M1 工作流开发",
-    syntheticTitle: "当前仅允许合成凭据",
+    syntheticTitle: "真实凭据配置已进入受控预览",
     syntheticBody:
-      "这一版本用于验证本地配对、安全边界和合成PTY；真实凭据、业务系统访问和系统命令执行均未启用。",
+      "密码与 API 令牌可写入操作系统凭据库，但不会通过页面或 API 回读。业务连接仍必须由后续审批驱动的固定适配器执行，普通终端不会获得凭据。",
     boundaryTitle: "本机安全边界",
     boundaryBody: "服务只监听回环地址，不接受局域网或公网连接。",
     sessionTitle: "一次性浏览器配对",
@@ -149,7 +149,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "下一阶段继续开发策略评估、运行状态订阅与审计保留控制；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
+      "下一阶段将 PostgreSQL 低权限只读适配器接入现有策略、审批、单次消费、取消与安全事件链。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -185,9 +185,9 @@ const copy: Record<Language, Copy> = {
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
     stage: "M1 workflow development",
-    syntheticTitle: "Synthetic credentials only",
+    syntheticTitle: "Real credential configuration is in controlled preview",
     syntheticBody:
-      "This release validates local pairing, trust boundaries, and a synthetic PTY. Real credentials, business targets, and system commands are disabled.",
+      "Passwords and API tokens can be written to the OS credential store but are never returned through the page or API. Business connections still require a fixed approval-driven adapter, and ordinary terminals never receive credentials.",
     boundaryTitle: "Local trust boundary",
     boundaryBody:
       "The service binds only to loopback and rejects LAN or public access.",
@@ -208,7 +208,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Next, add policy evaluation, run-status subscriptions and audit-retention controls. Real credential integration remains gated on M0 cross-platform identity validation.",
+      "Next, connect a least-privilege read-only PostgreSQL adapter to the existing policy, approval, single-use, cancellation, and safe-event chain.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -614,7 +614,7 @@ function Dashboard({
             <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
             <StatusDatum
               label={text.runtimeMode}
-              value={status?.mode === "synthetic_only" ? "Synthetic only" : "—"}
+              value={status?.mode === "credential_configuration" ? "Credential configuration" : status?.mode === "synthetic_only" ? "Synthetic only" : "—"}
             />
             <StatusDatum
               label={text.identityBoundary}

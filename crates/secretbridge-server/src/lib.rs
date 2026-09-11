@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod secret_store;
 mod terminal;
 
 use std::{
@@ -18,7 +19,7 @@ use std::{
 use axum::{
     Json, Router,
     extract::{
-        Path as AxumPath, State,
+        DefaultBodyLimit, Path as AxumPath, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{
@@ -26,14 +27,14 @@ use axum::{
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY},
     },
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use secretbridge_core::{ConfigurationStorage, StatusResponse};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::{
-    sync::{RwLock, broadcast},
+    sync::{Mutex, RwLock, broadcast},
     task,
     time::{sleep, timeout},
 };
@@ -43,9 +44,11 @@ use uuid::Uuid;
 use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
-    CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent, SyntheticRun,
-    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    CreateTarget, CredentialKind, CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent,
+    SecretState, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
+    UpdateTarget,
 };
+use secret_store::SecretStore;
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
     TerminalSummary,
@@ -65,6 +68,8 @@ pub struct AppState {
     trusted_origins: Arc<HashSet<String>>,
     catalog: Catalog,
     configuration_storage: ConfigurationStorage,
+    credential_mutations: Arc<Mutex<()>>,
+    secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
 }
 
@@ -98,6 +103,7 @@ impl AppState {
             program,
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
+            Arc::new(secret_store::MemorySecretStore::new()),
         )
     }
 
@@ -122,6 +128,7 @@ impl AppState {
             program,
             catalog,
             ConfigurationStorage::Sqlite,
+            persistent_secret_store(),
         ))
     }
 
@@ -136,6 +143,7 @@ impl AppState {
             program,
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
+            Arc::new(secret_store::MemorySecretStore::new()),
         )
     }
 
@@ -144,6 +152,7 @@ impl AppState {
         program: PathBuf,
         catalog: Catalog,
         configuration_storage: ConfigurationStorage,
+        secret_store: Arc<dyn SecretStore>,
     ) -> (Self, String) {
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
@@ -154,6 +163,8 @@ impl AppState {
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
             catalog,
             configuration_storage,
+            credential_mutations: Arc::new(Mutex::new(())),
+            secret_store,
             terminals: TerminalManager::new(program),
         };
         (state, bootstrap_token)
@@ -198,6 +209,17 @@ impl AppState {
     }
 }
 
+fn persistent_secret_store() -> Arc<dyn SecretStore> {
+    #[cfg(test)]
+    {
+        Arc::new(secret_store::MemorySecretStore::new())
+    }
+    #[cfg(not(test))]
+    {
+        Arc::new(secret_store::NativeSecretStore)
+    }
+}
+
 #[derive(Serialize)]
 struct PairResponse {
     session_token: String,
@@ -228,6 +250,19 @@ struct TerminalListResponse {
 struct CredentialReferenceListResponse {
     items: Vec<CredentialReference>,
     storage: ConfigurationStorage,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetCredentialSecretRequest {
+    secret: String,
+    expected_version: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClearCredentialSecretRequest {
+    expected_version: u64,
 }
 
 #[derive(Serialize)]
@@ -335,6 +370,7 @@ enum ApiError {
     NotFound,
     PolicyDenied,
     ResourceInUse,
+    SecretStoreUnavailable,
     TerminalCapacity,
     Unauthorized,
     VersionConflict,
@@ -408,6 +444,11 @@ impl IntoResponse for ApiError {
                 "resource_in_use",
                 "The resource is still referenced and cannot be deleted.",
             ),
+            Self::SecretStoreUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "secret_store_unavailable",
+                "The operating-system credential store is unavailable.",
+            ),
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
@@ -447,6 +488,10 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/credential-references/{id}",
             delete(delete_credential_reference).put(update_credential_reference),
         )
+        .route(
+            "/api/v1/credential-references/{id}/secret",
+            put(set_credential_secret).delete(clear_credential_secret),
+        )
         .route("/api/v1/targets", get(list_targets).post(create_target))
         .route(
             "/api/v1/targets/{id}",
@@ -485,6 +530,7 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/terminals/{id}", delete(delete_terminal))
         .route("/api/v1/terminals/{id}/attach", get(attach_terminal))
+        .layer(DefaultBodyLimit::max(16 * 1024))
         .with_state(state)
 }
 
@@ -518,7 +564,7 @@ fn apply_security_headers(router: Router) -> Router {
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.active_session_count().await > 0;
-    Json(StatusResponse::synthetic_only(
+    Json(StatusResponse::credential_configuration(
         paired,
         state.configuration_storage,
     ))
@@ -559,7 +605,7 @@ async fn session(
         .ok_or(ApiError::Unauthorized)?;
     Ok(Json(SessionResponse {
         authenticated: true,
-        mode: "synthetic_only",
+        mode: "credential_configuration",
         expires_in_seconds,
     }))
 }
@@ -616,6 +662,7 @@ async fn update_credential_reference(
 ) -> Result<Json<CredentialReference>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _mutation = state.credential_mutations.lock().await;
     let catalog = state.catalog.clone();
     let item = task::spawn_blocking(move || catalog.update_credential_reference(id, &request))
         .await
@@ -631,12 +678,158 @@ async fn delete_credential_reference(
 ) -> Result<StatusCode, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    task::spawn_blocking(move || catalog.delete_credential_reference(id))
+    let _mutation = state.credential_mutations.lock().await;
+    let lookup_catalog = state.catalog.clone();
+    let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
+    let prior_secret = if current.secret_state == SecretState::Available {
+        let store = state.secret_store.clone();
+        Some(
+            task::spawn_blocking(move || store.get(id))
+                .await
+                .map_err(|_| ApiError::Internal)?
+                .map_err(|_| ApiError::SecretStoreUnavailable)?,
+        )
+    } else {
+        None
+    };
+    if prior_secret.is_some() {
+        let store = state.secret_store.clone();
+        task::spawn_blocking(move || store.delete(id))
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .map_err(|_| ApiError::SecretStoreUnavailable)?;
+    }
+    let catalog = state.catalog.clone();
+    let deleted = task::spawn_blocking(move || catalog.delete_credential_reference(id))
+        .await
+        .map_err(|_| ApiError::Internal)?;
+    if let Err(error) = deleted {
+        if let Some(prior_secret) = prior_secret {
+            let store = state.secret_store.clone();
+            let _ = task::spawn_blocking(move || store.set(id, &prior_secret)).await;
+        }
+        return Err(map_catalog_error(error));
+    }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_credential_secret(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<SetCredentialSecretRequest>,
+) -> Result<Json<CredentialReference>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    if request.secret.is_empty() || request.secret.len() > 8 * 1024 || request.secret.contains('\0')
+    {
+        return Err(ApiError::BadRequest);
+    }
+    let _mutation = state.credential_mutations.lock().await;
+    let lookup_catalog = state.catalog.clone();
+    let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    if current.version != request.expected_version {
+        return Err(ApiError::VersionConflict);
+    }
+    if current.kind == CredentialKind::SshKey {
+        return Err(ApiError::BadRequest);
+    }
+    let prior_secret = if current.secret_state == SecretState::Available {
+        let store = state.secret_store.clone();
+        Some(
+            task::spawn_blocking(move || store.get(id))
+                .await
+                .map_err(|_| ApiError::Internal)?
+                .map_err(|_| ApiError::SecretStoreUnavailable)?,
+        )
+    } else {
+        None
+    };
+    let secret = zeroize::Zeroizing::new(request.secret);
+    let store = state.secret_store.clone();
+    task::spawn_blocking(move || store.set(id, &secret))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+
+    let catalog = state.catalog.clone();
+    let updated = task::spawn_blocking(move || {
+        catalog.set_credential_secret_state(id, request.expected_version, true)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    match updated {
+        Ok(item) => Ok(Json(item)),
+        Err(error) => {
+            rollback_secret(&state, id, prior_secret).await;
+            Err(map_catalog_error(error))
+        }
+    }
+}
+
+async fn clear_credential_secret(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<ClearCredentialSecretRequest>,
+) -> Result<Json<CredentialReference>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let _mutation = state.credential_mutations.lock().await;
+    let lookup_catalog = state.catalog.clone();
+    let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    if current.version != request.expected_version {
+        return Err(ApiError::VersionConflict);
+    }
+    if current.secret_state == SecretState::NotConfigured {
+        return Err(ApiError::BadRequest);
+    }
+    let store = state.secret_store.clone();
+    let prior_secret = task::spawn_blocking(move || store.get(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+    let store = state.secret_store.clone();
+    task::spawn_blocking(move || store.delete(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+
+    let catalog = state.catalog.clone();
+    let updated = task::spawn_blocking(move || {
+        catalog.set_credential_secret_state(id, request.expected_version, false)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    match updated {
+        Ok(item) => Ok(Json(item)),
+        Err(error) => {
+            rollback_secret(&state, id, Some(prior_secret)).await;
+            Err(map_catalog_error(error))
+        }
+    }
+}
+
+async fn rollback_secret(
+    state: &AppState,
+    id: Uuid,
+    prior_secret: Option<zeroize::Zeroizing<String>>,
+) {
+    let store = state.secret_store.clone();
+    let _ = task::spawn_blocking(move || match prior_secret {
+        Some(secret) => store.set(id, &secret),
+        None => store.delete(id),
+    })
+    .await;
 }
 
 async fn list_targets(
@@ -1494,7 +1687,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_is_explicitly_synthetic_only() {
+    async fn status_exposes_credential_configuration_without_claiming_execution() {
         let (app, _) = test_app();
         let response = app
             .oneshot(
@@ -1513,10 +1706,91 @@ mod tests {
             .expect("response body")
             .to_bytes();
         let status: serde_json::Value = serde_json::from_slice(&bytes).expect("status JSON");
-        assert_eq!(status["mode"], "synthetic_only");
+        assert_eq!(status["mode"], "credential_configuration");
         assert_eq!(status["identity_boundary"], "unverified_same_user");
         assert_eq!(status["configuration_storage"], "memory_only");
-        assert_eq!(status["real_credentials_enabled"], false);
+        assert_eq!(status["real_credentials_enabled"], true);
+    }
+
+    #[tokio::test]
+    async fn credential_secret_is_write_only_versioned_and_clearable() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/credential-references",
+                &token,
+                ORIGIN,
+                r#"{"name":"Database reader","kind":"password"}"#,
+            ))
+            .await
+            .expect("router response");
+        let credential = response_json(created).await;
+        let id = credential["id"].as_str().expect("credential id");
+
+        let stored = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "PUT",
+                &format!("/api/v1/credential-references/{id}/secret"),
+                &token,
+                ORIGIN,
+                r#"{"secret":"test-only-password","expected_version":1}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(stored.status(), StatusCode::OK);
+        let stored_body = response_json(stored).await;
+        assert_eq!(stored_body["secret_state"], "available");
+        assert_eq!(stored_body["version"], 2);
+        assert!(!stored_body.to_string().contains("test-only-password"));
+
+        let read_attempt = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/credential-references/{id}/secret"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(read_attempt.status(), StatusCode::METHOD_NOT_ALLOWED);
+
+        let cleared = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "DELETE",
+                &format!("/api/v1/credential-references/{id}/secret"),
+                &token,
+                ORIGIN,
+                r#"{"expected_version":2}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(cleared.status(), StatusCode::OK);
+        let cleared_body = response_json(cleared).await;
+        assert_eq!(cleared_body["secret_state"], "not_configured");
+        assert_eq!(cleared_body["version"], 3);
+
+        let oversized_body = serde_json::json!({
+            "secret": "x".repeat(17 * 1024),
+            "expected_version": 3
+        })
+        .to_string();
+        let oversized = app
+            .oneshot(authenticated_json_request(
+                "PUT",
+                &format!("/api/v1/credential-references/{id}/secret"),
+                &token,
+                ORIGIN,
+                &oversized_body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

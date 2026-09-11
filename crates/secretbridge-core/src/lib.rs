@@ -12,6 +12,7 @@ pub const PRODUCT_NAME: &str = "SecretBridge";
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeMode {
     SyntheticOnly,
+    CredentialConfiguration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -53,6 +54,23 @@ impl StatusResponse {
             real_credentials_enabled: false,
         }
     }
+
+    #[must_use]
+    pub const fn credential_configuration(
+        paired: bool,
+        configuration_storage: ConfigurationStorage,
+    ) -> Self {
+        Self {
+            product: PRODUCT_NAME,
+            api_version: API_VERSION,
+            release_stage: "m1_development",
+            mode: RuntimeMode::CredentialConfiguration,
+            identity_boundary: IdentityBoundary::UnverifiedSameUser,
+            configuration_storage,
+            paired,
+            real_credentials_enabled: true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -72,5 +90,12 @@ mod tests {
             ConfigurationStorage::MemoryOnly
         );
         assert!(!status.real_credentials_enabled);
+    }
+
+    #[test]
+    fn credential_configuration_reports_the_real_credential_boundary() {
+        let status = StatusResponse::credential_configuration(true, ConfigurationStorage::Sqlite);
+        assert_eq!(status.mode, RuntimeMode::CredentialConfiguration);
+        assert!(status.real_credentials_enabled);
     }
 }
