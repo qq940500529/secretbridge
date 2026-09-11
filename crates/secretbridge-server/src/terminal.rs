@@ -249,6 +249,8 @@ impl TerminalManager {
             replay_from: replay.replay_from,
             next_cursor: replay.next_cursor,
             replay_truncated: replay.truncated,
+            retained_bytes: output.bytes.len(),
+            retention_capacity: BACKLOG_LIMIT,
             output: replay.output,
             events,
             input_granted,
@@ -291,6 +293,8 @@ pub struct TerminalSnapshot {
     pub replay_from: u64,
     pub next_cursor: u64,
     pub replay_truncated: bool,
+    pub retained_bytes: usize,
+    pub retention_capacity: usize,
     pub output: Vec<u8>,
     pub events: broadcast::Receiver<TerminalEvent>,
     pub input_granted: bool,
@@ -586,5 +590,29 @@ mod tests {
         assert_eq!(replay.replay_from, 6);
         assert_eq!(replay.output, b"second");
         assert!(!replay.truncated);
+    }
+
+    #[test]
+    fn oversized_chunk_preserves_cursor_and_only_retains_the_tail() {
+        let mut output = OutputBuffer::new();
+        let chunk = (0..BACKLOG_LIMIT + 17)
+            .map(|index| u8::try_from(index % 251).expect("bounded byte"))
+            .collect::<Vec<_>>();
+        output.append(&chunk);
+        let replay = output.snapshot(Some(0));
+        assert_eq!(replay.replay_from, 17);
+        assert_eq!(replay.next_cursor, (BACKLOG_LIMIT + 17) as u64);
+        assert_eq!(replay.output, chunk[17..]);
+        assert!(replay.truncated);
+    }
+
+    #[test]
+    fn future_cursor_is_reported_as_truncated() {
+        let mut output = OutputBuffer::new();
+        output.append(b"available");
+        let replay = output.snapshot(Some(100));
+        assert_eq!(replay.replay_from, 0);
+        assert_eq!(replay.output, b"available");
+        assert!(replay.truncated);
     }
 }

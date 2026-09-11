@@ -71,6 +71,8 @@ interface Copy {
   statusTitle: string;
   apiVersion: string;
   runtimeMode: string;
+  identityBoundary: string;
+  unverifiedSameUser: string;
   realCredentials: string;
   disabled: string;
   enabled: string;
@@ -78,6 +80,10 @@ interface Copy {
   futureBody: string;
   collapse: string;
   expand: string;
+  skipContent: string;
+  primaryNavigation: string;
+  switchLanguage: string;
+  connectionStatus: string;
 }
 
 const copy: Record<Language, Copy> = {
@@ -117,6 +123,8 @@ const copy: Record<Language, Copy> = {
     statusTitle: "运行状态",
     apiVersion: "接口版本",
     runtimeMode: "运行模式",
+    identityBoundary: "身份边界",
+    unverifiedSameUser: "同用户兼容模式（未验证隔离）",
     realCredentials: "真实凭据",
     disabled: "未启用",
     enabled: "已启用",
@@ -124,6 +132,10 @@ const copy: Record<Language, Copy> = {
     futureBody: "此功能将在完成安全模型与威胁建模复核后逐步开放。",
     collapse: "收起导航",
     expand: "展开导航",
+    skipContent: "跳到主要内容",
+    primaryNavigation: "主导航",
+    switchLanguage: "切换到英文",
+    connectionStatus: "连接状态",
   },
   en: {
     dashboard: "Overview",
@@ -165,6 +177,8 @@ const copy: Record<Language, Copy> = {
     statusTitle: "Runtime status",
     apiVersion: "API version",
     runtimeMode: "Runtime mode",
+    identityBoundary: "Identity boundary",
+    unverifiedSameUser: "Same-user compatibility (not isolated)",
     realCredentials: "Real credentials",
     disabled: "Disabled",
     enabled: "Enabled",
@@ -173,6 +187,10 @@ const copy: Record<Language, Copy> = {
       "This capability will open progressively after the security model and threat model are reviewed.",
     collapse: "Collapse navigation",
     expand: "Expand navigation",
+    skipContent: "Skip to main content",
+    primaryNavigation: "Primary navigation",
+    switchLanguage: "Switch to Chinese",
+    connectionStatus: "Connection status",
   },
 };
 
@@ -270,15 +288,21 @@ export function App() {
   return (
     <Tooltip.Provider delayDuration={250}>
       <div className="min-h-screen bg-[#f4f7fb] text-slate-800">
+        <a
+          href="#main-content"
+          className="fixed left-4 top-3 z-50 -translate-y-20 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-lg transition-transform focus:translate-y-0"
+        >
+          {text.skipContent}
+        </a>
         <aside
-          className={`fixed inset-y-0 left-0 z-20 flex flex-col border-r border-slate-200 bg-slate-950 text-slate-200 shadow-xl transition-[width] duration-200 ${collapsed ? "w-20" : "w-64"}`}
+          className={`fixed inset-y-0 left-0 z-20 flex flex-col border-r border-slate-200 bg-slate-950 text-slate-200 shadow-xl transition-[width] duration-200 ${collapsed ? "w-20" : "w-20 md:w-64"}`}
         >
           <div className="flex h-20 items-center gap-3 border-b border-white/10 px-5">
             <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 shadow-lg shadow-cyan-950/40">
               <ShieldCheck className="size-6 text-white" aria-hidden="true" />
             </div>
             {!collapsed && (
-              <div>
+              <div className="hidden md:block">
                 <p className="m-0 text-base font-semibold tracking-wide text-white">
                   SecretBridge
                 </p>
@@ -287,7 +311,10 @@ export function App() {
             )}
           </div>
 
-          <nav className="flex-1 space-y-1.5 px-3 py-5" aria-label="Primary">
+          <nav
+            className="flex-1 space-y-1.5 px-3 py-5"
+            aria-label={text.primaryNavigation}
+          >
             {navItems.map(({ id, icon: Icon }) => {
               const selected = activePage === id;
               return (
@@ -301,9 +328,10 @@ export function App() {
                       : "text-slate-400 hover:bg-white/5 hover:text-white"
                   }`}
                   aria-current={selected ? "page" : undefined}
+                  aria-label={text[id]}
                 >
                   <Icon className="size-5 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span>{text[id]}</span>}
+                  {!collapsed && <span className="hidden md:inline">{text[id]}</span>}
                 </button>
               );
             })}
@@ -321,16 +349,21 @@ export function App() {
               ) : (
                 <PanelLeftClose className="size-5" aria-hidden="true" />
               )}
-              {!collapsed && <span>{text.collapse}</span>}
+              {!collapsed && <span className="hidden md:inline">{text.collapse}</span>}
             </button>
           </div>
         </aside>
 
         <div
-          className={`min-h-screen transition-[margin] duration-200 ${collapsed ? "ml-20" : "ml-64"}`}
+          className={`min-h-screen transition-[margin] duration-200 ${collapsed ? "ml-20" : "ml-20 md:ml-64"}`}
         >
-          <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-slate-200/80 bg-white/85 px-8 backdrop-blur-xl">
-            <div className="flex items-center gap-3 text-sm">
+          <header className="sticky top-0 z-10 flex min-h-20 flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-8">
+            <div
+              className="flex items-center gap-3 text-sm"
+              role="status"
+              aria-live="polite"
+              aria-label={text.connectionStatus}
+            >
               <StatusPill
                 ok={connection === "online"}
                 pending={connection === "checking"}
@@ -352,7 +385,7 @@ export function App() {
                     )
                   }
                   className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 shadow-sm transition hover:border-cyan-300 hover:text-cyan-700"
-                  aria-label="Switch language"
+                  aria-label={text.switchLanguage}
                 >
                   <Languages className="size-4" aria-hidden="true" />
                   {language === "zh-CN" ? "EN" : "中文"}
@@ -363,14 +396,18 @@ export function App() {
                   sideOffset={8}
                   className="rounded-lg bg-slate-900 px-3 py-2 text-xs text-white shadow-xl"
                 >
-                  {language === "zh-CN" ? "切换到英文" : "Switch to Chinese"}
+                  {text.switchLanguage}
                   <Tooltip.Arrow className="fill-slate-900" />
                 </Tooltip.Content>
               </Tooltip.Portal>
             </Tooltip.Root>
           </header>
 
-          <main className="mx-auto max-w-7xl px-8 py-10">
+          <main
+            id="main-content"
+            tabIndex={-1}
+            className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10"
+          >
             {activePage === "dashboard" ? (
               <Dashboard
                 text={text}
@@ -502,11 +539,19 @@ function Dashboard({
             </h2>
             <Activity className="size-5 text-cyan-600" aria-hidden="true" />
           </div>
-          <dl className="grid gap-4 sm:grid-cols-3">
+          <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
             <StatusDatum
               label={text.runtimeMode}
               value={status?.mode === "synthetic_only" ? "Synthetic only" : "—"}
+            />
+            <StatusDatum
+              label={text.identityBoundary}
+              value={
+                status?.identity_boundary === "unverified_same_user"
+                  ? text.unverifiedSameUser
+                  : "—"
+              }
             />
             <StatusDatum
               label={text.realCredentials}

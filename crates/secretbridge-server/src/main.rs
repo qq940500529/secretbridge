@@ -9,6 +9,7 @@ use std::{
     io::{self, BufRead, Write},
     net::SocketAddr,
     path::PathBuf,
+    time::Duration,
 };
 
 use secretbridge_server::{AppState, router_with_web};
@@ -17,6 +18,8 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
+const MAX_SYNTHETIC_FLOOD_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SYNTHETIC_WAIT_MILLIS: usize = 30_000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -82,7 +85,7 @@ fn run_synthetic_terminal() -> Result<(), Box<dyn std::error::Error>> {
         match line.trim() {
             "help" => writeln!(
                 stdout,
-                "help    show this message\r\nstatus  show the isolated mode\r\nclear   clear the screen\r\nexit    close this synthetic terminal"
+                "help             show this message\r\nstatus           show the isolated mode\r\nflood <bytes>    emit bounded synthetic output\r\nwait <ms>        pause for cancellation testing\r\nclear            clear the screen\r\nexit             close this synthetic terminal"
             )?,
             "status" => writeln!(
                 stdout,
@@ -95,12 +98,62 @@ fn run_synthetic_terminal() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
             "" => {}
+            input if command_name(input) == "flood" => {
+                if let Some(bytes) = bounded_argument(input, "flood", MAX_SYNTHETIC_FLOOD_BYTES) {
+                    write_synthetic_flood(&mut stdout, bytes)?;
+                } else {
+                    writeln!(
+                        stdout,
+                        "usage: flood <bytes>, where bytes is 1..={MAX_SYNTHETIC_FLOOD_BYTES}"
+                    )?;
+                }
+            }
+            input if command_name(input) == "wait" => {
+                if let Some(milliseconds) =
+                    bounded_argument(input, "wait", MAX_SYNTHETIC_WAIT_MILLIS)
+                {
+                    writeln!(stdout, "wait begin milliseconds={milliseconds}")?;
+                    stdout.flush()?;
+                    std::thread::sleep(Duration::from_millis(milliseconds as u64));
+                    writeln!(stdout, "wait complete milliseconds={milliseconds}")?;
+                } else {
+                    writeln!(
+                        stdout,
+                        "usage: wait <milliseconds>, where milliseconds is 1..={MAX_SYNTHETIC_WAIT_MILLIS}"
+                    )?;
+                }
+            }
             input => writeln!(stdout, "echo: {input}")?,
         }
         write!(stdout, "secretbridge> ")?;
         stdout.flush()?;
     }
     Ok(())
+}
+
+fn command_name(input: &str) -> &str {
+    input.split_whitespace().next().unwrap_or_default()
+}
+
+fn bounded_argument(input: &str, command: &str, maximum: usize) -> Option<usize> {
+    let mut parts = input.split_whitespace();
+    if parts.next()? != command {
+        return None;
+    }
+    let value = parts.next()?.parse::<usize>().ok()?;
+    (value > 0 && value <= maximum && parts.next().is_none()).then_some(value)
+}
+
+fn write_synthetic_flood(stdout: &mut impl Write, bytes: usize) -> io::Result<()> {
+    writeln!(stdout, "flood begin bytes={bytes}")?;
+    let chunk = [b'x'; 8 * 1024];
+    let mut remaining = bytes;
+    while remaining > 0 {
+        let count = remaining.min(chunk.len());
+        stdout.write_all(&chunk[..count])?;
+        remaining -= count;
+    }
+    writeln!(stdout, "\r\nflood complete bytes={bytes}")
 }
 
 fn default_web_root() -> PathBuf {
@@ -127,7 +180,7 @@ fn require_loopback(address: SocketAddr) -> Result<SocketAddr, &'static str> {
 mod tests {
     use std::net::SocketAddr;
 
-    use super::require_loopback;
+    use super::{bounded_argument, require_loopback};
 
     #[test]
     fn loopback_bind_addresses_are_allowed() {
@@ -143,5 +196,16 @@ mod tests {
             let address = address.parse::<SocketAddr>().expect("valid address");
             assert!(require_loopback(address).is_err());
         }
+    }
+
+    #[test]
+    fn synthetic_stress_arguments_are_bounded() {
+        assert_eq!(
+            bounded_argument("flood 65536", "flood", 65_536),
+            Some(65_536)
+        );
+        assert_eq!(bounded_argument("flood 65537", "flood", 65_536), None);
+        assert_eq!(bounded_argument("flood 1 extra", "flood", 65_536), None);
+        assert_eq!(bounded_argument("flood 0", "flood", 65_536), None);
     }
 }

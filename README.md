@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. PTY reconnection uses output cursors rather than replaying already-consumed bytes, and concurrent attachments enforce one writer with read-only observers. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
+Synthetic-mode status, one-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. PTY reconnection uses output cursors rather than replaying already-consumed bytes, concurrent attachments enforce one writer with read-only observers, and stalled browser writes are time-bounded. The status API explicitly reports the current identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for the remaining work.
 
 ## How it works
 
@@ -75,15 +75,15 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Secure terminal** page runs only SecretBridge's built-in echo/status process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command. Closing and reconnecting its WebSocket does not terminate the synthetic PTY; the page resumes from its last output cursor. The bounded `flood` and `wait` commands exist only for resilience testing. The project does not use—and does not plan to introduce—a desktop shell.
 
 ## Platform targets
 
 | Platform | First validation baseline | Runtime status |
 | :--- | :--- | :--- |
-| Windows | Windows 11 · x64 | Local build and unit tests verified |
-| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | CI verification pending |
-| macOS | macOS 14+ · arm64/x64 | CI verification pending |
+| Windows | Windows 11 · x64 | Local prototype and CI synthetic paths verified |
+| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | CI synthetic paths verified; desktop integration pending |
+| macOS | macOS 14+ · arm64/x64 | CI synthetic paths verified; desktop integration pending |
 
 Other OS versions and architectures require separate validation. Actual support will be documented for each future release.
 

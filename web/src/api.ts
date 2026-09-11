@@ -6,6 +6,7 @@ export interface ServiceStatus {
   api_version: string;
   release_stage: string;
   mode: "synthetic_only";
+  identity_boundary: "unverified_same_user";
   paired: boolean;
   real_credentials_enabled: boolean;
 }
