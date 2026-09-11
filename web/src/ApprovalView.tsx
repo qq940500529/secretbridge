@@ -8,6 +8,7 @@ import {
   Clock3,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
@@ -17,8 +18,11 @@ import {
   type ApprovalOperation,
   type ApprovalResultScope,
   type ApprovalState,
+  type PolicyEvaluation,
+  type PolicyRequirement,
   createApproval,
   decideApproval,
+  evaluateActionTemplate,
   listApprovals,
   listActionTemplates,
   listTargets,
@@ -87,6 +91,20 @@ export function ApprovalView({
         saveError: "审批请求保存失败，请检查字段后重试。",
         conflict: "这条审批已经变化，列表已刷新，请按最新状态重新操作。",
         invalid: "当前状态不允许执行这个审批动作，列表已刷新。",
+        policyChanged: "模板或目标已变化，策略拒绝使用旧快照；请重新创建审批。",
+        policyTitle: "服务端策略预检",
+        policyChecking: "正在核对模板、目标与安全要求…",
+        policyEligible: "符合合成审批条件",
+        policyDenied: "当前策略拒绝创建审批",
+        policyVersion: "策略版本",
+        templateSnapshot: "模板／目标版本",
+        requirements: {
+          explicit_approval: "必须显式审批",
+          no_parameters: "不接收参数",
+          single_use: "审批单次使用",
+          synthetic_only: "仅内部模拟",
+          transition_revalidation: "每次转换复核",
+        } satisfies Record<PolicyRequirement, string>,
         approve: "批准",
         deny: "拒绝",
         revoke: "撤销",
@@ -131,6 +149,20 @@ export function ApprovalView({
         saveError: "The approval request could not be saved. Check the fields and retry.",
         conflict: "This approval changed. The list has been refreshed; decide from its current state.",
         invalid: "That decision is not allowed from the current state. The list has been refreshed.",
+        policyChanged: "The template or target changed. Policy denied the stale snapshot; create a new approval.",
+        policyTitle: "Server policy preflight",
+        policyChecking: "Checking template, target and safety requirements…",
+        policyEligible: "Eligible for synthetic approval",
+        policyDenied: "Current policy denies approval creation",
+        policyVersion: "Policy version",
+        templateSnapshot: "Template / target versions",
+        requirements: {
+          explicit_approval: "Explicit approval",
+          no_parameters: "No parameters",
+          single_use: "Single use",
+          synthetic_only: "Synthetic only",
+          transition_revalidation: "Revalidate transitions",
+        } satisfies Record<PolicyRequirement, string>,
         approve: "Approve",
         deny: "Deny",
         revoke: "Revoke",
@@ -155,6 +187,8 @@ export function ApprovalView({
   const [reason, setReason] = useState("");
   const [ttlMinutes, setTtlMinutes] = useState(5);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [policyEvaluation, setPolicyEvaluation] = useState<PolicyEvaluation | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -202,9 +236,23 @@ export function ApprovalView({
     return () => { active = false; };
   }, [sessionToken, text.loadError]);
 
+  useEffect(() => {
+    if (!templateId) {
+      setPolicyEvaluation(null);
+      return;
+    }
+    let active = true;
+    setPolicyLoading(true);
+    evaluateActionTemplate(sessionToken, templateId)
+      .then((evaluation) => { if (active) setPolicyEvaluation(evaluation); })
+      .catch(() => { if (active) setPolicyEvaluation(null); })
+      .finally(() => { if (active) setPolicyLoading(false); });
+    return () => { active = false; };
+  }, [sessionToken, templateId]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!templateId) return;
+    if (!templateId || policyEvaluation?.decision !== "eligible_for_approval") return;
     setBusyId("create");
     setError(null);
     try {
@@ -238,9 +286,9 @@ export function ApprovalView({
       setNotes((current) => ({ ...current, [item.id]: "" }));
     } catch (caught) {
       if (caught instanceof SecretBridgeApiError &&
-          ["version_conflict", "invalid_approval_transition"].includes(caught.code)) {
+          ["version_conflict", "invalid_approval_transition", "policy_denied"].includes(caught.code)) {
         try { await reload(); } catch { /* Keep the actionable conflict message. */ }
-        setError(caught.code === "version_conflict" ? text.conflict : text.invalid);
+        setError(caught.code === "version_conflict" ? text.conflict : caught.code === "policy_denied" ? text.policyChanged : text.invalid);
       } else {
         setError(text.saveError);
       }
@@ -274,6 +322,18 @@ export function ApprovalView({
                 {enabledTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {targetNames.get(template.target_id) ?? template.target_id}</option>)}
               </select>
             </Field>
+            {templateId && (
+              <div className={`rounded-2xl border p-4 ${policyEvaluation?.decision === "eligible_for_approval" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
+                <div className="flex items-start gap-3">
+                  <ShieldCheck className={`mt-0.5 size-5 shrink-0 ${policyEvaluation?.decision === "eligible_for_approval" ? "text-emerald-700" : "text-amber-700"}`} aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p className="m-0 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{text.policyTitle}</p>
+                    <p className="mb-0 mt-1 text-sm font-semibold text-slate-900">{policyLoading ? text.policyChecking : policyEvaluation?.decision === "eligible_for_approval" ? text.policyEligible : text.policyDenied}</p>
+                    {policyEvaluation && <><p className="mb-0 mt-2 text-xs text-slate-600">{text.policyVersion}：{policyEvaluation.policy_version} · {text.templateSnapshot}：{policyEvaluation.action_template_version}/{policyEvaluation.target_version}</p><div className="mt-3 flex flex-wrap gap-1.5">{policyEvaluation.requirements.map((requirement) => <span key={requirement} className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{text.requirements[requirement]}</span>)}</div></>}
+                  </div>
+                </div>
+              </div>
+            )}
             <Field label={text.reason} htmlFor="approval-reason">
               <textarea id="approval-reason" rows={3} maxLength={240} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={text.reasonPlaceholder} className={inputClass} />
             </Field>
@@ -283,7 +343,7 @@ export function ApprovalView({
               </select>
             </Field>
           </div>
-          <button type="submit" disabled={!templateId || busyId !== null} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="submit" disabled={!templateId || policyLoading || policyEvaluation?.decision !== "eligible_for_approval" || busyId !== null} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50">
             <ClipboardCheck className="size-4" aria-hidden="true" />
             {busyId === "create" ? text.saving : text.submit}
           </button>
@@ -311,7 +371,7 @@ export function ApprovalView({
                         <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">{scopeLabels[language][item.result_scope]}</span>
                       </div>
                       <h3 className="mb-0 mt-3 text-base font-semibold text-slate-950">{item.action_template_id ? (templateNames.get(item.action_template_id) ?? item.action_template_id) : operationLabels[language][item.operation]}</h3>
-                      <p className="mb-0 mt-2 text-sm text-slate-500">{targetNames.get(item.target_id) ?? item.target_id}{item.action_template_version ? ` · ${text.version} ${item.action_template_version}` : ""}</p>
+                      <p className="mb-0 mt-2 text-sm text-slate-500">{targetNames.get(item.target_id) ?? item.target_id}{item.action_template_version ? ` · ${text.version} ${item.action_template_version}/${item.target_version}` : ""}</p>
                     </div>
                     <span className="text-xs font-medium text-slate-400">{text.version} {item.version}</span>
                   </div>

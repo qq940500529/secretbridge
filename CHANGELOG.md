@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.10 · explainable synthetic policy
+
+- Add an authenticated policy-evaluation endpoint that explains eligibility, fixed reason codes, mandatory safeguards, template and target versions, and the synthetic-only execution mode.
+- Snapshot target versions in approvals and runs, advance SQLite to schema version 5, and migrate existing records without discarding workflow history.
+- Enforce the same fail-closed policy before approval, run creation, run start and run completion; disabled or changed templates and modified targets invalidate stale authorization.
+- Safely stop queued or running simulations when policy changes after creation, using the existing fixed authorization event without exposing configuration details.
+- Add a bilingual server-policy preflight card to the Approval center, policy-aware conflict guidance, and cross-layer migration, enforcement, API and Web-client tests.
+
 ### 0.1.0-alpha.9 · observable synthetic runs
 
 - Connect approved controlled-action templates to a persistent, single-use synthetic run lifecycle with queued, running, succeeded, cancelled and restart-interrupted states.
