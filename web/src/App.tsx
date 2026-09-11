@@ -32,6 +32,14 @@ import { consumePairingToken } from "./pairing";
 const TerminalView = lazy(() =>
   import("./TerminalView").then((module) => ({ default: module.TerminalView })),
 );
+const CredentialReferencesView = lazy(() =>
+  import("./CatalogView").then((module) => ({
+    default: module.CredentialReferencesView,
+  })),
+);
+const TargetsView = lazy(() =>
+  import("./CatalogView").then((module) => ({ default: module.TargetsView })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -73,6 +81,8 @@ interface Copy {
   runtimeMode: string;
   identityBoundary: string;
   unverifiedSameUser: string;
+  configurationStorage: string;
+  memoryOnly: string;
   realCredentials: string;
   disabled: string;
   enabled: string;
@@ -97,7 +107,7 @@ const copy: Record<Language, Copy> = {
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    stage: "M0 安全基础",
+    stage: "M1 工作流开发",
     syntheticTitle: "当前仅允许合成凭据",
     syntheticBody:
       "这一版本用于验证本地配对、安全边界和合成PTY；真实凭据、业务系统访问和系统命令执行均未启用。",
@@ -118,13 +128,15 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "继续验证三平台身份隔离、慢消费者压力与可访问性，再进入凭据引用和审批流程。",
+      "完善配置持久化、编辑与审批流程；真实凭据接入仍须先完成 M0 三平台身份隔离验证。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
     runtimeMode: "运行模式",
     identityBoundary: "身份边界",
     unverifiedSameUser: "同用户兼容模式（未验证隔离）",
+    configurationStorage: "配置存储",
+    memoryOnly: "仅内存（重启清空）",
     realCredentials: "真实凭据",
     disabled: "未启用",
     enabled: "已启用",
@@ -148,7 +160,7 @@ const copy: Record<Language, Copy> = {
     overview: "Secure execution overview",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    stage: "M0 security foundation",
+    stage: "M1 workflow development",
     syntheticTitle: "Synthetic credentials only",
     syntheticBody:
       "This release validates local pairing, trust boundaries, and a synthetic PTY. Real credentials, business targets, and system commands are disabled.",
@@ -172,13 +184,15 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Validate cross-platform identity isolation, slow-consumer limits, and accessibility before adding credential references and approvals.",
+      "Add configuration persistence, editing, and approvals. Real credential integration remains gated on M0 cross-platform identity validation.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
     runtimeMode: "Runtime mode",
     identityBoundary: "Identity boundary",
     unverifiedSameUser: "Same-user compatibility (not isolated)",
+    configurationStorage: "Configuration storage",
+    memoryOnly: "Memory-only (cleared on restart)",
     realCredentials: "Real credentials",
     disabled: "Disabled",
     enabled: "Enabled",
@@ -418,6 +432,17 @@ export function App() {
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <TerminalView language={language} sessionToken={sessionToken} />
               </Suspense>
+            ) : activePage === "credentials" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <CredentialReferencesView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
+              </Suspense>
+            ) : activePage === "targets" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <TargetsView language={language} sessionToken={sessionToken} />
+              </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />
             )}
@@ -539,7 +564,7 @@ function Dashboard({
             </h2>
             <Activity className="size-5 text-cyan-600" aria-hidden="true" />
           </div>
-          <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
             <StatusDatum
               label={text.runtimeMode}
@@ -550,6 +575,14 @@ function Dashboard({
               value={
                 status?.identity_boundary === "unverified_same_user"
                   ? text.unverifiedSameUser
+                  : "—"
+              }
+            />
+            <StatusDatum
+              label={text.configurationStorage}
+              value={
+                status?.configuration_storage === "memory_only"
+                  ? text.memoryOnly
                   : "—"
               }
             />
