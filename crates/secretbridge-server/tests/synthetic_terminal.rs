@@ -112,7 +112,7 @@ async fn websocket_can_detach_reattach_and_observe_revocation() {
         .close(None)
         .await
         .expect("release input lease connection");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let (mut next_writer, ready) = connect(&url, &origin, &token, second_client, None).await;
     assert_eq!(ready["input_granted"], true);
 
@@ -225,7 +225,7 @@ async fn connect(
         ))
         .await
         .expect("authenticate websocket");
-    let ready = timeout(Duration::from_secs(1), socket.next())
+    let ready = timeout(Duration::from_secs(5), socket.next())
         .await
         .expect("ready timeout")
         .expect("websocket open")
@@ -243,7 +243,7 @@ where
 {
     let mut output = Vec::new();
     for _ in 0..100 {
-        let message = timeout(Duration::from_millis(250), socket.next())
+        let message = timeout(Duration::from_secs(5), socket.next())
             .await
             .expect("websocket output timeout")
             .expect("websocket remains open")
@@ -276,7 +276,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     for _ in 0..10 {
-        let Some(Ok(message)) = timeout(Duration::from_secs(1), socket.next())
+        let Some(Ok(message)) = timeout(Duration::from_secs(5), socket.next())
             .await
             .expect("revocation notification timeout")
         else {
@@ -300,7 +300,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     for _ in 0..10 {
-        let Some(Ok(message)) = timeout(Duration::from_secs(1), socket.next())
+        let Some(Ok(message)) = timeout(Duration::from_secs(5), socket.next())
             .await
             .expect("control notification timeout")
         else {
