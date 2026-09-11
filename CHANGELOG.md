@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.11 · native credential configuration
+
+- Add write-only password and API-token management backed by the operating-system credential store on Windows, Linux and macOS; there is no secret read or export route.
+- Keep secret values out of SQLite, response bodies, URLs, command arguments, process environments and logs; SQLite stores only availability and last-update metadata.
+- Serialize credential mutations, require exact Origin plus an authenticated and versioned request, clear transient Rust buffers with `zeroize`, and attempt rollback when cross-store metadata updates fail.
+- Add PostgreSQL target configuration for host, port, database and login user with strict validation and a fixed `verify_full` TLS posture; arbitrary connection strings and TLS-disable options remain absent.
+- Advance SQLite to schema version 6 with forward migrations, update the bilingual UI, and add catalog, migration, API and no-read-route regression coverage.
+- Keep business-system execution disabled until the fixed PostgreSQL operation is wired through the existing policy, approval, single-use run and safe-event chain.
+
 ### 0.1.0-alpha.10 · explainable synthetic policy
 
 - Add an authenticated policy-evaluation endpoint that explains eligibility, fixed reason codes, mandatory safeguards, template and target versions, and the synthetic-only execution mode.

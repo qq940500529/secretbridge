@@ -22,6 +22,8 @@ This inventory describes material included in the repository. Technologies discu
 | SHA-2 0.10.9 | In-memory token digest runtime, MIT OR Apache-2.0 | Record the chosen license path and preserve applicable terms and notices |
 | rusqlite 0.40.2 / libsqlite3-sys 0.38.2 | SQLite binding and bundled native build, MIT | Preserve upstream MIT notices; only the `bundled` feature is enabled |
 | SQLite 3.53.2 | Bundled non-secret metadata database, public domain per upstream | Record the exact bundled source version and upstream provenance in release materials |
+| keyring 4.2.0 and selected native platform stores | Operating-system credential-store integration, MIT OR Apache-2.0 | Preserve the selected license and platform-backend notices; review each target platform's resolved dependency graph |
+| zeroize 1.9.0 | Transient secret-buffer clearing, MIT OR Apache-2.0 | Record the selected license path and preserve applicable terms and notices |
 | TypeScript 7.0.2 | Build tooling, Apache-2.0 | Preserve the license and any applicable notices when distributing covered material |
 | lightningcss 1.32 / 1.33 and platform packages | Transitive CSS build tooling, MPL-2.0 | Not part of the current browser runtime bundle; preserve MPL-covered files, notices and corresponding-source rights if those files are distributed |
 

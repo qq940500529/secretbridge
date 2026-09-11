@@ -11,6 +11,8 @@ import {
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
+  setCredentialSecret,
+  clearCredentialSecret,
   updateCredentialReference,
 } from "./api";
 
@@ -76,6 +78,29 @@ describe("configuration API client", () => {
       expected_version: 1,
     });
     expect(request.body).not.toContain("secret");
+  });
+
+  it("uses dedicated write-only secret mutations with optimistic versions", async () => {
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ id: "credential-id", secret_state: "available", version: 2 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetch);
+
+    await setCredentialSecret("session-token", "credential-id", "test-secret", 1);
+    await clearCredentialSecret("session-token", "credential-id", 2);
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/credential-references/credential-id/secret");
+    expect(fetch.mock.calls[0]?.[1]).toEqual(expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ secret: "test-secret", expected_version: 1 }),
+    }));
+    expect(fetch.mock.calls[1]?.[1]).toEqual(expect.objectContaining({
+      method: "DELETE",
+      body: JSON.stringify({ expected_version: 2 }),
+    }));
   });
 
   it("preserves safe API error codes for conflict handling", async () => {

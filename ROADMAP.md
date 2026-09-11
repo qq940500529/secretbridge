@@ -2,7 +2,7 @@
 
 [Home](README.md) / Roadmap
 
-Milestones describe acceptance gates rather than promised dates. **M1 workflow development is now in progress alongside the remaining M0 platform validation.** Development may overlap, but unresolved M0 security gates still block real credentials, business-system connections and release claims.
+Milestones describe acceptance gates rather than promised dates. **M1 workflow development is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets in the operating-system credential store, but unresolved identity and platform gates still block production claims and business-system execution.
 
 ## Progress at a glance
 
@@ -31,7 +31,7 @@ A later milestone may be developed in synthetic mode, but cannot enable security
 <details open>
 <summary>M0 — Feasibility and isolation</summary>
 
-- [x] Enforce synthetic-only mode; real credential and execution paths are absent.
+- [x] Keep system-command and business-operation execution synthetic-only while credential configuration is developed behind a separate write-only boundary.
 - [ ] Verify the intended identity boundary on Windows, Linux and macOS.
 - [x] Demonstrate one-time browser pairing, exact Origin checks and rejection of invalid tokens on a loopback-only service.
 - [x] Demonstrate synthetic PTY lifetime independent of WebSocket/UI attachment, including output replay after reconnection.
@@ -42,9 +42,10 @@ A later milestone may be developed in synthetic mode, but cannot enable security
 <details>
 <summary>M1 — Local Web workflow</summary>
 
-- [ ] Implement credential-reference and target configuration.
+- [x] Implement credential-reference and target configuration.
   - `0.1.0-alpha.5` adds authenticated, memory-only metadata creation, listing, relationship validation and deletion. Persistence, editing and native secret storage remain pending; the API accepts no secret value or network endpoint.
   - `0.1.0-alpha.6` persists the same non-secret schema in a local SQLite database and adds versioned editing. Native secret storage and endpoint configuration remain pending, so this criterion is not yet complete.
+  - `0.1.0-alpha.11` adds write-only native storage for passwords and API tokens plus validated PostgreSQL endpoint metadata with mandatory certificate and hostname verification. SQLite retains only non-secret state; SSH private-key storage remains outside this completed password/token criterion and requires its own adapter design.
 - [ ] Implement scoped approval and revocation.
   - `0.1.0-alpha.7` adds persistent, expiring and versioned approval records for two fixed synthetic operations, including approve, deny and revoke decisions. Approval-to-operation binding, policy enforcement and AI request/status transport remain pending; no operation executes from these records.
   - `0.1.0-alpha.8` binds new approvals to enabled, versioned controlled-action templates and snapshots the approved target, operation and result scope. Request/status transport, policy evaluation and operation consumption remain pending; templates and approvals still cannot execute anything.

@@ -3,7 +3,7 @@
 
 use std::{
     error::Error,
-    fmt,
+    fmt::{self, Write as _},
     path::Path,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
 const MAX_TARGETS: i64 = 128;
@@ -69,7 +69,7 @@ impl From<rusqlite::Error> for CatalogOpenError {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
     Password,
@@ -96,10 +96,11 @@ impl CredentialKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecretState {
     NotConfigured,
+    Available,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,9 +110,41 @@ pub struct CredentialReference {
     pub kind: CredentialKind,
     pub purpose: Option<String>,
     pub secret_state: SecretState,
+    pub secret_updated_at_unix_ms: Option<u64>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     pub version: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresTlsMode {
+    VerifyFull,
+}
+
+impl PostgresTlsMode {
+    const fn as_storage(self) -> &'static str {
+        match self {
+            Self::VerifyFull => "verify_full",
+        }
+    }
+
+    fn from_storage(value: &str) -> rusqlite::Result<Self> {
+        match value {
+            "verify_full" => Ok(Self::VerifyFull),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostgresTargetConfig {
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub tls_mode: PostgresTlsMode,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,7 +164,7 @@ pub struct UpdateCredentialReference {
     expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     Database,
@@ -193,6 +226,7 @@ pub struct Target {
     pub environment: TargetEnvironment,
     pub description: Option<String>,
     pub credential_reference_id: Option<Uuid>,
+    pub postgres: Option<PostgresTargetConfig>,
     pub created_at_unix_ms: u64,
     pub updated_at_unix_ms: u64,
     pub version: u64,
@@ -206,6 +240,7 @@ pub struct CreateTarget {
     environment: TargetEnvironment,
     description: Option<String>,
     credential_reference_id: Option<Uuid>,
+    postgres: Option<PostgresTargetConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -216,6 +251,7 @@ pub struct UpdateTarget {
     environment: TargetEnvironment,
     description: Option<String>,
     credential_reference_id: Option<Uuid>,
+    postgres: Option<PostgresTargetConfig>,
     expected_version: u64,
 }
 
@@ -578,6 +614,8 @@ impl Catalog {
                     kind TEXT NOT NULL CHECK (kind IN ('password', 'api_token', 'ssh_key')),
                     purpose TEXT CHECK (purpose IS NULL OR length(purpose) <= 240),
                     secret_state TEXT NOT NULL CHECK (secret_state = 'not_configured'),
+                    secret_configured INTEGER NOT NULL DEFAULT 0 CHECK (secret_configured IN (0, 1)),
+                    secret_updated_at_unix_ms INTEGER,
                     created_at_unix_ms INTEGER NOT NULL,
                     updated_at_unix_ms INTEGER NOT NULL,
                     version INTEGER NOT NULL CHECK (version >= 1)
@@ -589,6 +627,11 @@ impl Catalog {
                     environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
                     description TEXT CHECK (description IS NULL OR length(description) <= 240),
                     credential_reference_id TEXT REFERENCES credential_references(id) ON DELETE RESTRICT,
+                    postgres_host TEXT,
+                    postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
+                    postgres_database TEXT,
+                    postgres_username TEXT,
+                    postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full'),
                     created_at_unix_ms INTEGER NOT NULL,
                     updated_at_unix_ms INTEGER NOT NULL,
                     version INTEGER NOT NULL CHECK (version >= 1)
@@ -657,7 +700,7 @@ impl Catalog {
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 PRAGMA user_version = 5;
+                 PRAGMA user_version = 6;
                  COMMIT;",
             )?;
         }
@@ -759,6 +802,9 @@ impl Catalog {
         if (2..=4).contains(&version) {
             migrate_policy_snapshot_schema(&connection)?;
         }
+        if (1..=5).contains(&version) {
+            migrate_native_secret_and_postgres_schema(&connection)?;
+        }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -768,7 +814,8 @@ impl Catalog {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT id, name, kind, purpose, created_at_unix_ms,
+                "SELECT id, name, kind, purpose, secret_configured,
+                        secret_updated_at_unix_ms, created_at_unix_ms,
                         updated_at_unix_ms, version
                    FROM credential_references
                   ORDER BY created_at_unix_ms, id",
@@ -821,6 +868,10 @@ impl Catalog {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let purpose = normalize_optional(request.purpose.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let connection = self.lock();
+        let current = credential_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        if current.secret_state == SecretState::Available && current.kind != request.kind {
+            return Err(CatalogError::Invalid);
+        }
         let changed = connection
             .execute(
                 "UPDATE credential_references
@@ -834,6 +885,43 @@ impl Catalog {
                     now_unix_ms_i64()?,
                     id.to_string(),
                     i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        if changed == 0 {
+            return if credential_by_id(&connection, id)?.is_some() {
+                Err(CatalogError::VersionConflict)
+            } else {
+                Err(CatalogError::NotFound)
+            };
+        }
+        credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn get_credential_reference(&self, id: Uuid) -> Result<CredentialReference, CatalogError> {
+        credential_by_id(&self.lock(), id)?.ok_or(CatalogError::NotFound)
+    }
+
+    pub fn set_credential_secret_state(
+        &self,
+        id: Uuid,
+        expected_version: u64,
+        configured: bool,
+    ) -> Result<CredentialReference, CatalogError> {
+        let connection = self.lock();
+        let changed = connection
+            .execute(
+                "UPDATE credential_references
+                    SET secret_configured = ?1,
+                        secret_updated_at_unix_ms = ?2,
+                        updated_at_unix_ms = ?2,
+                        version = version + 1
+                  WHERE id = ?3 AND version = ?4",
+                params![
+                    configured,
+                    now_unix_ms_i64()?,
+                    id.to_string(),
+                    i64::try_from(expected_version).map_err(|_| CatalogError::Invalid)?
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -873,8 +961,9 @@ impl Catalog {
         let mut statement = connection
             .prepare(
                 "SELECT id, name, kind, environment, description,
-                        credential_reference_id, created_at_unix_ms,
-                        updated_at_unix_ms, version
+                        credential_reference_id, postgres_host, postgres_port,
+                        postgres_database, postgres_username, postgres_tls_mode,
+                        created_at_unix_ms, updated_at_unix_ms, version
                    FROM targets
                   ORDER BY created_at_unix_ms, id",
             )
@@ -890,6 +979,7 @@ impl Catalog {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_capacity(&connection, "targets", MAX_TARGETS)?;
         ensure_credential_exists(&connection, request.credential_reference_id)?;
@@ -899,9 +989,10 @@ impl Catalog {
             .execute(
                 "INSERT INTO targets
                     (id, name, kind, environment, description,
-                     credential_reference_id, created_at_unix_ms,
-                     updated_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 1)",
+                     credential_reference_id, postgres_host, postgres_port,
+                     postgres_database, postgres_username, postgres_tls_mode,
+                     created_at_unix_ms, updated_at_unix_ms, version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, 1)",
                 params![
                     id.to_string(),
                     name,
@@ -911,6 +1002,11 @@ impl Catalog {
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
+                    postgres.as_ref().map(|value| value.host.as_str()),
+                    postgres.as_ref().map(|value| value.port),
+                    postgres.as_ref().map(|value| value.database.as_str()),
+                    postgres.as_ref().map(|value| value.username.as_str()),
+                    postgres.as_ref().map(|value| value.tls_mode.as_storage()),
                     now
                 ],
             )
@@ -922,6 +1018,7 @@ impl Catalog {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_credential_exists(&connection, request.credential_reference_id)?;
         let changed = connection
@@ -929,8 +1026,11 @@ impl Catalog {
                 "UPDATE targets
                     SET name = ?1, kind = ?2, environment = ?3,
                         description = ?4, credential_reference_id = ?5,
-                        updated_at_unix_ms = ?6, version = version + 1
-                  WHERE id = ?7 AND version = ?8",
+                        postgres_host = ?6, postgres_port = ?7,
+                        postgres_database = ?8, postgres_username = ?9,
+                        postgres_tls_mode = ?10,
+                        updated_at_unix_ms = ?11, version = version + 1
+                  WHERE id = ?12 AND version = ?13",
                 params![
                     name,
                     request.kind.as_storage(),
@@ -939,6 +1039,11 @@ impl Catalog {
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
+                    postgres.as_ref().map(|value| value.host.as_str()),
+                    postgres.as_ref().map(|value| value.port),
+                    postgres.as_ref().map(|value| value.database.as_str()),
+                    postgres.as_ref().map(|value| value.username.as_str()),
+                    postgres.as_ref().map(|value| value.tls_mode.as_storage()),
                     now_unix_ms_i64()?,
                     id.to_string(),
                     i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?
@@ -1596,6 +1701,45 @@ fn migrate_policy_snapshot_schema(connection: &Connection) -> rusqlite::Result<(
     connection.execute_batch(&migration)
 }
 
+fn migrate_native_secret_and_postgres_schema(connection: &Connection) -> rusqlite::Result<()> {
+    let mut migration = String::from("BEGIN IMMEDIATE;");
+    for (table, column, definition) in [
+        (
+            "credential_references",
+            "secret_configured",
+            "INTEGER NOT NULL DEFAULT 0 CHECK (secret_configured IN (0, 1))",
+        ),
+        (
+            "credential_references",
+            "secret_updated_at_unix_ms",
+            "INTEGER",
+        ),
+        ("targets", "postgres_host", "TEXT"),
+        (
+            "targets",
+            "postgres_port",
+            "INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535)",
+        ),
+        ("targets", "postgres_database", "TEXT"),
+        ("targets", "postgres_username", "TEXT"),
+        (
+            "targets",
+            "postgres_tls_mode",
+            "TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full')",
+        ),
+    ] {
+        if !column_exists(connection, table, column)? {
+            write!(
+                &mut migration,
+                "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+            )
+            .expect("writing a schema migration to String cannot fail");
+        }
+    }
+    migration.push_str("PRAGMA user_version = 6; COMMIT;");
+    connection.execute_batch(&migration)
+}
+
 fn column_exists(
     connection: &Connection,
     table: &'static str,
@@ -1669,7 +1813,8 @@ fn credential_by_id(
 ) -> Result<Option<CredentialReference>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, name, kind, purpose, created_at_unix_ms,
+            "SELECT id, name, kind, purpose, secret_configured,
+                    secret_updated_at_unix_ms, created_at_unix_ms,
                     updated_at_unix_ms, version
                FROM credential_references WHERE id = ?1",
             [id.to_string()],
@@ -1680,15 +1825,24 @@ fn credential_by_id(
 }
 
 fn credential_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CredentialReference> {
+    let secret_configured = row.get::<_, bool>(4)?;
     Ok(CredentialReference {
         id: uuid_from_row(row, 0)?,
         name: row.get(1)?,
         kind: CredentialKind::from_storage(&row.get::<_, String>(2)?)?,
         purpose: row.get(3)?,
-        secret_state: SecretState::NotConfigured,
-        created_at_unix_ms: u64_from_row(row, 4)?,
-        updated_at_unix_ms: u64_from_row(row, 5)?,
-        version: u64_from_row(row, 6)?,
+        secret_state: if secret_configured {
+            SecretState::Available
+        } else {
+            SecretState::NotConfigured
+        },
+        secret_updated_at_unix_ms: row
+            .get::<_, Option<i64>>(5)?
+            .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?,
+        created_at_unix_ms: u64_from_row(row, 6)?,
+        updated_at_unix_ms: u64_from_row(row, 7)?,
+        version: u64_from_row(row, 8)?,
     })
 }
 
@@ -1696,8 +1850,9 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
     connection
         .query_row(
             "SELECT id, name, kind, environment, description,
-                    credential_reference_id, created_at_unix_ms,
-                    updated_at_unix_ms, version
+                    credential_reference_id, postgres_host, postgres_port,
+                    postgres_database, postgres_username, postgres_tls_mode,
+                    created_at_unix_ms, updated_at_unix_ms, version
                FROM targets WHERE id = ?1",
             [id.to_string()],
             target_from_row,
@@ -1708,6 +1863,22 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
 
 fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     let credential_id = row.get::<_, Option<String>>(5)?;
+    let postgres_host = row.get::<_, Option<String>>(6)?;
+    let postgres = postgres_host
+        .map(|host| {
+            let port = row
+                .get::<_, i64>(7)?
+                .try_into()
+                .map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok::<PostgresTargetConfig, rusqlite::Error>(PostgresTargetConfig {
+                host,
+                port,
+                database: row.get(8)?,
+                username: row.get(9)?,
+                tls_mode: PostgresTlsMode::from_storage(&row.get::<_, String>(10)?)?,
+            })
+        })
+        .transpose()?;
     Ok(Target {
         id: uuid_from_row(row, 0)?,
         name: row.get(1)?,
@@ -1717,9 +1888,10 @@ fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
         credential_reference_id: credential_id
             .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
             .transpose()?,
-        created_at_unix_ms: u64_from_row(row, 6)?,
-        updated_at_unix_ms: u64_from_row(row, 7)?,
-        version: u64_from_row(row, 8)?,
+        postgres,
+        created_at_unix_ms: u64_from_row(row, 11)?,
+        updated_at_unix_ms: u64_from_row(row, 12)?,
+        version: u64_from_row(row, 13)?,
     })
 }
 
@@ -1965,6 +2137,41 @@ fn normalize_idempotency_key(value: &str) -> Result<String, CatalogError> {
     Ok(value.to_owned())
 }
 
+fn normalize_postgres_config(
+    kind: TargetKind,
+    config: Option<&PostgresTargetConfig>,
+) -> Result<Option<PostgresTargetConfig>, CatalogError> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    if kind != TargetKind::Database {
+        return Err(CatalogError::Invalid);
+    }
+    let host = config.host.trim();
+    if host.is_empty()
+        || host.len() > 253
+        || !host.is_ascii()
+        || host.chars().any(char::is_whitespace)
+        || host.contains(['/', '\\', '@'])
+        || host.contains("://")
+        || !host
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-:_[]".contains(character))
+    {
+        return Err(CatalogError::Invalid);
+    }
+    if config.port == 0 {
+        return Err(CatalogError::Invalid);
+    }
+    Ok(Some(PostgresTargetConfig {
+        host: host.to_ascii_lowercase(),
+        port: config.port,
+        database: normalize_required(&config.database, 63)?,
+        username: normalize_required(&config.username, 63)?,
+        tls_mode: config.tls_mode,
+    }))
+}
+
 fn ensure_target_exists(connection: &Connection, id: Uuid) -> Result<(), CatalogError> {
     let exists = connection
         .query_row(
@@ -2035,9 +2242,9 @@ mod tests {
         ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
         CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
         CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, PolicyDecision,
-        PolicyReasonCode, PolicyRequirement, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
-        TargetEnvironment, TargetKind, UpdateActionTemplate, UpdateCredentialReference,
-        UpdateTarget,
+        PolicyReasonCode, PolicyRequirement, PostgresTargetConfig, PostgresTlsMode, RunState,
+        SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState, TargetEnvironment, TargetKind,
+        UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
     };
 
     #[test]
@@ -2081,6 +2288,7 @@ mod tests {
                     environment: TargetEnvironment::Development,
                     description: None,
                     credential_reference_id: None,
+                    postgres: None,
                     expected_version: 1,
                 },
             )
@@ -2136,10 +2344,71 @@ mod tests {
             environment: TargetEnvironment::Development,
             description: None,
             credential_reference_id: Some(Uuid::new_v4()),
+            postgres: None,
         });
         assert!(matches!(
             target,
             Err(CatalogError::CredentialReferenceNotFound)
+        ));
+    }
+
+    #[test]
+    fn credential_secret_metadata_is_versioned_without_storing_a_secret() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        let configured = catalog
+            .set_credential_secret_state(credential.id, 1, true)
+            .expect("mark configured");
+        assert_eq!(configured.secret_state, SecretState::Available);
+        assert!(configured.secret_updated_at_unix_ms.is_some());
+        assert_eq!(configured.version, 2);
+
+        assert!(matches!(
+            catalog.set_credential_secret_state(credential.id, 1, false),
+            Err(CatalogError::VersionConflict)
+        ));
+    }
+
+    #[test]
+    fn postgres_target_configuration_is_bounded_and_database_only() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        let target = catalog
+            .create_target(&CreateTarget {
+                name: "Reporting replica".to_owned(),
+                kind: TargetKind::Database,
+                environment: TargetEnvironment::Test,
+                description: None,
+                credential_reference_id: Some(credential.id),
+                postgres: Some(PostgresTargetConfig {
+                    host: "DB.TEST.EXAMPLE".to_owned(),
+                    port: 5432,
+                    database: "reporting".to_owned(),
+                    username: "secretbridge_reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            })
+            .expect("PostgreSQL target");
+        let postgres = target.postgres.expect("PostgreSQL configuration");
+        assert_eq!(postgres.host, "db.test.example");
+        assert_eq!(postgres.tls_mode, PostgresTlsMode::VerifyFull);
+
+        assert!(matches!(
+            catalog.create_target(&CreateTarget {
+                name: "Invalid HTTP target".to_owned(),
+                kind: TargetKind::HttpService,
+                environment: TargetEnvironment::Test,
+                description: None,
+                credential_reference_id: None,
+                postgres: Some(PostgresTargetConfig {
+                    host: "example.test".to_owned(),
+                    port: 5432,
+                    database: "reporting".to_owned(),
+                    username: "reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            }),
+            Err(CatalogError::Invalid)
         ));
     }
 
@@ -2261,7 +2530,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     #[test]
@@ -2321,7 +2590,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            5
+            6
         );
     }
 
@@ -2355,7 +2624,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            5
+            6
         );
     }
 
@@ -2393,7 +2662,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            5
+            6
         );
     }
 
@@ -2638,6 +2907,7 @@ mod tests {
                     environment: target.environment,
                     description: Some("Changed after approval request".to_owned()),
                     credential_reference_id: target.credential_reference_id,
+                    postgres: target.postgres.clone(),
                     expected_version: target.version,
                 },
             )
@@ -2719,6 +2989,7 @@ mod tests {
                 environment: TargetEnvironment::Test,
                 description: None,
                 credential_reference_id: Some(credential_id),
+                postgres: None,
             })
             .expect("synthetic target")
     }

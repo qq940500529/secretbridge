@@ -3,6 +3,7 @@
 
 import {
   CircleAlert,
+  Eraser,
   KeyRound,
   LoaderCircle,
   Pencil,
@@ -16,12 +17,14 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "re
 
 import {
   createCredentialReference,
+  clearCredentialSecret,
   createTarget,
   deleteCredentialReference,
   deleteTarget,
   listCredentialReferences,
   listTargets,
   SecretBridgeApiError,
+  setCredentialSecret,
   updateCredentialReference,
   updateTarget,
   type ConfigurationStorage,
@@ -37,9 +40,9 @@ type Language = "zh-CN" | "en";
 const sharedCopy = {
   "zh-CN": {
     memoryTitle: "当前配置只保存在服务内存中",
-    memoryBody: "服务重启后自动清空。本阶段只验证配置关系，不接收真实密码、令牌、私钥或业务地址。",
+    memoryBody: "元数据会在服务重启后清空；密码和令牌仍由操作系统凭据库管理。请优先使用持久化服务配置。",
     persistentTitle: "配置已保存到本机数据库",
-    persistentBody: "这里只保存非秘密元数据。密码、令牌、私钥、主机地址和连接串仍不会写入此数据库。",
+    persistentBody: "SQLite 只保存非秘密元数据和配置状态；密码与令牌写入操作系统凭据库，不提供读取或导出接口。",
     loading: "正在读取本机配置…",
     loadError: "配置读取失败，请确认本地服务仍在线且页面会话有效。",
     saveError: "保存失败，请检查字段或重新配对页面会话。",
@@ -58,9 +61,9 @@ const sharedCopy = {
   },
   en: {
     memoryTitle: "Configuration is currently memory-only",
-    memoryBody: "Everything is cleared on service restart. This phase validates relationships only and accepts no real passwords, tokens, private keys, or business addresses.",
+    memoryBody: "Metadata is cleared on service restart; passwords and tokens still use the operating-system credential store. Prefer persistent service configuration.",
     persistentTitle: "Configuration is saved in a local database",
-    persistentBody: "Only non-secret metadata is stored. Passwords, tokens, private keys, host addresses, and connection strings are still excluded.",
+    persistentBody: "SQLite stores only non-secret metadata and configuration state. Passwords and tokens go to the operating-system credential store and have no read or export API.",
     loading: "Loading local configuration…",
     loadError: "Could not load configuration. Check the local service and page session.",
     saveError: "Could not save. Check the fields or pair this page again.",
@@ -106,7 +109,7 @@ export function CredentialReferencesView({
     ? {
         eyebrow: "M1 · 凭据引用",
         title: "建立凭据用途清单",
-        subtitle: "这里只登记凭据的名称、类型和用途。秘密值将在通过安全门槛后由本机安全存储单独管理。",
+        subtitle: "名称、类型和用途保存在本机配置库；密码与 API 令牌单独写入操作系统凭据库，页面与 API 都不会回读秘密值。",
         formTitle: "添加凭据引用",
         name: "引用名称",
         namePlaceholder: "例如：测试库只读账号",
@@ -114,12 +117,19 @@ export function CredentialReferencesView({
         purpose: "用途说明（可选）",
         purposePlaceholder: "说明允许用于什么，不要填写任何秘密",
         listTitle: "已登记的引用",
-        state: "未配置秘密",
+        states: { not_configured: "未配置", available: "已安全保存" },
+        secret: "输入新秘密值",
+        secretPlaceholder: "保存后立即从页面清空",
+        setSecret: "保存到系统凭据库",
+        clearSecret: "清除秘密",
+        confirmClear: "确定从操作系统凭据库清除这个秘密值吗？",
+        secretError: "系统凭据库操作失败。请检查系统凭据服务、字段内容或页面会话。",
+        sshPending: "SSH 私钥写入将在专用文件型凭据适配器中提供。",
       }
     : {
         eyebrow: "M1 · Credential references",
         title: "Build a credential-purpose catalog",
-        subtitle: "Only names, types, and intended uses are recorded here. Secret values will be handled separately by native secure storage after the security gates pass.",
+        subtitle: "Names, types, and purposes stay in local configuration. Passwords and API tokens are written separately to the OS credential store and are never returned by the page or API.",
         formTitle: "Add credential reference",
         name: "Reference name",
         namePlaceholder: "Example: test database read-only account",
@@ -127,7 +137,14 @@ export function CredentialReferencesView({
         purpose: "Purpose (optional)",
         purposePlaceholder: "Describe the allowed use; never enter a secret",
         listTitle: "Registered references",
-        state: "Secret not configured",
+        states: { not_configured: "Not configured", available: "Stored securely" },
+        secret: "Enter a new secret",
+        secretPlaceholder: "Cleared from the page after save",
+        setSecret: "Save to OS credential store",
+        clearSecret: "Clear secret",
+        confirmClear: "Remove this secret from the operating-system credential store?",
+        secretError: "The OS credential-store operation failed. Check the system credential service, field value, or page session.",
+        sshPending: "SSH private keys will use a dedicated file-credential adapter in a later increment.",
       };
   const [items, setItems] = useState<CredentialReference[]>([]);
   const [name, setName] = useState("");
@@ -139,6 +156,8 @@ export function CredentialReferencesView({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [secretDrafts, setSecretDrafts] = useState<Record<string, string>>({});
+  const [secretBusyId, setSecretBusyId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -215,6 +234,43 @@ export function CredentialReferencesView({
     }
   }
 
+  async function saveSecret(item: CredentialReference) {
+    const secret = secretDrafts[item.id] ?? "";
+    if (!secret) return;
+    setSecretBusyId(item.id);
+    setError(null);
+    try {
+      const updated = await setCredentialSecret(sessionToken, item.id, secret, item.version);
+      setItems((current) => current.map((entry) => entry.id === item.id ? updated : entry));
+      setSecretDrafts((current) => ({ ...current, [item.id]: "" }));
+    } catch (error) {
+      if (error instanceof SecretBridgeApiError && error.code === "version_conflict") {
+        const response = await listCredentialReferences(sessionToken);
+        setItems(response.items);
+        setError(common.versionConflict);
+      } else {
+        setError(text.secretError);
+      }
+    } finally {
+      setSecretBusyId(null);
+    }
+  }
+
+  async function clearSecret(item: CredentialReference) {
+    if (!window.confirm(text.confirmClear)) return;
+    setSecretBusyId(item.id);
+    setError(null);
+    try {
+      const updated = await clearCredentialSecret(sessionToken, item.id, item.version);
+      setItems((current) => current.map((entry) => entry.id === item.id ? updated : entry));
+      setSecretDrafts((current) => ({ ...current, [item.id]: "" }));
+    } catch (error) {
+      setError(error instanceof SecretBridgeApiError && error.code === "version_conflict" ? common.versionConflict : text.secretError);
+    } finally {
+      setSecretBusyId(null);
+    }
+  }
+
   function beginEdit(item: CredentialReference) {
     setEditingId(item.id);
     setEditingVersion(item.version);
@@ -276,7 +332,7 @@ export function CredentialReferencesView({
               <div className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                   <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">{credentialKindLabels[language][item.kind]}</span>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"><ShieldCheck className="size-3.5" />{text.state}</span>
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${item.secret_state === "available" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}><ShieldCheck className="size-3.5" />{text.states[item.secret_state]}</span>
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
                     {common.version} {item.version}
                   </span>
@@ -291,6 +347,18 @@ export function CredentialReferencesView({
                 <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
               </div>
             </div>
+            {item.kind === "ssh_key" ? (
+              <p className="mb-0 mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">{text.sshPending}</p>
+            ) : (
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <label htmlFor={`secret-${item.id}`} className="mb-1.5 block text-xs font-semibold text-slate-600">{text.secret}</label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input id={`secret-${item.id}`} type="password" autoComplete="new-password" maxLength={8192} value={secretDrafts[item.id] ?? ""} onChange={(event) => setSecretDrafts((current) => ({ ...current, [item.id]: event.target.value }))} placeholder={text.secretPlaceholder} className={inputClass} />
+                  <button type="button" disabled={secretBusyId === item.id || !(secretDrafts[item.id] ?? "")} onClick={() => void saveSecret(item)} className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50">{text.setSecret}</button>
+                  {item.secret_state === "available" && <button type="button" disabled={secretBusyId === item.id} onClick={() => void clearSecret(item)} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"><Eraser className="size-4" />{text.clearSecret}</button>}
+                </div>
+              </div>
+            )}
           </article>
         ))}
       </CatalogList>
@@ -310,7 +378,7 @@ export function TargetsView({
     ? {
         eyebrow: "M1 · 连接目标",
         title: "定义逻辑目标与凭据关系",
-        subtitle: "当前只登记逻辑目标，不接收主机名、端口、连接串或网络地址，也不会尝试连接业务系统。",
+        subtitle: "数据库目标可登记 PostgreSQL 主机、端口、库名和账号；密码来自关联的系统凭据库。当前不会绕过审批主动连接业务系统。",
         formTitle: "添加逻辑目标",
         name: "目标名称",
         namePlaceholder: "例如：测试报表数据库",
@@ -322,11 +390,17 @@ export function TargetsView({
         none: "暂不关联",
         listTitle: "已登记的逻辑目标",
         noCredential: "未关联凭据",
+        postgresHost: "PostgreSQL 主机",
+        postgresPort: "端口",
+        postgresDatabase: "数据库名",
+        postgresUsername: "登录账号",
+        postgresTls: "TLS 校验",
+        verifyFull: "强制加密并验证证书与主机名",
       }
     : {
         eyebrow: "M1 · Targets",
         title: "Define logical targets and credential relationships",
-        subtitle: "This alpha records logical targets only. It accepts no hostnames, ports, connection strings, or network addresses and makes no business-system connections.",
+        subtitle: "Database targets can record a PostgreSQL host, port, database, and user; passwords come from the linked OS credential entry. No business connection bypasses approval.",
         formTitle: "Add logical target",
         name: "Target name",
         namePlaceholder: "Example: test reporting database",
@@ -338,6 +412,12 @@ export function TargetsView({
         none: "No reference",
         listTitle: "Registered logical targets",
         noCredential: "No credential reference",
+        postgresHost: "PostgreSQL host",
+        postgresPort: "Port",
+        postgresDatabase: "Database",
+        postgresUsername: "Login user",
+        postgresTls: "TLS verification",
+        verifyFull: "Require encryption and verify certificate + hostname",
       };
   const [items, setItems] = useState<Target[]>([]);
   const [credentials, setCredentials] = useState<CredentialReference[]>([]);
@@ -346,6 +426,10 @@ export function TargetsView({
   const [environment, setEnvironment] = useState<TargetEnvironment>("test");
   const [description, setDescription] = useState("");
   const [credentialId, setCredentialId] = useState("");
+  const [postgresHost, setPostgresHost] = useState("");
+  const [postgresPort, setPostgresPort] = useState("5432");
+  const [postgresDatabase, setPostgresDatabase] = useState("");
+  const [postgresUsername, setPostgresUsername] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
   const [storage, setStorage] = useState<ConfigurationStorage>("memory_only");
@@ -392,6 +476,15 @@ export function TargetsView({
         environment,
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
+        ...(kind === "database" ? {
+          postgres: {
+            host: postgresHost,
+            port: Number(postgresPort),
+            database: postgresDatabase,
+            username: postgresUsername,
+            tls_mode: "verify_full" as const,
+          },
+        } : {}),
       };
       if (editingId) {
         const item = await updateTarget(sessionToken, editingId, {
@@ -451,6 +544,10 @@ export function TargetsView({
     setEnvironment(item.environment);
     setDescription(item.description ?? "");
     setCredentialId(item.credential_reference_id ?? "");
+    setPostgresHost(item.postgres?.host ?? "");
+    setPostgresPort(String(item.postgres?.port ?? 5432));
+    setPostgresDatabase(item.postgres?.database ?? "");
+    setPostgresUsername(item.postgres?.username ?? "");
     setError(null);
   }
 
@@ -462,6 +559,10 @@ export function TargetsView({
     setEnvironment("test");
     setDescription("");
     setCredentialId("");
+    setPostgresHost("");
+    setPostgresPort("5432");
+    setPostgresDatabase("");
+    setPostgresUsername("");
   }
 
   return (
@@ -538,6 +639,29 @@ export function TargetsView({
             ))}
           </select>
         </Field>
+        {kind === "database" && (
+          <div className="space-y-4 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
+            <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+              <Field label={text.postgresHost} htmlFor="target-postgres-host">
+                <input id="target-postgres-host" required maxLength={253} value={postgresHost} onChange={(event) => setPostgresHost(event.target.value)} placeholder="db.example.internal" className={inputClass} />
+              </Field>
+              <Field label={text.postgresPort} htmlFor="target-postgres-port">
+                <input id="target-postgres-port" required type="number" min={1} max={65535} value={postgresPort} onChange={(event) => setPostgresPort(event.target.value)} className={inputClass} />
+              </Field>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label={text.postgresDatabase} htmlFor="target-postgres-database">
+                <input id="target-postgres-database" required maxLength={63} value={postgresDatabase} onChange={(event) => setPostgresDatabase(event.target.value)} className={inputClass} />
+              </Field>
+              <Field label={text.postgresUsername} htmlFor="target-postgres-username">
+                <input id="target-postgres-username" required maxLength={63} autoComplete="username" value={postgresUsername} onChange={(event) => setPostgresUsername(event.target.value)} className={inputClass} />
+              </Field>
+            </div>
+            <Field label={text.postgresTls} htmlFor="target-postgres-tls">
+              <select id="target-postgres-tls" value="verify_full" disabled className={inputClass}><option value="verify_full">{text.verifyFull}</option></select>
+            </Field>
+          </div>
+        )}
         <Field label={text.description} htmlFor="target-description">
           <textarea
             id="target-description"
@@ -581,6 +705,7 @@ export function TargetsView({
                     ? (credentialNames.get(item.credential_reference_id) ?? text.noCredential)
                     : text.noCredential}
                 </p>
+                {item.postgres && <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">{item.postgres.username}@{item.postgres.host}:{item.postgres.port}/{item.postgres.database} · TLS verify-full</p>}
               </div>
               <div className="flex shrink-0 gap-2">
                 <IconButton label={common.edit} onClick={() => beginEdit(item)}>

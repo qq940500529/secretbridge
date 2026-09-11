@@ -5,7 +5,7 @@ export interface ServiceStatus {
   product: string;
   api_version: string;
   release_stage: string;
-  mode: "synthetic_only";
+  mode: "synthetic_only" | "credential_configuration";
   identity_boundary: "unverified_same_user";
   configuration_storage: ConfigurationStorage;
   paired: boolean;
@@ -22,7 +22,7 @@ export interface PairResponse {
 
 export interface SessionResponse {
   authenticated: boolean;
-  mode: "synthetic_only";
+  mode: "synthetic_only" | "credential_configuration";
   expires_in_seconds: number;
 }
 
@@ -42,7 +42,8 @@ export interface CredentialReference {
   name: string;
   kind: CredentialKind;
   purpose: string | null;
-  secret_state: "not_configured";
+  secret_state: "not_configured" | "available";
+  secret_updated_at_unix_ms: number | null;
   created_at_unix_ms: number;
   updated_at_unix_ms: number;
   version: number;
@@ -60,6 +61,15 @@ export interface UpdateCredentialReference extends CreateCredentialReference {
 
 export type TargetKind = "database" | "http_service" | "ssh_host";
 export type TargetEnvironment = "development" | "test" | "production";
+export type PostgresTlsMode = "verify_full";
+
+export interface PostgresTargetConfig {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  tls_mode: PostgresTlsMode;
+}
 
 export interface Target {
   id: string;
@@ -68,6 +78,7 @@ export interface Target {
   environment: TargetEnvironment;
   description: string | null;
   credential_reference_id: string | null;
+  postgres: PostgresTargetConfig | null;
   created_at_unix_ms: number;
   updated_at_unix_ms: number;
   version: number;
@@ -79,6 +90,7 @@ export interface CreateTarget {
   environment: TargetEnvironment;
   description?: string;
   credential_reference_id?: string;
+  postgres?: PostgresTargetConfig;
 }
 
 export interface UpdateTarget extends CreateTarget {
@@ -375,6 +387,39 @@ export async function updateCredentialReference(
     sessionToken,
     `/api/v1/credential-references/${id}`,
     request,
+  );
+}
+
+export async function setCredentialSecret(
+  sessionToken: string,
+  id: string,
+  secret: string,
+  expectedVersion: number,
+): Promise<CredentialReference> {
+  return readJson<CredentialReference>(
+    await fetch(`/api/v1/credential-references/${id}/secret`, {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({ secret, expected_version: expectedVersion }),
+    }),
+  );
+}
+
+export async function clearCredentialSecret(
+  sessionToken: string,
+  id: string,
+  expectedVersion: number,
+): Promise<CredentialReference> {
+  return readJson<CredentialReference>(
+    await fetch(`/api/v1/credential-references/${id}/secret`, {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
   );
 }
 
