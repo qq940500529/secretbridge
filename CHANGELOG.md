@@ -6,6 +6,24 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.8 · controlled action templates
+
+- Add persistent controlled-action templates that bind an enabled fixed synthetic operation and result scope to one logical target, a 1–300 second planned timeout and versioned descriptive metadata.
+- Bind every new approval to an enabled template and preserve the template ID, version, target, operation and result-scope snapshot in the approval record.
+- Add authenticated create, list, update and safe-delete APIs plus a bilingual Policies page with editing, disabling and optimistic conflict recovery.
+- Preserve referenced templates and targets so approval history cannot silently lose its subject; disabling a template blocks new approval requests without rewriting existing snapshots.
+- Advance the SQLite catalog to schema version 3 with forward migrations from the previously implemented version 1 and 2 layouts.
+- Keep both templates and approvals non-executable and free of command, script, endpoint, argument and credential fields.
+
+### 0.1.0-alpha.7 · scoped approval records
+
+- Add a persistent synthetic approval workflow bound to one logical target, one fixed operation, one result scope and a mandatory 1–60 minute expiry.
+- Support pending-to-approved or pending-to-denied decisions and approved-to-revoked transitions, with automatic expiry and optimistic version checks on every decision.
+- Add authenticated approval APIs with exact Origin validation on mutations, relationship-safe target deletion and a schema-v1-to-v2 SQLite migration.
+- Add a bilingual approval center for creating, reviewing, approving, denying and revoking records, including visible expiry, scope, state and version information.
+- Keep execution explicitly disabled: approval records cannot run commands, connect to a network target, read a real secret or produce an operation result.
+- Add state-machine, expiry, migration, authorization and Web-client regression coverage.
+
 ### 0.1.0-alpha.6 · persistent metadata
 
 - Persist credential-reference and logical-target metadata in a versioned SQLite schema under the operating system's local application-data directory.

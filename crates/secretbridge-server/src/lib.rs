@@ -41,8 +41,9 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
-    Catalog, CatalogError, CatalogOpenError, CreateCredentialReference, CreateTarget,
-    CredentialReference, Target, UpdateCredentialReference, UpdateTarget,
+    ActionTemplate, Approval, Catalog, CatalogError, CatalogOpenError, CreateActionTemplate,
+    CreateApproval, CreateCredentialReference, CreateTarget, CredentialReference, DecideApproval,
+    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
@@ -231,6 +232,20 @@ struct TargetListResponse {
     storage: ConfigurationStorage,
 }
 
+#[derive(Serialize)]
+struct ApprovalListResponse {
+    items: Vec<Approval>,
+    storage: ConfigurationStorage,
+    execution_enabled: bool,
+}
+
+#[derive(Serialize)]
+struct ActionTemplateListResponse {
+    items: Vec<ActionTemplate>,
+    storage: ConfigurationStorage,
+    execution_enabled: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -288,6 +303,7 @@ enum ApiError {
     BadRequest,
     CatalogCapacity,
     Internal,
+    InvalidApprovalTransition,
     InvalidOrigin,
     NotFound,
     ResourceInUse,
@@ -318,6 +334,11 @@ impl IntoResponse for ApiError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
                 "The local operation failed.",
+            ),
+            Self::InvalidApprovalTransition => (
+                StatusCode::CONFLICT,
+                "invalid_approval_transition",
+                "The approval cannot make that state transition.",
             ),
             Self::InvalidOrigin => (
                 StatusCode::FORBIDDEN,
@@ -378,6 +399,21 @@ fn api_router(state: AppState) -> Router {
             "/api/v1/targets/{id}",
             delete(delete_target).put(update_target),
         )
+        .route(
+            "/api/v1/action-templates",
+            get(list_action_templates).post(create_action_template),
+        )
+        .route(
+            "/api/v1/action-templates/{id}",
+            delete(delete_action_template).put(update_action_template),
+        )
+        .route(
+            "/api/v1/approvals",
+            get(list_approvals).post(create_approval),
+        )
+        .route("/api/v1/approvals/{id}/approve", post(approve_approval))
+        .route("/api/v1/approvals/{id}/deny", post(deny_approval))
+        .route("/api/v1/approvals/{id}/revoke", post(revoke_approval))
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
@@ -598,6 +634,156 @@ async fn delete_target(
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_action_templates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ActionTemplateListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_action_templates())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(ActionTemplateListResponse {
+        items,
+        storage: state.configuration_storage,
+        execution_enabled: false,
+    }))
+}
+
+async fn create_action_template(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateActionTemplate>,
+) -> Result<(StatusCode, Json<ActionTemplate>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let template = task::spawn_blocking(move || catalog.create_action_template(&request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(template)))
+}
+
+async fn update_action_template(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateActionTemplate>,
+) -> Result<Json<ActionTemplate>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let template = task::spawn_blocking(move || catalog.update_action_template(id, &request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(template))
+}
+
+async fn delete_action_template(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    task::spawn_blocking(move || catalog.delete_action_template(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_approvals(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ApprovalListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_approvals())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(ApprovalListResponse {
+        items,
+        storage: state.configuration_storage,
+        execution_enabled: false,
+    }))
+}
+
+async fn create_approval(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateApproval>,
+) -> Result<(StatusCode, Json<Approval>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let approval = task::spawn_blocking(move || catalog.create_approval(&request))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(approval)))
+}
+
+async fn approve_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<DecideApproval>,
+) -> Result<Json<Approval>, ApiError> {
+    transition_approval(state, headers, id, request, ApprovalDecision::Approve).await
+}
+
+async fn deny_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<DecideApproval>,
+) -> Result<Json<Approval>, ApiError> {
+    transition_approval(state, headers, id, request, ApprovalDecision::Deny).await
+}
+
+async fn revoke_approval(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<DecideApproval>,
+) -> Result<Json<Approval>, ApiError> {
+    transition_approval(state, headers, id, request, ApprovalDecision::Revoke).await
+}
+
+#[derive(Clone, Copy)]
+enum ApprovalDecision {
+    Approve,
+    Deny,
+    Revoke,
+}
+
+async fn transition_approval(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    request: DecideApproval,
+    decision: ApprovalDecision,
+) -> Result<Json<Approval>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let approval = task::spawn_blocking(move || match decision {
+        ApprovalDecision::Approve => catalog.approve_approval(id, &request),
+        ApprovalDecision::Deny => catalog.deny_approval(id, &request),
+        ApprovalDecision::Revoke => catalog.revoke_approval(id, &request),
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
+    Ok(Json(approval))
 }
 
 async fn list_terminals(
@@ -1008,6 +1194,7 @@ fn map_catalog_error(error: CatalogError) -> ApiError {
         CatalogError::Capacity => ApiError::CatalogCapacity,
         CatalogError::CredentialReferenceNotFound | CatalogError::NotFound => ApiError::NotFound,
         CatalogError::Invalid => ApiError::BadRequest,
+        CatalogError::InvalidApprovalTransition => ApiError::InvalidApprovalTransition,
         CatalogError::ResourceInUse => ApiError::ResourceInUse,
         CatalogError::Storage => ApiError::Internal,
         CatalogError::VersionConflict => ApiError::VersionConflict,
@@ -1452,6 +1639,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn approval_api_is_scoped_versioned_and_never_executes() {
+        let (app, bootstrap) = test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let template_id = create_test_action_template(&app, &token).await;
+        let create_body = serde_json::json!({
+            "action_template_id": template_id,
+            "reason": "Verify approval lifecycle without an operation",
+            "expires_in_seconds": 300
+        })
+        .to_string();
+
+        let missing_origin = app
+            .clone()
+            .oneshot(authenticated_request_with_body(
+                "POST",
+                "/api/v1/approvals",
+                &token,
+                None,
+                &create_body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/approvals",
+                &token,
+                ORIGIN,
+                &create_body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let approval = response_json(created).await;
+        assert_eq!(approval["state"], "pending");
+        assert_eq!(approval["version"], 1);
+        assert_eq!(approval["action_template_id"], template_id);
+        assert_eq!(approval["action_template_version"], 1);
+        let approval_id = approval["id"].as_str().expect("approval id");
+
+        let approved = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{approval_id}/approve"),
+                &token,
+                ORIGIN,
+                r#"{"expected_version":1,"note":"Scope reviewed"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(approved.status(), StatusCode::OK);
+        let approved = response_json(approved).await;
+        assert_eq!(approved["state"], "approved");
+        assert_eq!(approved["version"], 2);
+
+        let invalid = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{approval_id}/deny"),
+                &token,
+                ORIGIN,
+                r#"{"expected_version":2}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(invalid.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_json(invalid).await["code"],
+            "invalid_approval_transition"
+        );
+
+        let revoked = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{approval_id}/revoke"),
+                &token,
+                ORIGIN,
+                r#"{"expected_version":2,"note":"No longer needed"}"#,
+            ))
+            .await
+            .expect("router response");
+        let revoked = response_json(revoked).await;
+        assert_eq!(revoked["state"], "revoked");
+        assert_eq!(revoked["version"], 3);
+
+        let list = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/approvals",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let list = response_json(list).await;
+        assert_eq!(list["execution_enabled"], false);
+        assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
     async fn security_headers_cover_web_fallbacks() {
         let app = apply_security_headers(axum::Router::new().fallback(|| async { "web" }));
         let response = app
@@ -1499,6 +1792,46 @@ mod tests {
         pair["session_token"]
             .as_str()
             .expect("session token")
+            .to_owned()
+    }
+
+    async fn create_test_action_template(app: &axum::Router, token: &str) -> String {
+        let target = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/targets",
+                token,
+                ORIGIN,
+                r#"{"name":"Synthetic health target","kind":"http_service","environment":"test"}"#,
+            ))
+            .await
+            .expect("router response");
+        let target = response_json(target).await;
+        let body = serde_json::json!({
+            "target_id": target["id"],
+            "name": "Synthetic target health",
+            "operation": "synthetic_health_check",
+            "result_scope": "status_only",
+            "description": "Fixed synthetic template",
+            "timeout_seconds": 15
+        })
+        .to_string();
+        let template = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/action-templates",
+                token,
+                ORIGIN,
+                &body,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(template.status(), StatusCode::CREATED);
+        response_json(template).await["id"]
+            .as_str()
+            .expect("template id")
             .to_owned()
     }
 
