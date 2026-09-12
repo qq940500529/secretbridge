@@ -27,6 +27,9 @@ This inventory describes material included in the repository. Technologies discu
 | tokio-postgres 0.7.18 | PostgreSQL wire-protocol client, MIT OR Apache-2.0 | Preserve the selected license and upstream notices with distributed service packages |
 | rustls-tokio-postgres 0.5.1 | TLS connector for the PostgreSQL client, Apache-2.0 | Preserve the Apache-2.0 terms and applicable notices |
 | tokio-util 0.7.19 | Runtime cancellation support, MIT | Preserve the MIT license and upstream copyright notice |
+| rmcp 3.3.0 / rmcp-macros 3.3.0 | MCP stdio server SDK and macros, Apache-2.0 | Preserve the Apache-2.0 license, copyright and any applicable NOTICE content with distributed service packages |
+| schemars 1.2.2 / schemars_derive 1.2.2 | MCP JSON Schema generation, MIT | Preserve the upstream MIT terms and copyright notice with distributed service packages |
+| darling 0.24.1, dyn-clone 1.0.20, pastey 0.2.3, ref-cast 1.0.27, tokio-stream 0.1.19 and related packages | Transitive MCP/schema build or runtime dependencies, MIT and/or Apache-2.0 | Resolved versions and exact expressions are locked in `Cargo.lock`; preserve applicable terms in each platform's generated notice inventory |
 | rustls 0.23.44 / rustls-platform-verifier 0.7.0 / ring 0.17.14 | Transitive TLS, platform trust and cryptography runtime | Preserve each resolved component's applicable Apache-2.0, ISC or MIT terms; review each platform-specific distribution graph |
 | webpki-root-certs 1.0.9 | Transitive root-certificate data, CDLA-Permissive-2.0 | Preserve the data license, provenance and applicable notices if the data is included in a distributed package |
 | TypeScript 7.0.2 | Build tooling, Apache-2.0 | Preserve the license and any applicable notices when distributing covered material |

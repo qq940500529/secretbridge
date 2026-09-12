@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M2 controlled-operation development with M0 security gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. An approved, single-use run can perform one fixed PostgreSQL read-only connection check. Secrets have no read/export API, and arbitrary SQL or credentialed shell access remains unavailable.
+> **M2 controlled-operation development with M0 security gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Approval decisions remain in the trusted Web console. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and ordinary terminals never receive credentials. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
+One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and ordinary terminals never receive credentials. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
 
 ## How it works
 
@@ -76,6 +76,8 @@ cargo run -p secretbridge-server
 ```
 
 The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. **Credentials** writes passwords and API tokens directly to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password, and only offers `verify_full` TLS. **Policies**, **Approvals**, **Runs** and **Audit** drive the fixed PostgreSQL status check or an offline synthetic check; neither accepts caller-provided SQL or operation parameters. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command—and has no access to stored secrets. The project does not use—and does not plan to introduce—a desktop shell.
+
+To start the local Web console and MCP stdio transport in the same process, configure the built executable as an MCP server with the single argument `--mcp-stdio`. This mode reserves stdout for JSON-RPC and sends diagnostics to stderr. The process owns the Web service lifecycle and port, so do not start a second SecretBridge instance on the same bind address. See the [user guide](docs/使用指南.md#mcp-stdio) for the tool list and configuration example.
 
 ## Platform targets
 
