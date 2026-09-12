@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pairing_url = format!("{origin}/#pair={bootstrap_token}");
     webbrowser::open(&pairing_url)
         .map_err(|error| format!("failed to open the pairing URL: {error}"))?;
-    info!(%address, mode = "credential_configuration", "SecretBridge local service started");
+    info!(%address, mode = "controlled_operations", "SecretBridge local service started");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

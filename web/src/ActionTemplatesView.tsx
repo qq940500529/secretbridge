@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { Pencil, Plus, ShieldOff, Trash2, X } from "lucide-react";
+import { Pencil, Plus, ShieldCheck, Trash2, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
 import {
@@ -24,15 +24,15 @@ export function ActionTemplatesView({ language, sessionToken }: { language: Lang
     ? {
         eyebrow: "M1 · 受控操作模板",
         title: "把授权约束固化为模板",
-        subtitle: "模板只允许选择内置合成操作和返回范围，不接受命令、脚本、参数、地址或凭据。审批创建时会保存模板版本与范围快照。",
-        safety: "操作执行仍处于硬禁用状态；这些模板只用于验证配置、版本与审批绑定。",
+        subtitle: "模板只允许选择内置受控操作和返回范围，不接受命令、脚本、参数或凭据。审批创建时会保存模板版本与范围快照。",
+        safety: "PostgreSQL 连接检查仅执行内置 SELECT 1，只返回结构化状态；合成操作继续用于离线验证。",
         formCreate: "新建操作模板",
         formEdit: "编辑操作模板",
         name: "模板名称",
         namePlaceholder: "例如：测试目标元数据检查",
         target: "逻辑目标",
         choose: "请选择目标",
-        operation: "内置合成操作",
+        operation: "内置受控操作",
         scope: "结果范围",
         description: "用途说明（可选）",
         descriptionPlaceholder: "说明使用场景，不要填写命令、地址或秘密",
@@ -54,21 +54,21 @@ export function ActionTemplatesView({ language, sessionToken }: { language: Lang
         inactive: "已停用",
         version: "版本",
         seconds: "秒",
-        operationLabels: { inspect_metadata: "查看非秘密元数据", synthetic_health_check: "合成健康检查" },
+        operationLabels: { inspect_metadata: "查看非秘密元数据", synthetic_health_check: "合成健康检查", postgres_connection_check: "PostgreSQL 只读连接检查" },
         scopeLabels: { status_only: "仅状态", metadata_summary: "元数据摘要" },
       }
     : {
         eyebrow: "M1 · Controlled action templates",
         title: "Make authorization constraints reusable",
-        subtitle: "Templates select only built-in synthetic operations and result scopes. They accept no commands, scripts, arguments, addresses or credentials. Approvals snapshot the template version and scope.",
-        safety: "Operation execution remains hard-disabled. Templates currently validate configuration, versioning and approval binding only.",
+        subtitle: "Templates select only built-in controlled operations and result scopes. They accept no commands, scripts, arguments or credentials. Approvals snapshot the template version and scope.",
+        safety: "The PostgreSQL connection check runs only a fixed SELECT 1 and returns structured status; synthetic operations remain available for offline validation.",
         formCreate: "New action template",
         formEdit: "Edit action template",
         name: "Template name",
         namePlaceholder: "Example: test-target metadata inspection",
         target: "Logical target",
         choose: "Choose a target",
-        operation: "Built-in synthetic operation",
+        operation: "Built-in controlled operation",
         scope: "Result scope",
         description: "Purpose (optional)",
         descriptionPlaceholder: "Describe the use; do not enter commands, addresses or secrets",
@@ -90,7 +90,7 @@ export function ActionTemplatesView({ language, sessionToken }: { language: Lang
         inactive: "Disabled",
         version: "Version",
         seconds: "seconds",
-        operationLabels: { inspect_metadata: "Inspect non-secret metadata", synthetic_health_check: "Synthetic health check" },
+        operationLabels: { inspect_metadata: "Inspect non-secret metadata", synthetic_health_check: "Synthetic health check", postgres_connection_check: "PostgreSQL read-only connection check" },
         scopeLabels: { status_only: "Status only", metadata_summary: "Metadata summary" },
       };
   const [items, setItems] = useState<ActionTemplate[]>([]);
@@ -188,7 +188,7 @@ export function ActionTemplatesView({ language, sessionToken }: { language: Lang
   return (
     <section className="space-y-6">
       <header><p className="m-0 text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">{text.eyebrow}</p><h1 className="mb-0 mt-2 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1><p className="mb-0 mt-3 max-w-3xl text-sm leading-6 text-slate-600">{text.subtitle}</p></header>
-      <div className="flex gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-sm leading-6 text-cyan-900"><ShieldOff className="mt-0.5 size-5 shrink-0" /><p className="m-0 font-medium">{text.safety}</p></div>
+      <div className="flex gap-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-sm leading-6 text-cyan-900"><ShieldCheck className="mt-0.5 size-5 shrink-0" /><p className="m-0 font-medium">{text.safety}</p></div>
       <div className="grid gap-6 lg:grid-cols-[minmax(300px,0.85fr)_minmax(0,1.35fr)]">
         <form onSubmit={submit} className="h-fit rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="m-0 text-lg font-semibold text-slate-950">{editing ? text.formEdit : text.formCreate}</h2>

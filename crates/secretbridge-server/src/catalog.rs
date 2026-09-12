@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
+const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
 const MAX_TARGETS: i64 = 128;
 const MAX_APPROVALS: i64 = 512;
@@ -260,6 +261,7 @@ pub struct UpdateTarget {
 pub enum ApprovalOperation {
     InspectMetadata,
     SyntheticHealthCheck,
+    PostgresConnectionCheck,
 }
 
 impl ApprovalOperation {
@@ -267,6 +269,7 @@ impl ApprovalOperation {
         match self {
             Self::InspectMetadata => "inspect_metadata",
             Self::SyntheticHealthCheck => "synthetic_health_check",
+            Self::PostgresConnectionCheck => "postgres_connection_check",
         }
     }
 
@@ -274,6 +277,7 @@ impl ApprovalOperation {
         match value {
             "inspect_metadata" => Ok(Self::InspectMetadata),
             "synthetic_health_check" => Ok(Self::SyntheticHealthCheck),
+            "postgres_connection_check" => Ok(Self::PostgresConnectionCheck),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -363,7 +367,14 @@ pub enum PolicyDecision {
 #[serde(rename_all = "snake_case")]
 pub enum PolicyReasonCode {
     FixedSyntheticScope,
+    FixedPostgresConnectionCheck,
     TemplateDisabled,
+    TargetIncompatible,
+    PostgresConfigurationMissing,
+    CredentialMissing,
+    CredentialNotConfigured,
+    CredentialKindUnsupported,
+    ResultScopeUnsupported,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -374,6 +385,9 @@ pub enum PolicyRequirement {
     SingleUse,
     SyntheticOnly,
     TransitionRevalidation,
+    TlsVerifyFull,
+    ReadOnlyTransaction,
+    StructuredStatusOnly,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -522,6 +536,7 @@ pub enum SafeEventKind {
     Succeeded,
     Cancelled,
     Interrupted,
+    Failed,
 }
 
 impl SafeEventKind {
@@ -533,6 +548,7 @@ impl SafeEventKind {
             Self::Succeeded => "succeeded",
             Self::Cancelled => "cancelled",
             Self::Interrupted => "interrupted",
+            Self::Failed => "failed",
         }
     }
 
@@ -544,6 +560,7 @@ impl SafeEventKind {
             "succeeded" => Ok(Self::Succeeded),
             "cancelled" => Ok(Self::Cancelled),
             "interrupted" => Ok(Self::Interrupted),
+            "failed" => Ok(Self::Failed),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -580,6 +597,35 @@ pub enum CatalogError {
 pub struct CreateRunOutcome {
     pub run: SyntheticRun,
     pub replayed: bool,
+}
+
+#[derive(Clone)]
+pub struct RunExecutionContext {
+    pub approval: Approval,
+    pub template: ActionTemplate,
+    pub target: Target,
+    pub credential: Option<CredentialReference>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PostgresRunResult {
+    ConnectionOk,
+    ConnectionFailed,
+    ConfigurationInvalid,
+    CredentialUnavailable,
+    TimedOut,
+}
+
+impl PostgresRunResult {
+    const fn status(self) -> &'static str {
+        match self {
+            Self::ConnectionOk => "postgres_connection_ok",
+            Self::ConnectionFailed => "postgres_connection_failed",
+            Self::ConfigurationInvalid => "postgres_configuration_invalid",
+            Self::CredentialUnavailable => "credential_unavailable",
+            Self::TimedOut => "timed_out",
+        }
+    }
 }
 
 impl Catalog {
@@ -642,7 +688,7 @@ impl Catalog {
                     id TEXT PRIMARY KEY NOT NULL,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     description TEXT CHECK (description IS NULL OR length(description) <= 240),
                     timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
@@ -658,7 +704,7 @@ impl Catalog {
                     action_template_version INTEGER,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
                     state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'revoked', 'expired')),
@@ -677,10 +723,10 @@ impl Catalog {
                     action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
                     result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
+                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
                     created_at_unix_ms INTEGER NOT NULL,
                     updated_at_unix_ms INTEGER NOT NULL,
                     started_at_unix_ms INTEGER,
@@ -692,15 +738,15 @@ impl Catalog {
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     run_id TEXT NOT NULL REFERENCES synthetic_runs(id) ON DELETE RESTRICT,
                     sequence INTEGER NOT NULL CHECK (sequence >= 1),
-                    kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
+                    kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'failed', 'cancelled', 'interrupted', 'authorization_revoked')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
                     created_at_unix_ms INTEGER NOT NULL,
                     UNIQUE(run_id, sequence)
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 PRAGMA user_version = 6;
+                 PRAGMA user_version = 7;
                  COMMIT;",
             )?;
         }
@@ -805,6 +851,9 @@ impl Catalog {
         if (1..=5).contains(&version) {
             migrate_native_secret_and_postgres_schema(&connection)?;
         }
+        if (1..=6).contains(&version) {
+            migrate_controlled_postgres_schema(&connection)?;
+        }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -908,8 +957,12 @@ impl Catalog {
         expected_version: u64,
         configured: bool,
     ) -> Result<CredentialReference, CatalogError> {
-        let connection = self.lock();
-        let changed = connection
+        let mut connection = self.lock();
+        let now = now_unix_ms_i64()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        let changed = transaction
             .execute(
                 "UPDATE credential_references
                     SET secret_configured = ?1,
@@ -919,19 +972,28 @@ impl Catalog {
                   WHERE id = ?3 AND version = ?4",
                 params![
                     configured,
-                    now_unix_ms_i64()?,
+                    now,
                     id.to_string(),
                     i64::try_from(expected_version).map_err(|_| CatalogError::Invalid)?
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
         if changed == 0 {
-            return if credential_by_id(&connection, id)?.is_some() {
+            return if credential_by_id(&transaction, id)?.is_some() {
                 Err(CatalogError::VersionConflict)
             } else {
                 Err(CatalogError::NotFound)
             };
         }
+        transaction
+            .execute(
+                "UPDATE targets
+                    SET updated_at_unix_ms = ?1, version = version + 1
+                  WHERE credential_reference_id = ?2",
+                params![now, id.to_string()],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
         credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
@@ -1083,7 +1145,7 @@ impl Catalog {
         let template = action_template_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
         let target =
             target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
-        Ok(policy_evaluation(&template, &target))
+        policy_evaluation(&connection, &template, &target)
     }
 
     pub fn create_action_template(
@@ -1221,6 +1283,11 @@ impl Catalog {
             .ok_or(CatalogError::NotFound)?;
         let target =
             target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
+        if policy_evaluation(&connection, &template, &target)?.decision
+            != PolicyDecision::EligibleForApproval
+        {
+            return Err(CatalogError::PolicyDenied);
+        }
         let id = Uuid::new_v4();
         let now = now_unix_ms_i64()?;
         let ttl_ms = i64::try_from(request.expires_in_seconds)
@@ -1417,7 +1484,13 @@ impl Catalog {
         })
     }
 
-    pub fn start_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+    pub fn start_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        let current = self.get_synthetic_run(id)?;
+        let message = if current.operation == ApprovalOperation::PostgresConnectionCheck {
+            "postgres connection check started"
+        } else {
+            "synthetic run started"
+        };
         self.transition_run(
             id,
             None,
@@ -1425,8 +1498,14 @@ impl Catalog {
             RunState::Running,
             None,
             SafeEventKind::Started,
-            "synthetic run started",
+            message,
+            true,
         )
+    }
+
+    #[cfg(test)]
+    pub fn start_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
+        self.start_run(id)
     }
 
     pub fn complete_synthetic_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
@@ -1438,7 +1517,61 @@ impl Catalog {
             Some("synthetic_ok"),
             SafeEventKind::Succeeded,
             "synthetic run completed",
+            true,
         )
+    }
+
+    pub fn complete_postgres_run(
+        &self,
+        id: Uuid,
+        result: PostgresRunResult,
+    ) -> Result<SyntheticRun, CatalogError> {
+        let succeeded = result == PostgresRunResult::ConnectionOk;
+        self.transition_run(
+            id,
+            None,
+            &[RunState::Running],
+            if succeeded {
+                RunState::Succeeded
+            } else {
+                RunState::Failed
+            },
+            Some(result.status()),
+            if succeeded {
+                SafeEventKind::Succeeded
+            } else {
+                SafeEventKind::Failed
+            },
+            if succeeded {
+                "postgres connection check succeeded"
+            } else {
+                "postgres connection check failed"
+            },
+            true,
+        )
+    }
+
+    pub fn run_execution_context(&self, id: Uuid) -> Result<RunExecutionContext, CatalogError> {
+        let connection = self.lock();
+        let run = synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        let approval = approval_by_id(&connection, run.approval_id)?
+            .filter(|approval| approval.state == ApprovalState::Approved)
+            .ok_or(CatalogError::ApprovalNotUsable)?;
+        ensure_approval_policy(&connection, &approval)?;
+        let template = action_template_by_id(&connection, run.action_template_id)?
+            .ok_or(CatalogError::PolicyDenied)?;
+        let target = target_by_id(&connection, run.target_id)?.ok_or(CatalogError::PolicyDenied)?;
+        let credential = target
+            .credential_reference_id
+            .map(|credential_id| credential_by_id(&connection, credential_id))
+            .transpose()?
+            .flatten();
+        Ok(RunExecutionContext {
+            approval,
+            template,
+            target,
+            credential,
+        })
     }
 
     pub fn cancel_synthetic_run(
@@ -1454,6 +1587,7 @@ impl Catalog {
             Some("cancelled"),
             SafeEventKind::Cancelled,
             "run cancelled",
+            false,
         )
     }
 
@@ -1466,6 +1600,7 @@ impl Catalog {
             Some("authorization_revoked"),
             SafeEventKind::AuthorizationRevoked,
             "authorization no longer active",
+            false,
         )
     }
 
@@ -1482,6 +1617,7 @@ impl Catalog {
         result_status: Option<&str>,
         event_kind: SafeEventKind,
         event_message: &str,
+        revalidate_authorization: bool,
     ) -> Result<SyntheticRun, CatalogError> {
         let mut connection = self.lock();
         let now = now_unix_ms_i64()?;
@@ -1493,7 +1629,7 @@ impl Catalog {
         if !allowed_states.contains(&current.state) {
             return Err(CatalogError::InvalidRunTransition);
         }
-        if matches!(next_state, RunState::Running | RunState::Succeeded) {
+        if revalidate_authorization {
             let approval = approval_by_id(&connection, current.approval_id)?
                 .filter(|approval| approval.state == ApprovalState::Approved)
                 .ok_or(CatalogError::ApprovalNotUsable)?;
@@ -1607,6 +1743,7 @@ impl Catalog {
                     Some("service_restarted"),
                     SafeEventKind::Interrupted,
                     "service restarted before completion",
+                    false,
                 )
                 .is_ok()
             {
@@ -1740,6 +1877,128 @@ fn migrate_native_secret_and_postgres_schema(connection: &Connection) -> rusqlit
     connection.execute_batch(&migration)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the v7 table rebuild is kept in one auditable transaction"
+)]
+fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         BEGIN IMMEDIATE;
+         CREATE TABLE action_templates_v7 (
+            id TEXT PRIMARY KEY NOT NULL,
+            target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+            name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            description TEXT CHECK (description IS NULL OR length(description) <= 240),
+            timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
+            enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1)
+         );
+         INSERT INTO action_templates_v7
+            (id, target_id, name, operation, result_scope, description,
+             timeout_seconds, enabled, created_at_unix_ms, updated_at_unix_ms, version)
+         SELECT id, target_id, name, operation, result_scope, description,
+                timeout_seconds, enabled, created_at_unix_ms, updated_at_unix_ms, version
+           FROM action_templates;
+         CREATE TABLE approvals_v7 (
+            id TEXT PRIMARY KEY NOT NULL,
+            action_template_id TEXT REFERENCES action_templates_v7(id) ON DELETE RESTRICT,
+            action_template_version INTEGER,
+            target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+            target_version INTEGER NOT NULL CHECK (target_version >= 1),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
+            state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'revoked', 'expired')),
+            decision_note TEXT CHECK (decision_note IS NULL OR length(decision_note) <= 240),
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL,
+            expires_at_unix_ms INTEGER NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1)
+         );
+         INSERT INTO approvals_v7
+            (id, action_template_id, action_template_version, target_id, target_version,
+             operation, result_scope, reason, state, decision_note,
+             created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version)
+         SELECT id, action_template_id, action_template_version, target_id, target_version,
+                operation, result_scope, reason, state, decision_note,
+                created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version
+           FROM approvals;
+         CREATE TABLE synthetic_runs_v7 (
+            id TEXT PRIMARY KEY NOT NULL,
+            approval_id TEXT NOT NULL UNIQUE REFERENCES approvals_v7(id) ON DELETE RESTRICT,
+            idempotency_key_hash TEXT NOT NULL UNIQUE CHECK (length(idempotency_key_hash) = 64),
+            action_template_id TEXT NOT NULL REFERENCES action_templates_v7(id) ON DELETE RESTRICT,
+            target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+            target_version INTEGER NOT NULL CHECK (target_version >= 1),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+            result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL,
+            started_at_unix_ms INTEGER,
+            finished_at_unix_ms INTEGER,
+            version INTEGER NOT NULL CHECK (version >= 1)
+         );
+         INSERT INTO synthetic_runs_v7
+            (id, approval_id, idempotency_key_hash, action_template_id, target_id,
+             target_version, operation, result_scope, state, result_status,
+             created_at_unix_ms, updated_at_unix_ms, started_at_unix_ms,
+             finished_at_unix_ms, version)
+         SELECT id, approval_id, idempotency_key_hash, action_template_id, target_id,
+                target_version, operation, result_scope, state, result_status,
+                created_at_unix_ms, updated_at_unix_ms, started_at_unix_ms,
+                finished_at_unix_ms, version
+           FROM synthetic_runs;
+         CREATE TABLE safe_events_v7 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES synthetic_runs_v7(id) ON DELETE RESTRICT,
+            sequence INTEGER NOT NULL CHECK (sequence >= 1),
+            kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'failed', 'cancelled', 'interrupted', 'authorization_revoked')),
+            state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
+            message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+            created_at_unix_ms INTEGER NOT NULL,
+            UNIQUE(run_id, sequence)
+         );
+         INSERT INTO safe_events_v7
+            (id, run_id, sequence, kind, state, message, created_at_unix_ms)
+         SELECT id, run_id, sequence, kind, state, message, created_at_unix_ms
+           FROM safe_events;
+         DROP TABLE safe_events;
+         DROP TABLE synthetic_runs;
+         DROP TABLE approvals;
+         DROP TABLE action_templates;
+         ALTER TABLE action_templates_v7 RENAME TO action_templates;
+         ALTER TABLE approvals_v7 RENAME TO approvals;
+         ALTER TABLE synthetic_runs_v7 RENAME TO synthetic_runs;
+         ALTER TABLE safe_events_v7 RENAME TO safe_events;
+         CREATE INDEX action_templates_target_idx ON action_templates(target_id);
+         CREATE INDEX approvals_target_idx ON approvals(target_id);
+         CREATE INDEX approvals_state_idx ON approvals(state);
+         CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+         CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
+         CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
+         PRAGMA user_version = 7;
+         COMMIT;
+         PRAGMA foreign_keys = ON;",
+    )?;
+    if connection
+        .query_row("PRAGMA foreign_key_check", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .optional()?
+        .is_some()
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
 fn column_exists(
     connection: &Connection,
     table: &'static str,
@@ -1750,26 +2009,85 @@ fn column_exists(
     connection.query_row(&query, [column], |row| row.get(0))
 }
 
-fn policy_evaluation(template: &ActionTemplate, target: &Target) -> PolicyEvaluation {
-    PolicyEvaluation {
-        policy_version: SYNTHETIC_POLICY_VERSION,
-        decision: if template.enabled {
+fn policy_evaluation(
+    connection: &Connection,
+    template: &ActionTemplate,
+    target: &Target,
+) -> Result<PolicyEvaluation, CatalogError> {
+    let postgres = template.operation == ApprovalOperation::PostgresConnectionCheck;
+    let mut reasons = Vec::new();
+    if !template.enabled {
+        reasons.push(PolicyReasonCode::TemplateDisabled);
+    }
+    if postgres {
+        if target.kind != TargetKind::Database {
+            reasons.push(PolicyReasonCode::TargetIncompatible);
+        }
+        if target.postgres.is_none() {
+            reasons.push(PolicyReasonCode::PostgresConfigurationMissing);
+        }
+        if template.result_scope != ApprovalResultScope::StatusOnly {
+            reasons.push(PolicyReasonCode::ResultScopeUnsupported);
+        }
+        let credential = target
+            .credential_reference_id
+            .map(|id| credential_by_id(connection, id))
+            .transpose()?
+            .flatten();
+        match credential {
+            None => reasons.push(PolicyReasonCode::CredentialMissing),
+            Some(credential) => {
+                if credential.kind != CredentialKind::Password {
+                    reasons.push(PolicyReasonCode::CredentialKindUnsupported);
+                }
+                if credential.secret_state != SecretState::Available {
+                    reasons.push(PolicyReasonCode::CredentialNotConfigured);
+                }
+            }
+        }
+        if reasons.is_empty() {
+            reasons.push(PolicyReasonCode::FixedPostgresConnectionCheck);
+        }
+    } else if reasons.is_empty() {
+        reasons.push(PolicyReasonCode::FixedSyntheticScope);
+    }
+    let eligible = reasons.iter().all(|reason| {
+        matches!(
+            reason,
+            PolicyReasonCode::FixedSyntheticScope | PolicyReasonCode::FixedPostgresConnectionCheck
+        )
+    });
+    Ok(PolicyEvaluation {
+        policy_version: if postgres {
+            POSTGRES_POLICY_VERSION
+        } else {
+            SYNTHETIC_POLICY_VERSION
+        },
+        decision: if eligible {
             PolicyDecision::EligibleForApproval
         } else {
             PolicyDecision::Denied
         },
-        reason_codes: vec![if template.enabled {
-            PolicyReasonCode::FixedSyntheticScope
+        reason_codes: reasons,
+        requirements: if postgres {
+            vec![
+                PolicyRequirement::ExplicitApproval,
+                PolicyRequirement::NoParameters,
+                PolicyRequirement::SingleUse,
+                PolicyRequirement::TransitionRevalidation,
+                PolicyRequirement::TlsVerifyFull,
+                PolicyRequirement::ReadOnlyTransaction,
+                PolicyRequirement::StructuredStatusOnly,
+            ]
         } else {
-            PolicyReasonCode::TemplateDisabled
-        }],
-        requirements: vec![
-            PolicyRequirement::ExplicitApproval,
-            PolicyRequirement::NoParameters,
-            PolicyRequirement::SingleUse,
-            PolicyRequirement::SyntheticOnly,
-            PolicyRequirement::TransitionRevalidation,
-        ],
+            vec![
+                PolicyRequirement::ExplicitApproval,
+                PolicyRequirement::NoParameters,
+                PolicyRequirement::SingleUse,
+                PolicyRequirement::SyntheticOnly,
+                PolicyRequirement::TransitionRevalidation,
+            ]
+        },
         action_template_id: template.id,
         action_template_version: template.version,
         target_id: target.id,
@@ -1778,8 +2096,12 @@ fn policy_evaluation(template: &ActionTemplate, target: &Target) -> PolicyEvalua
         operation: template.operation,
         result_scope: template.result_scope,
         timeout_seconds: template.timeout_seconds,
-        execution_mode: "synthetic_simulation",
-    }
+        execution_mode: if postgres {
+            "controlled_postgres"
+        } else {
+            "synthetic_simulation"
+        },
+    })
 }
 
 fn ensure_approval_policy(
@@ -1801,6 +2123,11 @@ fn ensure_approval_policy(
         || template.operation != approval.operation
         || template.result_scope != approval.result_scope
         || target.version != approval.target_version
+    {
+        return Err(CatalogError::PolicyDenied);
+    }
+    if policy_evaluation(connection, &template, &target)?.decision
+        != PolicyDecision::EligibleForApproval
     {
         return Err(CatalogError::PolicyDenied);
     }
@@ -2241,10 +2568,11 @@ mod tests {
     use super::{
         ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
         CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
-        CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, PolicyDecision,
-        PolicyReasonCode, PolicyRequirement, PostgresTargetConfig, PostgresTlsMode, RunState,
-        SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState, TargetEnvironment, TargetKind,
-        UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+        CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, POSTGRES_POLICY_VERSION,
+        PolicyDecision, PolicyReasonCode, PolicyRequirement, PostgresRunResult,
+        PostgresTargetConfig, PostgresTlsMode, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
+        SecretState, TargetEnvironment, TargetKind, UpdateActionTemplate,
+        UpdateCredentialReference, UpdateTarget,
     };
 
     #[test]
@@ -2413,6 +2741,88 @@ mod tests {
     }
 
     #[test]
+    fn postgres_connection_check_requires_configured_password_and_has_safe_results() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        catalog
+            .set_credential_secret_state(credential.id, credential.version, true)
+            .expect("configured secret metadata");
+        let target = catalog
+            .create_target(&CreateTarget {
+                name: "Read-only reporting database".to_owned(),
+                kind: TargetKind::Database,
+                environment: TargetEnvironment::Test,
+                description: None,
+                credential_reference_id: Some(credential.id),
+                postgres: Some(PostgresTargetConfig {
+                    host: "db.test.example".to_owned(),
+                    port: 5432,
+                    database: "reporting".to_owned(),
+                    username: "secretbridge_reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            })
+            .expect("PostgreSQL target");
+        let template = catalog
+            .create_action_template(&CreateActionTemplate {
+                target_id: target.id,
+                name: "PostgreSQL connection check".to_owned(),
+                operation: ApprovalOperation::PostgresConnectionCheck,
+                result_scope: ApprovalResultScope::StatusOnly,
+                description: None,
+                timeout_seconds: 10,
+            })
+            .expect("PostgreSQL template");
+        let evaluation = catalog
+            .evaluate_action_template(template.id)
+            .expect("policy evaluation");
+        assert_eq!(evaluation.policy_version, POSTGRES_POLICY_VERSION);
+        assert_eq!(evaluation.decision, PolicyDecision::EligibleForApproval);
+        assert_eq!(evaluation.execution_mode, "controlled_postgres");
+        assert!(
+            evaluation
+                .requirements
+                .contains(&PolicyRequirement::TlsVerifyFull)
+        );
+        assert!(
+            evaluation
+                .requirements
+                .contains(&PolicyRequirement::ReadOnlyTransaction)
+        );
+
+        let approval = create_approval(&catalog, template.id);
+        let approved = catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: None,
+                },
+            )
+            .expect("approve PostgreSQL check");
+        let run = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approved.id,
+                idempotency_key: "postgres-check-001".to_owned(),
+            })
+            .expect("create PostgreSQL run")
+            .run;
+        catalog.start_run(run.id).expect("start PostgreSQL run");
+        let completed = catalog
+            .complete_postgres_run(run.id, PostgresRunResult::ConnectionFailed)
+            .expect("finish PostgreSQL run");
+        assert_eq!(completed.state, RunState::Failed);
+        assert_eq!(
+            completed.result_status.as_deref(),
+            Some("postgres_connection_failed")
+        );
+        let events = catalog.list_safe_events(Some(run.id)).expect("safe events");
+        assert_eq!(events[1].message, "postgres connection check started");
+        assert_eq!(events[2].kind, SafeEventKind::Failed);
+        assert_eq!(events[2].message, "postgres connection check failed");
+    }
+
+    #[test]
     fn approvals_are_versioned_and_follow_the_fixed_state_machine() {
         let catalog = Catalog::in_memory().expect("in-memory catalog");
         let credential = create_credential(&catalog);
@@ -2530,7 +2940,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     #[test]
@@ -2590,7 +3000,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            6
+            7
         );
     }
 
@@ -2624,7 +3034,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            6
+            7
         );
     }
 
@@ -2662,7 +3072,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            6
+            7
         );
     }
 
