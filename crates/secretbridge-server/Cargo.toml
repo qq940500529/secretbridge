@@ -13,6 +13,7 @@ publish = false
 axum.workspace = true
 keyring.workspace = true
 portable-pty.workspace = true
+reqwest.workspace = true
 rmcp.workspace = true
 rusqlite.workspace = true
 schemars.workspace = true

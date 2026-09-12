@@ -13,13 +13,19 @@ use std::{
     time::Duration,
 };
 
-use secretbridge_server::{AppState, router_with_web, serve_mcp_stdio};
+use secretbridge_server::{AppState, router_with_web, serve_mcp_stdio_bridge};
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
+const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
+const BRIDGE_CONNECTION_SCHEMA: u8 = 1;
+#[cfg(test)]
+const MAX_BRIDGE_CONNECTION_BYTES: u64 = 4 * 1024;
 const MAX_SYNTHETIC_FLOOD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SYNTHETIC_WAIT_MILLIS: usize = 30_000;
 
@@ -43,6 +49,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
 
+    if startup_mode == StartupMode::McpStdio {
+        serve_mcp_stdio_bridge(data_directory()?.join(BRIDGE_CONNECTION_FILE))
+            .await
+            .map_err(|error| -> Box<dyn std::error::Error> { error })?;
+        return Ok(());
+    }
+
     let requested_address = require_loopback(
         env::var("SECRETBRIDGE_BIND")
             .unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned())
@@ -64,6 +77,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     create_private_data_directory(&data_directory)?;
     let database_path = data_directory.join("secretbridge.sqlite3");
     let (state, bootstrap_token) = AppState::new_persistent(trusted_origins, &database_path)?;
+    let bridge_token = Zeroizing::new(new_bridge_token());
+    let _bridge_connection = BridgeConnectionGuard::create(
+        &data_directory.join(BRIDGE_CONNECTION_FILE),
+        address,
+        bridge_token.as_str(),
+    )?;
+    state.install_mcp_bridge_token(bridge_token.as_str()).await;
     let web_root =
         env::var_os("SECRETBRIDGE_WEB_ROOT").map_or_else(default_web_root, PathBuf::from);
     let app = router_with_web(state.clone(), web_root);
@@ -71,66 +91,164 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pairing_url = format!("{origin}/#pair={bootstrap_token}");
     webbrowser::open(&pairing_url)
         .map_err(|error| format!("failed to open the pairing URL: {error}"))?;
-    match startup_mode {
-        StartupMode::Web => {
-            info!(%address, mode = "controlled_operations", "SecretBridge local service started");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
-        }
-        StartupMode::McpStdio => {
-            info!(%address, mode = "mcp_stdio", "SecretBridge local service started");
-            run_mcp_stdio_service(listener, app, state).await?;
-        }
-    }
+    info!(%address, mode = "controlled_operations", "SecretBridge local broker started");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartupMode {
-    Web,
+    Broker,
     McpStdio,
 }
 
 fn parse_startup_mode(arguments: &[impl AsRef<OsStr>]) -> Result<StartupMode, &'static str> {
     match arguments {
-        [] => Ok(StartupMode::Web),
+        [] => Ok(StartupMode::Broker),
         [argument] if argument.as_ref() == OsStr::new("--mcp-stdio") => Ok(StartupMode::McpStdio),
         _ => Err("usage: secretbridge-server [--mcp-stdio]"),
     }
 }
 
-async fn run_mcp_stdio_service(
-    listener: TcpListener,
-    app: axum::Router,
-    state: AppState,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let cancellation = CancellationToken::new();
-    let http_cancellation = cancellation.clone();
-    let http_service = async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(http_cancellation.cancelled_owned())
-            .await
-    };
-    let mcp_service = serve_mcp_stdio(state);
-    tokio::pin!(http_service);
-    tokio::pin!(mcp_service);
+#[cfg(test)]
+#[derive(Deserialize)]
+struct BridgeConnectionDocument {
+    schema_version: u8,
+    #[serde(rename = "instance_id")]
+    _instance_id: Uuid,
+    address: SocketAddr,
+    token: String,
+}
 
-    tokio::select! {
-        result = &mut mcp_service => {
-            cancellation.cancel();
-            result.map_err(|error| -> Box<dyn std::error::Error> { error })?;
-            http_service.await?;
+#[derive(Serialize)]
+struct BridgeConnectionDocumentRef<'a> {
+    schema_version: u8,
+    instance_id: Uuid,
+    address: SocketAddr,
+    token: &'a str,
+}
+
+#[derive(Deserialize)]
+struct BridgeConnectionIdentity {
+    instance_id: Uuid,
+}
+
+#[cfg(test)]
+struct BridgeConnection {
+    address: SocketAddr,
+    token: Zeroizing<String>,
+}
+
+struct BridgeConnectionGuard {
+    path: PathBuf,
+    instance_id: Uuid,
+}
+
+impl BridgeConnectionGuard {
+    fn create(
+        path: &Path,
+        address: SocketAddr,
+        token: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let instance_id = Uuid::new_v4();
+        let document = BridgeConnectionDocumentRef {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            instance_id,
+            address,
+            token,
+        };
+        let encoded = Zeroizing::new(serde_json::to_vec(&document)?);
+        let temporary_path = path.with_extension(format!("tmp-{}", Uuid::new_v4().simple()));
+        let write_result = write_private_file(&temporary_path, &encoded).and_then(|()| {
+            if path.exists() {
+                fs::remove_file(path)?;
+            }
+            fs::rename(&temporary_path, path)
+        });
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temporary_path);
         }
-        result = &mut http_service => {
-            result?;
-        }
-        () = shutdown_signal() => {
-            cancellation.cancel();
-            http_service.await?;
+        write_result?;
+        Ok(Self {
+            path: path.to_owned(),
+            instance_id,
+        })
+    }
+}
+
+impl Drop for BridgeConnectionGuard {
+    fn drop(&mut self) {
+        let Ok(contents) = fs::read_to_string(&self.path) else {
+            return;
+        };
+        let contents = Zeroizing::new(contents);
+        let Ok(document) = serde_json::from_str::<BridgeConnectionIdentity>(&contents) else {
+            return;
+        };
+        if document.instance_id == self.instance_id {
+            let _ = fs::remove_file(&self.path);
         }
     }
-    Ok(())
+}
+
+fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+#[cfg(test)]
+fn read_bridge_connection(path: &Path) -> io::Result<BridgeConnection> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "the SecretBridge broker is not running or its bridge file is unavailable",
+        )
+    })?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_BRIDGE_CONNECTION_BYTES
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the SecretBridge bridge file is invalid",
+        ));
+    }
+    let contents = Zeroizing::new(fs::read_to_string(path)?);
+    let document = serde_json::from_str::<BridgeConnectionDocument>(&contents).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the SecretBridge bridge file is invalid",
+        )
+    })?;
+    if document.schema_version != BRIDGE_CONNECTION_SCHEMA
+        || !document.address.ip().is_loopback()
+        || document.token.len() != 64
+        || !document.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the SecretBridge bridge file is invalid",
+        ));
+    }
+    Ok(BridgeConnection {
+        address: document.address,
+        token: Zeroizing::new(document.token),
+    })
+}
+
+fn new_bridge_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 fn data_directory() -> Result<PathBuf, &'static str> {
@@ -304,16 +422,19 @@ fn require_loopback(address: SocketAddr) -> Result<SocketAddr, &'static str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, net::SocketAddr};
+    use std::{ffi::OsStr, fs, net::SocketAddr};
+
+    use uuid::Uuid;
 
     use super::{
-        StartupMode, bounded_argument, parse_startup_mode, require_loopback, resolve_data_directory,
+        BridgeConnectionGuard, StartupMode, bounded_argument, new_bridge_token, parse_startup_mode,
+        read_bridge_connection, require_loopback, resolve_data_directory,
     };
 
     #[test]
     fn startup_mode_accepts_only_the_documented_forms() {
         let no_arguments: [&OsStr; 0] = [];
-        assert_eq!(parse_startup_mode(&no_arguments), Ok(StartupMode::Web));
+        assert_eq!(parse_startup_mode(&no_arguments), Ok(StartupMode::Broker));
         assert_eq!(
             parse_startup_mode(&[OsStr::new("--mcp-stdio")]),
             Ok(StartupMode::McpStdio)
@@ -360,5 +481,58 @@ mod tests {
     fn absolute_data_directory_overrides_are_accepted() {
         let path = std::env::temp_dir().join("secretbridge-data-override-test");
         assert_eq!(resolve_data_directory(Some(path.as_os_str())), Ok(path));
+    }
+
+    #[test]
+    fn bridge_connection_file_round_trips_and_is_removed_by_its_owner() {
+        let directory =
+            std::env::temp_dir().join(format!("secretbridge-bridge-file-test-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).expect("create test directory");
+        let path = directory.join("mcp-bridge.json");
+        let address = "127.0.0.1:38787"
+            .parse::<SocketAddr>()
+            .expect("valid address");
+        let token = new_bridge_token();
+        let guard = BridgeConnectionGuard::create(&path, address, &token)
+            .expect("write bridge connection file");
+        let connection = read_bridge_connection(&path).expect("read bridge connection file");
+        assert_eq!(connection.address, address);
+        assert_eq!(connection.token.as_str(), token);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(&path)
+                    .expect("bridge metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        drop(guard);
+        assert!(!path.exists());
+        fs::remove_dir(&directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn bridge_connection_file_rejects_invalid_data() {
+        let directory = std::env::temp_dir().join(format!(
+            "secretbridge-invalid-bridge-test-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir(&directory).expect("create test directory");
+        let path = directory.join("mcp-bridge.json");
+        fs::write(
+            &path,
+            r#"{"schema_version":1,"instance_id":"00000000-0000-0000-0000-000000000000","address":"192.0.2.1:8787","token":"short"}"#,
+        )
+        .expect("write invalid bridge file");
+        assert!(read_bridge_connection(&path).is_err());
+        fs::remove_file(path).expect("remove invalid bridge file");
+        fs::remove_dir(directory).expect("remove test directory");
     }
 }
