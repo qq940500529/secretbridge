@@ -13,6 +13,7 @@ pub const PRODUCT_NAME: &str = "SecretBridge";
 pub enum RuntimeMode {
     SyntheticOnly,
     CredentialConfiguration,
+    ControlledOperations,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -71,6 +72,23 @@ impl StatusResponse {
             real_credentials_enabled: true,
         }
     }
+
+    #[must_use]
+    pub const fn controlled_operations(
+        paired: bool,
+        configuration_storage: ConfigurationStorage,
+    ) -> Self {
+        Self {
+            product: PRODUCT_NAME,
+            api_version: API_VERSION,
+            release_stage: "m2_development",
+            mode: RuntimeMode::ControlledOperations,
+            identity_boundary: IdentityBoundary::UnverifiedSameUser,
+            configuration_storage,
+            paired,
+            real_credentials_enabled: true,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -96,6 +114,18 @@ mod tests {
     fn credential_configuration_reports_the_real_credential_boundary() {
         let status = StatusResponse::credential_configuration(true, ConfigurationStorage::Sqlite);
         assert_eq!(status.mode, RuntimeMode::CredentialConfiguration);
+        assert!(status.real_credentials_enabled);
+    }
+
+    #[test]
+    fn controlled_operations_reports_the_unverified_identity_boundary() {
+        let status = StatusResponse::controlled_operations(true, ConfigurationStorage::Sqlite);
+        assert_eq!(status.mode, RuntimeMode::ControlledOperations);
+        assert_eq!(status.release_stage, "m2_development");
+        assert_eq!(
+            status.identity_boundary,
+            IdentityBoundary::UnverifiedSameUser
+        );
         assert!(status.real_credentials_enabled);
     }
 }

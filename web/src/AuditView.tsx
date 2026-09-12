@@ -21,34 +21,34 @@ type Language = "zh-CN" | "en";
 export function AuditView({ language, sessionToken }: { language: Language; sessionToken: string }) {
   const text = language === "zh-CN"
     ? {
-        eyebrow: "M1 · 安全事件",
-        title: "可审查的合成运行记录",
+        eyebrow: "M2 · 安全事件",
+        title: "可审查的受控运行记录",
         subtitle: "审计流只包含服务端生成的固定安全消息、状态、序号和关联标识，不接收终端输出、业务数据、请求参数或凭据。",
-        policy: "当前载荷策略：仅允许固定安全消息。事件不能证明真实业务操作已经发生。",
+        policy: "当前载荷策略：仅允许固定安全消息。事件记录运行结果，但不会包含数据库错误原文、业务数据、参数或凭据。",
         all: "全部事件",
-        empty: "尚无安全事件。创建一条合成运行后会在此显示生命周期。",
+        empty: "尚无安全事件。创建一条受控运行后会在此显示生命周期。",
         loading: "正在读取安全事件…",
         error: "安全事件读取失败，请稍后重试。",
         run: "运行",
         target: "目标",
         template: "模板",
         sequence: "序号",
-        kinds: { authorization_revoked: "授权或策略失效后安全停止", requested: "请求已接受", started: "合成运行已开始", succeeded: "合成运行已完成", cancelled: "运行已取消", interrupted: "服务重启导致中断" } satisfies Record<SafeEventKind, string>,
+        kinds: { authorization_revoked: "授权或策略失效后安全停止", requested: "请求已接受", started: "受控运行已开始", succeeded: "受控运行已完成", failed: "受控运行未通过", cancelled: "运行已取消", interrupted: "服务重启导致中断" } satisfies Record<SafeEventKind, string>,
       }
     : {
         eyebrow: "M1 · Safe events",
-        title: "Reviewable synthetic run history",
+        title: "Reviewable controlled run history",
         subtitle: "The audit stream contains only server-generated fixed safe messages, states, sequences and relationship identifiers. It accepts no terminal output, business data, request arguments or credentials.",
-        policy: "Current payload policy: fixed safe messages only. Events do not prove that a real business operation occurred.",
+        policy: "Current payload policy: fixed safe messages only. Events record outcomes without exposing raw database errors, business data, arguments, or credentials.",
         all: "All events",
-        empty: "No safe events yet. Create a synthetic run to see its lifecycle here.",
+        empty: "No safe events yet. Create a controlled run to see its lifecycle here.",
         loading: "Loading safe events…",
         error: "Safe events could not be loaded. Try again later.",
         run: "Run",
         target: "Target",
         template: "Template",
         sequence: "Sequence",
-        kinds: { authorization_revoked: "Stopped after authorization or policy became inactive", requested: "Request accepted", started: "Synthetic run started", succeeded: "Synthetic run completed", cancelled: "Run cancelled", interrupted: "Interrupted by service restart" } satisfies Record<SafeEventKind, string>,
+        kinds: { authorization_revoked: "Stopped after authorization or policy became inactive", requested: "Request accepted", started: "Controlled run started", succeeded: "Controlled run completed", failed: "Controlled run did not pass", cancelled: "Run cancelled", interrupted: "Interrupted by service restart" } satisfies Record<SafeEventKind, string>,
       };
   const [events, setEvents] = useState<SafeEvent[]>([]);
   const [runs, setRuns] = useState<SyntheticRun[]>([]);

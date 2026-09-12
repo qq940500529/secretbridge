@@ -97,6 +97,9 @@ interface Copy {
   statusTitle: string;
   apiVersion: string;
   runtimeMode: string;
+  syntheticOnly: string;
+  credentialConfiguration: string;
+  controlledOperations: string;
   identityBoundary: string;
   unverifiedSameUser: string;
   configurationStorage: string;
@@ -128,10 +131,10 @@ const copy: Record<Language, Copy> = {
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    stage: "M1 工作流开发",
-    syntheticTitle: "真实凭据配置已进入受控预览",
+    stage: "M2 首个业务适配器",
+    syntheticTitle: "PostgreSQL 受控检查已接入",
     syntheticBody:
-      "密码与 API 令牌可写入操作系统凭据库，但不会通过页面或 API 回读。业务连接仍必须由后续审批驱动的固定适配器执行，普通终端不会获得凭据。",
+      "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
     boundaryTitle: "本机安全边界",
     boundaryBody: "服务只监听回环地址，不接受局域网或公网连接。",
     sessionTitle: "一次性浏览器配对",
@@ -149,11 +152,14 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "下一阶段将 PostgreSQL 低权限只读适配器接入现有策略、审批、单次消费、取消与安全事件链。",
+      "使用专用低权限测试账号进行真实环境试点，并继续补充连接诊断、操作员确认与可审计的固定数据库操作。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
     runtimeMode: "运行模式",
+    syntheticOnly: "仅合成运行",
+    credentialConfiguration: "凭据配置",
+    controlledOperations: "受控操作",
     identityBoundary: "身份边界",
     unverifiedSameUser: "同用户兼容模式（未验证隔离）",
     configurationStorage: "配置存储",
@@ -184,10 +190,10 @@ const copy: Record<Language, Copy> = {
     overview: "Secure execution overview",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    stage: "M1 workflow development",
-    syntheticTitle: "Real credential configuration is in controlled preview",
+    stage: "M2 first business adapter",
+    syntheticTitle: "Controlled PostgreSQL check is connected",
     syntheticBody:
-      "Passwords and API tokens can be written to the OS credential store but are never returned through the page or API. Business connections still require a fixed approval-driven adapter, and ordinary terminals never receive credentials.",
+      "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
     boundaryTitle: "Local trust boundary",
     boundaryBody:
       "The service binds only to loopback and rejects LAN or public access.",
@@ -208,11 +214,14 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Next, connect a least-privilege read-only PostgreSQL adapter to the existing policy, approval, single-use, cancellation, and safe-event chain.",
+      "Pilot the adapter with a dedicated least-privilege test account, then add connection diagnostics, operator confirmation, and auditable fixed database operations.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
     runtimeMode: "Runtime mode",
+    syntheticOnly: "Synthetic only",
+    credentialConfiguration: "Credential configuration",
+    controlledOperations: "Controlled operations",
     identityBoundary: "Identity boundary",
     unverifiedSameUser: "Same-user compatibility (not isolated)",
     configurationStorage: "Configuration storage",
@@ -614,7 +623,7 @@ function Dashboard({
             <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
             <StatusDatum
               label={text.runtimeMode}
-              value={status?.mode === "credential_configuration" ? "Credential configuration" : status?.mode === "synthetic_only" ? "Synthetic only" : "—"}
+              value={status?.mode === "controlled_operations" ? text.controlledOperations : status?.mode === "credential_configuration" ? text.credentialConfiguration : status?.mode === "synthetic_only" ? text.syntheticOnly : "—"}
             />
             <StatusDatum
               label={text.identityBoundary}

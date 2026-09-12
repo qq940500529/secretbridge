@@ -8,7 +8,7 @@
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
-[![Project stage: M1 development](https://img.shields.io/badge/project%20stage-M1%20workflow%20development-147D92)](ROADMAP.md)
+[![Project stage: M2 development](https://img.shields.io/badge/project%20stage-M2%20controlled%20operations-147D92)](ROADMAP.md)
 
 [![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
 [![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M1 workflow development with M0 security gates still open.** The local Web console can now write passwords and API tokens to the operating-system credential store and keep validated PostgreSQL endpoint metadata in local SQLite. Secrets have no read or export API. Business-system execution and system-shell access remain disabled until a fixed adapter is connected to the existing policy and approval chain.
+> **M2 controlled-operation development with M0 security gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. An approved, single-use run can perform one fixed PostgreSQL read-only connection check. Secrets have no read/export API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. An enabled template binds a fixed synthetic operation and result scope to one target; the existing approval/run path remains a simulation and cannot yet open a network connection. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and ordinary terminals never receive credentials. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
+One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and ordinary terminals never receive credentials. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
 
 ## How it works
 
@@ -75,7 +75,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. **Credentials** writes passwords and API tokens directly to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password, and only offers `verify_full` TLS. **Policies**, **Approvals**, **Runs** and **Audit** still operate on a fixed synthetic lifecycle with no network execution. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command—and has no access to stored secrets. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. **Credentials** writes passwords and API tokens directly to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password, and only offers `verify_full` TLS. **Policies**, **Approvals**, **Runs** and **Audit** drive the fixed PostgreSQL status check or an offline synthetic check; neither accepts caller-provided SQL or operation parameters. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command—and has no access to stored secrets. The project does not use—and does not plan to introduce—a desktop shell.
 
 ## Platform targets
 
@@ -89,7 +89,7 @@ Other OS versions and architectures require separate validation. Actual support 
 
 ## Contribute
 
-The project is in M1 development while M0 security verification remains open. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is in M2 development while M0 security verification remains open. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

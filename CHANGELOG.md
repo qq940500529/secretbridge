@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.12 · controlled PostgreSQL connection check
+
+- Add the first credential-bearing adapter: a fixed PostgreSQL `SELECT 1` connection check using the native protocol, a read-only serializable transaction and mandatory certificate/hostname verification.
+- Route every check through explainable policy evaluation, expiring approval, single-use/idempotent run creation, transition revalidation, timeout, cancellation and fixed safe events.
+- Keep passwords inside the operating-system credential store and expose only bounded result states; raw database errors, SQL, parameters, business rows and credentials cannot enter API or event payloads.
+- Invalidate target versions when a linked secret is rotated or cleared so previously approved snapshots fail closed.
+- Advance SQLite to schema version 7 with history-preserving migrations and add catalog, HTTP, migration and Web-client regression coverage.
+- Report `m2_development` and `controlled_operations` through the service status API without weakening the explicit `unverified_same_user` identity warning.
+- Update the bilingual UI for controlled PostgreSQL templates, policy requirements, run results and audit events. A real low-privilege target pilot remains an M3 validation task.
+
 ### 0.1.0-alpha.11 · native credential configuration
 
 - Add write-only password and API-token management backed by the operating-system credential store on Windows, Linux and macOS; there is no secret read or export route.

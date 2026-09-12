@@ -34,15 +34,15 @@ const stateStyles: Record<RunState, string> = {
 export function OperationsView({ language, sessionToken }: { language: Language; sessionToken: string }) {
   const text = language === "zh-CN"
     ? {
-        eyebrow: "M1 · 合成运行",
+        eyebrow: "M2 · 受控运行",
         title: "提交并观察受控运行",
         subtitle: "每个已批准且未使用的审批只能创建一个运行。请求使用幂等键去重，运行状态和固定安全事件可持续查询。",
-        safety: "当前运行只执行密桥内部的短时状态模拟，不启动进程、不访问网络、不读取凭据，也不接收参数或自由文本。",
+        safety: "PostgreSQL 运行只从本机凭据库读取密码，强制 TLS 完整验证和只读事务，执行固定 SELECT 1，并只返回结构化状态；不接受 SQL、参数或自由文本。",
         request: "新建运行请求",
         approval: "已批准的单次授权",
         choose: "请选择可用审批",
         none: "没有可用审批；请先批准一条尚未使用的申请。",
-        submit: "启动合成运行",
+        submit: "启动受控运行",
         submitting: "正在提交…",
         runs: "运行记录",
         empty: "尚无运行记录。",
@@ -59,18 +59,18 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         version: "版本",
         approvalVersion: "审批版本",
         states: { queued: "已排队", running: "运行中", succeeded: "已成功", cancelled: "已取消", failed: "已中断" } satisfies Record<RunState, string>,
-        results: { synthetic_ok: "合成检查正常", cancelled: "用户取消", service_restarted: "服务重启时中断", authorization_revoked: "授权或策略已失效，运行安全停止" } as Record<string, string>,
+        results: { synthetic_ok: "合成检查正常", postgres_connection_ok: "PostgreSQL 只读连接检查正常", postgres_connection_failed: "PostgreSQL 连接或固定探测失败", postgres_configuration_invalid: "PostgreSQL 安全配置无效", credential_unavailable: "凭据当前不可用", timed_out: "检查已超时", cancelled: "用户取消", service_restarted: "服务重启时中断", authorization_revoked: "授权或策略已失效，运行安全停止" } as Record<string, string>,
       }
     : {
-        eyebrow: "M1 · Synthetic runs",
+        eyebrow: "M2 · Controlled runs",
         title: "Submit and observe controlled runs",
         subtitle: "Each approved, unused approval creates at most one run. Idempotency keys deduplicate requests, while run status and fixed safe events remain queryable.",
-        safety: "Runs currently perform only a short internal state simulation. They start no process, access no network, read no credential and accept no arguments or free text.",
+        safety: "PostgreSQL runs read the password only from the local credential store, require full TLS verification and a read-only transaction, execute a fixed SELECT 1, and return structured status only. No SQL, arguments, or free text are accepted.",
         request: "New run request",
         approval: "Approved single-use authorization",
         choose: "Choose an available approval",
         none: "No approval is available. Approve an unused request first.",
-        submit: "Start synthetic run",
+        submit: "Start controlled run",
         submitting: "Submitting…",
         runs: "Run records",
         empty: "No run records yet.",
@@ -87,7 +87,7 @@ export function OperationsView({ language, sessionToken }: { language: Language;
         version: "Version",
         approvalVersion: "Approval version",
         states: { queued: "Queued", running: "Running", succeeded: "Succeeded", cancelled: "Cancelled", failed: "Interrupted" } satisfies Record<RunState, string>,
-        results: { synthetic_ok: "Synthetic check OK", cancelled: "Cancelled by user", service_restarted: "Interrupted by service restart", authorization_revoked: "Stopped because authorization or policy is no longer active" } as Record<string, string>,
+        results: { synthetic_ok: "Synthetic check OK", postgres_connection_ok: "PostgreSQL read-only connection check OK", postgres_connection_failed: "PostgreSQL connection or fixed probe failed", postgres_configuration_invalid: "PostgreSQL security configuration is invalid", credential_unavailable: "Credential is unavailable", timed_out: "Check timed out", cancelled: "Cancelled by user", service_restarted: "Interrupted by service restart", authorization_revoked: "Stopped because authorization or policy is no longer active" } as Record<string, string>,
       };
   const [runs, setRuns] = useState<SyntheticRun[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);

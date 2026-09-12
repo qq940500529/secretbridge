@@ -5,7 +5,7 @@ export interface ServiceStatus {
   product: string;
   api_version: string;
   release_stage: string;
-  mode: "synthetic_only" | "credential_configuration";
+  mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
   identity_boundary: "unverified_same_user";
   configuration_storage: ConfigurationStorage;
   paired: boolean;
@@ -22,7 +22,7 @@ export interface PairResponse {
 
 export interface SessionResponse {
   authenticated: boolean;
-  mode: "synthetic_only" | "credential_configuration";
+  mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
   expires_in_seconds: number;
 }
 
@@ -104,7 +104,8 @@ export interface CatalogListResponse<T> {
 
 export type ApprovalOperation =
   | "inspect_metadata"
-  | "synthetic_health_check";
+  | "synthetic_health_check"
+  | "postgres_connection_check";
 export type ApprovalResultScope = "status_only" | "metadata_summary";
 export type ApprovalState =
   | "pending"
@@ -170,25 +171,37 @@ export interface DecideApproval {
 }
 
 export interface ApprovalListResponse extends CatalogListResponse<Approval> {
-  execution_enabled: false;
+  execution_enabled: true;
 }
 
 export interface ActionTemplateListResponse
   extends CatalogListResponse<ActionTemplate> {
-  execution_enabled: false;
+  execution_enabled: true;
 }
 
 export type PolicyDecision = "eligible_for_approval" | "denied";
-export type PolicyReasonCode = "fixed_synthetic_scope" | "template_disabled";
+export type PolicyReasonCode =
+  | "fixed_synthetic_scope"
+  | "fixed_postgres_connection_check"
+  | "template_disabled"
+  | "target_incompatible"
+  | "postgres_configuration_missing"
+  | "credential_missing"
+  | "credential_not_configured"
+  | "credential_kind_unsupported"
+  | "result_scope_unsupported";
 export type PolicyRequirement =
   | "explicit_approval"
   | "no_parameters"
   | "single_use"
   | "synthetic_only"
-  | "transition_revalidation";
+  | "transition_revalidation"
+  | "tls_verify_full"
+  | "read_only_transaction"
+  | "structured_status_only";
 
 export interface PolicyEvaluation {
-  policy_version: "synthetic-policy-v1";
+  policy_version: "synthetic-policy-v1" | "postgres-readonly-policy-v1";
   decision: PolicyDecision;
   reason_codes: PolicyReasonCode[];
   requirements: PolicyRequirement[];
@@ -200,7 +213,7 @@ export interface PolicyEvaluation {
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
-  execution_mode: "synthetic_simulation";
+  execution_mode: "synthetic_simulation" | "controlled_postgres";
 }
 
 export type RunState =
@@ -221,6 +234,11 @@ export interface SyntheticRun {
   state: RunState;
   result_status:
     | "synthetic_ok"
+    | "postgres_connection_ok"
+    | "postgres_connection_failed"
+    | "postgres_configuration_invalid"
+    | "credential_unavailable"
+    | "timed_out"
     | "cancelled"
     | "service_restarted"
     | "authorization_revoked"
@@ -234,13 +252,13 @@ export interface SyntheticRun {
 
 export interface SyntheticRunListResponse {
   items: SyntheticRun[];
-  execution_mode: "synthetic_simulation";
+  execution_mode: "controlled_operations";
 }
 
 export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
-  execution_mode: "synthetic_simulation";
+  execution_mode: "synthetic_simulation" | "controlled_postgres";
 }
 
 export type SafeEventKind =
@@ -248,6 +266,7 @@ export type SafeEventKind =
   | "requested"
   | "started"
   | "succeeded"
+  | "failed"
   | "cancelled"
   | "interrupted";
 

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod postgres;
 mod secret_store;
 mod terminal;
 
@@ -13,7 +14,7 @@ use std::{
     fmt,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
@@ -38,16 +39,18 @@ use tokio::{
     task,
     time::{sleep, timeout},
 };
+use tokio_util::sync::CancellationToken;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
-    CreateTarget, CredentialKind, CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent,
-    SecretState, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
-    UpdateTarget,
+    CreateTarget, CredentialKind, CredentialReference, DecideApproval, PolicyEvaluation,
+    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
+    UpdateCredentialReference, UpdateTarget,
 };
+use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
 use terminal::{
     TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
@@ -69,6 +72,9 @@ pub struct AppState {
     catalog: Catalog,
     configuration_storage: ConfigurationStorage,
     credential_mutations: Arc<Mutex<()>>,
+    configuration_gate: Arc<RwLock<()>>,
+    postgres_executor: Arc<dyn PostgresExecutor>,
+    run_cancellations: RunCancellations,
     secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
 }
@@ -104,6 +110,7 @@ impl AppState {
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
+            default_postgres_executor(),
         )
     }
 
@@ -129,6 +136,7 @@ impl AppState {
             catalog,
             ConfigurationStorage::Sqlite,
             persistent_secret_store(),
+            default_postgres_executor(),
         ))
     }
 
@@ -144,6 +152,7 @@ impl AppState {
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
+            default_postgres_executor(),
         )
     }
 
@@ -153,6 +162,7 @@ impl AppState {
         catalog: Catalog,
         configuration_storage: ConfigurationStorage,
         secret_store: Arc<dyn SecretStore>,
+        postgres_executor: Arc<dyn PostgresExecutor>,
     ) -> (Self, String) {
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
@@ -164,6 +174,9 @@ impl AppState {
             catalog,
             configuration_storage,
             credential_mutations: Arc::new(Mutex::new(())),
+            configuration_gate: Arc::new(RwLock::new(())),
+            postgres_executor,
+            run_cancellations: RunCancellations::default(),
             secret_store,
             terminals: TerminalManager::new(program),
         };
@@ -209,6 +222,39 @@ impl AppState {
     }
 }
 
+#[derive(Clone, Default)]
+struct RunCancellations {
+    active: Arc<Mutex<HashMap<Uuid, (Uuid, CancellationToken)>>>,
+}
+
+impl RunCancellations {
+    async fn register(&self, run_id: Uuid, approval_id: Uuid, token: CancellationToken) {
+        self.active
+            .lock()
+            .await
+            .insert(run_id, (approval_id, token));
+    }
+
+    async fn cancel_run(&self, run_id: Uuid) {
+        if let Some((_, token)) = self.active.lock().await.get(&run_id) {
+            token.cancel();
+        }
+    }
+
+    async fn cancel_approval(&self, approval_id: Uuid) {
+        let active = self.active.lock().await;
+        for (registered_approval, token) in active.values() {
+            if *registered_approval == approval_id {
+                token.cancel();
+            }
+        }
+    }
+
+    async fn remove(&self, run_id: Uuid) {
+        self.active.lock().await.remove(&run_id);
+    }
+}
+
 fn persistent_secret_store() -> Arc<dyn SecretStore> {
     #[cfg(test)]
     {
@@ -218,6 +264,10 @@ fn persistent_secret_store() -> Arc<dyn SecretStore> {
     {
         Arc::new(secret_store::NativeSecretStore)
     }
+}
+
+fn default_postgres_executor() -> Arc<dyn PostgresExecutor> {
+    Arc::new(postgres::NativePostgresExecutor)
 }
 
 #[derive(Serialize)]
@@ -564,7 +614,7 @@ fn apply_security_headers(router: Router) -> Router {
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.active_session_count().await > 0;
-    Json(StatusResponse::credential_configuration(
+    Json(StatusResponse::controlled_operations(
         paired,
         state.configuration_storage,
     ))
@@ -605,7 +655,7 @@ async fn session(
         .ok_or(ApiError::Unauthorized)?;
     Ok(Json(SessionResponse {
         authenticated: true,
-        mode: "credential_configuration",
+        mode: "controlled_operations",
         expires_in_seconds,
     }))
 }
@@ -662,6 +712,7 @@ async fn update_credential_reference(
 ) -> Result<Json<CredentialReference>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
     let catalog = state.catalog.clone();
     let item = task::spawn_blocking(move || catalog.update_credential_reference(id, &request))
@@ -678,6 +729,7 @@ async fn delete_credential_reference(
 ) -> Result<StatusCode, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
     let lookup_catalog = state.catalog.clone();
     let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
@@ -728,6 +780,7 @@ async fn set_credential_secret(
     {
         return Err(ApiError::BadRequest);
     }
+    let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
     let lookup_catalog = state.catalog.clone();
     let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
@@ -781,6 +834,7 @@ async fn clear_credential_secret(
 ) -> Result<Json<CredentialReference>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
     let lookup_catalog = state.catalog.clone();
     let current = task::spawn_blocking(move || lookup_catalog.get_credential_reference(id))
@@ -871,6 +925,7 @@ async fn update_target(
 ) -> Result<Json<Target>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _configuration = state.configuration_gate.write().await;
     let catalog = state.catalog.clone();
     let target = task::spawn_blocking(move || catalog.update_target(id, &request))
         .await
@@ -907,7 +962,7 @@ async fn list_action_templates(
     Ok(Json(ActionTemplateListResponse {
         items,
         storage: state.configuration_storage,
-        execution_enabled: false,
+        execution_enabled: true,
     }))
 }
 
@@ -948,6 +1003,7 @@ async fn update_action_template(
 ) -> Result<Json<ActionTemplate>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let _configuration = state.configuration_gate.write().await;
     let catalog = state.catalog.clone();
     let template = task::spawn_blocking(move || catalog.update_action_template(id, &request))
         .await
@@ -984,7 +1040,7 @@ async fn list_approvals(
     Ok(Json(ApprovalListResponse {
         items,
         storage: state.configuration_storage,
-        execution_enabled: false,
+        execution_enabled: true,
     }))
 }
 
@@ -1055,6 +1111,9 @@ async fn transition_approval(
     .await
     .map_err(|_| ApiError::Internal)?
     .map_err(map_catalog_error)?;
+    if matches!(decision, ApprovalDecision::Revoke) {
+        state.run_cancellations.cancel_approval(approval.id).await;
+    }
     Ok(Json(approval))
 }
 
@@ -1070,7 +1129,7 @@ async fn list_synthetic_runs(
         .map_err(map_catalog_error)?;
     Ok(Json(SyntheticRunListResponse {
         items,
-        execution_mode: "synthetic_simulation",
+        execution_mode: "controlled_operations",
     }))
 }
 
@@ -1104,43 +1163,157 @@ async fn create_synthetic_run(
         StatusCode::OK
     } else {
         let run_id = outcome.run.id;
-        let catalog = state.catalog.clone();
-        tokio::spawn(drive_synthetic_run(catalog, run_id));
+        let approval_id = outcome.run.approval_id;
+        let cancellation = CancellationToken::new();
+        state
+            .run_cancellations
+            .register(run_id, approval_id, cancellation.clone())
+            .await;
+        let drive_state = state.clone();
+        tokio::spawn(async move {
+            drive_run(drive_state.clone(), run_id, cancellation).await;
+            drive_state.run_cancellations.remove(run_id).await;
+        });
         StatusCode::CREATED
     };
+    let execution_mode = run_execution_mode(outcome.run.operation);
     Ok((
         status,
         Json(CreateSyntheticRunResponse {
             run: outcome.run,
             replayed: outcome.replayed,
-            execution_mode: "synthetic_simulation",
+            execution_mode,
         }),
     ))
 }
 
-async fn drive_synthetic_run(catalog: Catalog, run_id: Uuid) {
-    sleep(Duration::from_millis(100)).await;
-    let start_catalog = catalog.clone();
-    let started = task::spawn_blocking(move || start_catalog.start_synthetic_run(run_id)).await;
-    match started {
-        Ok(Ok(_)) => {}
+const fn run_execution_mode(operation: catalog::ApprovalOperation) -> &'static str {
+    if matches!(
+        operation,
+        catalog::ApprovalOperation::PostgresConnectionCheck
+    ) {
+        "controlled_postgres"
+    } else {
+        "synthetic_simulation"
+    }
+}
+
+async fn drive_run(state: AppState, run_id: Uuid, cancellation: CancellationToken) {
+    tokio::select! {
+        () = cancellation.cancelled() => {
+            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+            return;
+        },
+        () = sleep(Duration::from_millis(100)) => {}
+    }
+    let start_catalog = state.catalog.clone();
+    let started = task::spawn_blocking(move || start_catalog.start_run(run_id)).await;
+    let started = match started {
+        Ok(Ok(run)) => run,
         Ok(Err(CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied)) => {
-            invalidate_synthetic_run(catalog, run_id).await;
+            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
             return;
         }
         _ => return,
+    };
+    if started.operation == catalog::ApprovalOperation::PostgresConnectionCheck {
+        drive_postgres_check(&state, run_id, &cancellation).await;
+    } else {
+        tokio::select! {
+            () = cancellation.cancelled() => {
+                invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+                return;
+            },
+            () = sleep(Duration::from_millis(750)) => {}
+        }
+        let complete_catalog = state.catalog.clone();
+        let completed =
+            task::spawn_blocking(move || complete_catalog.complete_synthetic_run(run_id)).await;
+        if matches!(
+            completed,
+            Ok(Err(
+                CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied
+            ))
+        ) {
+            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+        }
     }
-    sleep(Duration::from_millis(750)).await;
-    let complete_catalog = catalog.clone();
+}
+
+async fn drive_postgres_check(state: &AppState, run_id: Uuid, cancellation: &CancellationToken) {
+    let _configuration = state.configuration_gate.read().await;
+    let context_catalog = state.catalog.clone();
+    let context = task::spawn_blocking(move || context_catalog.run_execution_context(run_id)).await;
+    let context = match context {
+        Ok(Ok(context)) => context,
+        Ok(Err(CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied)) => {
+            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+            return;
+        }
+        _ => return,
+    };
+    let Some(postgres_target) = context.target.postgres.as_ref() else {
+        finish_postgres_check(state, run_id, PostgresRunResult::ConfigurationInvalid).await;
+        return;
+    };
+    let Some(credential) = context.credential.as_ref() else {
+        finish_postgres_check(state, run_id, PostgresRunResult::CredentialUnavailable).await;
+        return;
+    };
+    let credential_id = credential.id;
+    let store = state.secret_store.clone();
+    let password = task::spawn_blocking(move || store.get(credential_id)).await;
+    let Ok(Ok(password)) = password else {
+        finish_postgres_check(state, run_id, PostgresRunResult::CredentialUnavailable).await;
+        return;
+    };
+    let now_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let approval_remaining = Duration::from_millis(
+        context
+            .approval
+            .expires_at_unix_ms
+            .saturating_sub(now_unix_ms),
+    );
+    let operation_timeout = Duration::from_secs(context.template.timeout_seconds);
+    let effective_timeout = operation_timeout.min(approval_remaining);
+    if effective_timeout.is_zero() {
+        invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+        return;
+    }
+    let check = state
+        .postgres_executor
+        .connection_check(postgres_target, &password);
+    let result = tokio::select! {
+        () = cancellation.cancelled() => {
+            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
+            return;
+        },
+        result = timeout(effective_timeout, check) => match result {
+            Ok(PostgresCheckOutcome::ConnectionOk) => PostgresRunResult::ConnectionOk,
+            Ok(PostgresCheckOutcome::ConnectionFailed) => PostgresRunResult::ConnectionFailed,
+            Ok(PostgresCheckOutcome::ConfigurationInvalid) => PostgresRunResult::ConfigurationInvalid,
+            Err(_) => PostgresRunResult::TimedOut,
+        }
+    };
+    finish_postgres_check(state, run_id, result).await;
+}
+
+async fn finish_postgres_check(state: &AppState, run_id: Uuid, result: PostgresRunResult) {
+    let complete_catalog = state.catalog.clone();
     let completed =
-        task::spawn_blocking(move || complete_catalog.complete_synthetic_run(run_id)).await;
+        task::spawn_blocking(move || complete_catalog.complete_postgres_run(run_id, result)).await;
     if matches!(
         completed,
         Ok(Err(
             CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied
         ))
     ) {
-        invalidate_synthetic_run(catalog, run_id).await;
+        invalidate_synthetic_run(state.catalog.clone(), run_id).await;
     }
 }
 
@@ -1161,6 +1334,7 @@ async fn cancel_synthetic_run(
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
+    state.run_cancellations.cancel_run(id).await;
     Ok(Json(run))
 }
 
@@ -1652,7 +1826,7 @@ fn new_token() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, sync::Arc};
 
     use axum::{
         body::Body,
@@ -1672,6 +1846,20 @@ mod tests {
         (router(state), bootstrap)
     }
 
+    fn postgres_test_app() -> (axum::Router, String) {
+        let (mut state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+        state.postgres_executor = Arc::new(crate::postgres::TestPostgresExecutor::succeeding());
+        (router(state), bootstrap)
+    }
+
+    fn delayed_postgres_test_app() -> (axum::Router, String) {
+        let (mut state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+        state.postgres_executor = Arc::new(crate::postgres::TestPostgresExecutor::delayed(
+            std::time::Duration::from_secs(30),
+        ));
+        (router(state), bootstrap)
+    }
+
     #[test]
     fn persistent_state_reports_sqlite_storage() {
         let path = std::env::temp_dir().join(format!(
@@ -1687,7 +1875,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_exposes_credential_configuration_without_claiming_execution() {
+    async fn status_exposes_controlled_operations_and_unverified_identity() {
         let (app, _) = test_app();
         let response = app
             .oneshot(
@@ -1706,7 +1894,7 @@ mod tests {
             .expect("response body")
             .to_bytes();
         let status: serde_json::Value = serde_json::from_slice(&bytes).expect("status JSON");
-        assert_eq!(status["mode"], "credential_configuration");
+        assert_eq!(status["mode"], "controlled_operations");
         assert_eq!(status["identity_boundary"], "unverified_same_user");
         assert_eq!(status["configuration_storage"], "memory_only");
         assert_eq!(status["real_credentials_enabled"], true);
@@ -2271,7 +2459,7 @@ mod tests {
             .await
             .expect("router response");
         let list = response_json(list).await;
-        assert_eq!(list["execution_enabled"], false);
+        assert_eq!(list["execution_enabled"], true);
         assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
     }
 
@@ -2378,6 +2566,114 @@ mod tests {
             .expect("router response");
         assert_eq!(consumed.status(), StatusCode::CONFLICT);
         assert_eq!(response_json(consumed).await["code"], "approval_consumed");
+    }
+
+    #[tokio::test]
+    async fn postgres_connection_check_uses_write_only_secret_and_safe_results() {
+        let (app, bootstrap) = postgres_test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let (approval_id, secret) = create_test_approved_postgres_approval(&app, &token).await;
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &serde_json::json!({
+                    "approval_id": approval_id,
+                    "idempotency_key": "postgres-integration-001"
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created = response_json(created).await;
+        assert_eq!(created["execution_mode"], "controlled_postgres");
+        let run_id = created["run"]["id"].as_str().expect("run id");
+
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let completed = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let completed = response_json(completed).await;
+        assert_eq!(completed["state"], "succeeded");
+        assert_eq!(completed["result_status"], "postgres_connection_ok");
+
+        let events = app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}/events"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let events = response_json(events).await;
+        assert_eq!(events["payload_policy"], "fixed_safe_messages_only");
+        assert_eq!(events["items"].as_array().map(Vec::len), Some(3));
+        assert!(!events.to_string().contains(secret));
+    }
+
+    #[tokio::test]
+    async fn postgres_connection_check_cancels_an_in_flight_executor() {
+        let (app, bootstrap) = delayed_postgres_test_app();
+        let token = pair_test_session(&app, &bootstrap).await;
+        let (approval_id, _) = create_test_approved_postgres_approval(&app, &token).await;
+        let created = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/runs",
+                &token,
+                ORIGIN,
+                &serde_json::json!({
+                    "approval_id": approval_id,
+                    "idempotency_key": "postgres-cancel-001"
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("router response");
+        let created = response_json(created).await;
+        let run_id = created["run"]["id"].as_str().expect("run id");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let running = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/runs/{run_id}"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let running = response_json(running).await;
+        assert_eq!(running["state"], "running");
+        let cancelled = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/runs/{run_id}/cancel"),
+                &token,
+                ORIGIN,
+                &serde_json::json!({"expected_version": running["version"]}).to_string(),
+            ))
+            .await
+            .expect("router response");
+        let cancelled = response_json(cancelled).await;
+        assert_eq!(cancelled["state"], "cancelled");
+        assert_eq!(cancelled["result_status"], "cancelled");
     }
 
     #[tokio::test]
@@ -2574,6 +2870,133 @@ mod tests {
             .expect("router response");
         assert_eq!(approved.status(), StatusCode::OK);
         id
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the helper provisions every boundary required by the integration tests"
+    )]
+    async fn create_test_approved_postgres_approval(
+        app: &axum::Router,
+        token: &str,
+    ) -> (String, &'static str) {
+        let credential = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/credential-references",
+                token,
+                ORIGIN,
+                r#"{"name":"PostgreSQL reader","kind":"password","purpose":"Connection check"}"#,
+            ))
+            .await
+            .expect("router response");
+        let credential = response_json(credential).await;
+        let credential_id = credential["id"].as_str().expect("credential id");
+        let secret = "integration-only-postgres-password";
+        let stored = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "PUT",
+                &format!("/api/v1/credential-references/{credential_id}/secret"),
+                token,
+                ORIGIN,
+                &serde_json::json!({"secret": secret, "expected_version": 1}).to_string(),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(stored.status(), StatusCode::OK);
+
+        let target = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/targets",
+                token,
+                ORIGIN,
+                &serde_json::json!({
+                    "name": "PostgreSQL integration target",
+                    "kind": "database",
+                    "environment": "test",
+                    "credential_reference_id": credential_id,
+                    "postgres": {
+                        "host": "db.example.invalid",
+                        "port": 5432,
+                        "database": "secretbridge_test",
+                        "username": "secretbridge_reader",
+                        "tls_mode": "verify_full"
+                    }
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("router response");
+        let target = response_json(target).await;
+        let template = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/action-templates",
+                token,
+                ORIGIN,
+                &serde_json::json!({
+                    "target_id": target["id"],
+                    "name": "PostgreSQL fixed connection check",
+                    "operation": "postgres_connection_check",
+                    "result_scope": "status_only",
+                    "timeout_seconds": 5
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("router response");
+        let template = response_json(template).await;
+        let template_id = template["id"].as_str().expect("template id");
+        let evaluation = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/action-templates/{template_id}/policy-evaluation"),
+                token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let evaluation = response_json(evaluation).await;
+        assert_eq!(evaluation["decision"], "eligible_for_approval");
+        assert_eq!(evaluation["policy_version"], "postgres-readonly-policy-v1");
+        assert_eq!(evaluation["execution_mode"], "controlled_postgres");
+        let approval = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/approvals",
+                token,
+                ORIGIN,
+                &serde_json::json!({
+                    "action_template_id": template_id,
+                    "reason": "Verify the fixed read-only adapter",
+                    "expires_in_seconds": 300
+                })
+                .to_string(),
+            ))
+            .await
+            .expect("router response");
+        let approval = response_json(approval).await;
+        let approval_id = approval["id"].as_str().expect("approval id").to_owned();
+        let approved = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                &format!("/api/v1/approvals/{approval_id}/approve"),
+                token,
+                ORIGIN,
+                r#"{"expected_version":1,"note":"Fixed scope reviewed"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(approved.status(), StatusCode::OK);
+        (approval_id, secret)
     }
 
     async fn response_json(response: axum::response::Response) -> serde_json::Value {
