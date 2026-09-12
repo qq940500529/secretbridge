@@ -13,7 +13,9 @@ publish = false
 axum.workspace = true
 keyring.workspace = true
 portable-pty.workspace = true
+rmcp.workspace = true
 rusqlite.workspace = true
+schemars.workspace = true
 rustls-tokio-postgres.workspace = true
 secretbridge-core = { path = "../secretbridge-core" }
 serde.workspace = true
@@ -33,6 +35,7 @@ zeroize.workspace = true
 [dev-dependencies]
 futures-util.workspace = true
 http-body-util.workspace = true
+rmcp = { workspace = true, features = ["client"] }
 tokio-tungstenite.workspace = true
 tower.workspace = true
 

@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.13 · bounded MCP stdio tools
+
+- Add an MCP stdio server using the official Rust SDK, started with `--mcp-stdio` alongside the local Web console in one SecretBridge process.
+- Expose eight fixed tools for template discovery, policy evaluation, approval request/status, approved run creation/status/cancellation and fixed safe events.
+- Keep approval decisions in the trusted Web console and omit secret access, target addresses, template descriptions, approval notes, SQL, shell commands, connection strings, operation parameters, raw adapter errors and business rows from the MCP surface.
+- Reuse the existing policy, expiry, single-use approval, idempotency, transition revalidation, cancellation and database-enforced safe-event boundaries instead of introducing a parallel execution path.
+- Reserve MCP stdout for JSON-RPC, route diagnostics to stderr, reject undocumented startup arguments and document the current same-process lifecycle limitation.
+- Add protocol-level tests that assert the exact tool and input schema surface, block execution before human approval, start and cancel an approved synthetic run, and verify sensitive markers do not cross the MCP result boundary.
+- Lock `rmcp` 3.3.0 and `schemars` 1.2.2 and record their Apache-2.0/MIT obligations and transitive dependency review status.
+
 ### 0.1.0-alpha.12 · controlled PostgreSQL connection check
 
 - Add the first credential-bearing adapter: a fixed PostgreSQL `SELECT 1` connection check using the native protocol, a read-only serializable transaction and mandatory certificate/hostname verification.

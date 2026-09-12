@@ -13,8 +13,9 @@ use std::{
     time::Duration,
 };
 
-use secretbridge_server::{AppState, router_with_web};
+use secretbridge_server::{AppState, router_with_web, serve_mcp_stdio};
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -24,15 +25,21 @@ const MAX_SYNTHETIC_WAIT_MILLIS: usize = 30_000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if env::args_os().nth(1).as_deref() == Some(OsStr::new("--synthetic-terminal-child")) {
+    let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == OsStr::new("--synthetic-terminal-child"))
+    {
         return run_synthetic_terminal();
     }
+    let startup_mode = parse_startup_mode(&arguments)?;
 
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new("secretbridge_server=info")),
         )
+        .with_writer(io::stderr)
         .with_target(false)
         .init();
 
@@ -59,16 +66,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (state, bootstrap_token) = AppState::new_persistent(trusted_origins, &database_path)?;
     let web_root =
         env::var_os("SECRETBRIDGE_WEB_ROOT").map_or_else(default_web_root, PathBuf::from);
-    let app = router_with_web(state, web_root);
+    let app = router_with_web(state.clone(), web_root);
 
     let pairing_url = format!("{origin}/#pair={bootstrap_token}");
     webbrowser::open(&pairing_url)
         .map_err(|error| format!("failed to open the pairing URL: {error}"))?;
-    info!(%address, mode = "controlled_operations", "SecretBridge local service started");
+    match startup_mode {
+        StartupMode::Web => {
+            info!(%address, mode = "controlled_operations", "SecretBridge local service started");
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+        }
+        StartupMode::McpStdio => {
+            info!(%address, mode = "mcp_stdio", "SecretBridge local service started");
+            run_mcp_stdio_service(listener, app, state).await?;
+        }
+    }
+    Ok(())
+}
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupMode {
+    Web,
+    McpStdio,
+}
+
+fn parse_startup_mode(arguments: &[impl AsRef<OsStr>]) -> Result<StartupMode, &'static str> {
+    match arguments {
+        [] => Ok(StartupMode::Web),
+        [argument] if argument.as_ref() == OsStr::new("--mcp-stdio") => Ok(StartupMode::McpStdio),
+        _ => Err("usage: secretbridge-server [--mcp-stdio]"),
+    }
+}
+
+async fn run_mcp_stdio_service(
+    listener: TcpListener,
+    app: axum::Router,
+    state: AppState,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cancellation = CancellationToken::new();
+    let http_cancellation = cancellation.clone();
+    let http_service = async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(http_cancellation.cancelled_owned())
+            .await
+    };
+    let mcp_service = serve_mcp_stdio(state);
+    tokio::pin!(http_service);
+    tokio::pin!(mcp_service);
+
+    tokio::select! {
+        result = &mut mcp_service => {
+            cancellation.cancel();
+            result.map_err(|error| -> Box<dyn std::error::Error> { error })?;
+            http_service.await?;
+        }
+        result = &mut http_service => {
+            result?;
+        }
+        () = shutdown_signal() => {
+            cancellation.cancel();
+            http_service.await?;
+        }
+    }
     Ok(())
 }
 
@@ -245,7 +306,23 @@ fn require_loopback(address: SocketAddr) -> Result<SocketAddr, &'static str> {
 mod tests {
     use std::{ffi::OsStr, net::SocketAddr};
 
-    use super::{bounded_argument, require_loopback, resolve_data_directory};
+    use super::{
+        StartupMode, bounded_argument, parse_startup_mode, require_loopback, resolve_data_directory,
+    };
+
+    #[test]
+    fn startup_mode_accepts_only_the_documented_forms() {
+        let no_arguments: [&OsStr; 0] = [];
+        assert_eq!(parse_startup_mode(&no_arguments), Ok(StartupMode::Web));
+        assert_eq!(
+            parse_startup_mode(&[OsStr::new("--mcp-stdio")]),
+            Ok(StartupMode::McpStdio)
+        );
+        assert!(parse_startup_mode(&[OsStr::new("--unknown")]).is_err());
+        assert!(
+            parse_startup_mode(&[OsStr::new("--mcp-stdio"), OsStr::new("unexpected")]).is_err()
+        );
+    }
 
     #[test]
     fn loopback_bind_addresses_are_allowed() {

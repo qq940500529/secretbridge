@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod mcp;
 mod postgres;
 mod secret_store;
 mod terminal;
@@ -45,10 +46,10 @@ use uuid::Uuid;
 
 use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
-    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
-    CreateTarget, CredentialKind, CredentialReference, DecideApproval, PolicyEvaluation,
-    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
-    UpdateCredentialReference, UpdateTarget,
+    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
+    CreateSyntheticRun, CreateTarget, CredentialKind, CredentialReference, DecideApproval,
+    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target,
+    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
@@ -1154,14 +1155,34 @@ async fn create_synthetic_run(
 ) -> Result<(StatusCode, Json<CreateSyntheticRunResponse>), ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let outcome = task::spawn_blocking(move || catalog.create_synthetic_run(&request))
+    let outcome = create_run_for_state(&state, request)
         .await
-        .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
     let status = if outcome.replayed {
         StatusCode::OK
     } else {
+        StatusCode::CREATED
+    };
+    let execution_mode = run_execution_mode(outcome.run.operation);
+    Ok((
+        status,
+        Json(CreateSyntheticRunResponse {
+            run: outcome.run,
+            replayed: outcome.replayed,
+            execution_mode,
+        }),
+    ))
+}
+
+async fn create_run_for_state(
+    state: &AppState,
+    request: CreateSyntheticRun,
+) -> Result<CreateRunOutcome, CatalogError> {
+    let catalog = state.catalog.clone();
+    let outcome = task::spawn_blocking(move || catalog.create_synthetic_run(&request))
+        .await
+        .map_err(|_| CatalogError::Storage)??;
+    if !outcome.replayed {
         let run_id = outcome.run.id;
         let approval_id = outcome.run.approval_id;
         let cancellation = CancellationToken::new();
@@ -1174,17 +1195,8 @@ async fn create_synthetic_run(
             drive_run(drive_state.clone(), run_id, cancellation).await;
             drive_state.run_cancellations.remove(run_id).await;
         });
-        StatusCode::CREATED
-    };
-    let execution_mode = run_execution_mode(outcome.run.operation);
-    Ok((
-        status,
-        Json(CreateSyntheticRunResponse {
-            run: outcome.run,
-            replayed: outcome.replayed,
-            execution_mode,
-        }),
-    ))
+    }
+    Ok(outcome)
 }
 
 const fn run_execution_mode(operation: catalog::ApprovalOperation) -> &'static str {
@@ -1329,13 +1341,33 @@ async fn cancel_synthetic_run(
 ) -> Result<Json<SyntheticRun>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let run = cancel_run_for_state(&state, id, request)
+        .await
+        .map_err(map_catalog_error)?;
+    Ok(Json(run))
+}
+
+async fn cancel_run_for_state(
+    state: &AppState,
+    id: Uuid,
+    request: CancelSyntheticRun,
+) -> Result<SyntheticRun, CatalogError> {
     let catalog = state.catalog.clone();
     let run = task::spawn_blocking(move || catalog.cancel_synthetic_run(id, &request))
         .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
+        .map_err(|_| CatalogError::Storage)??;
     state.run_cancellations.cancel_run(id).await;
-    Ok(Json(run))
+    Ok(run)
+}
+
+/// Serves the bounded MCP tool surface over the process standard streams.
+///
+/// # Errors
+///
+/// Returns an error when the stdio transport cannot initialize or the MCP service terminates with
+/// a protocol or I/O failure.
+pub async fn serve_mcp_stdio(state: AppState) -> Result<(), Box<dyn Error + Send + Sync>> {
+    mcp::serve_stdio(state).await
 }
 
 async fn list_run_safe_events(

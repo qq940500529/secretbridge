@@ -10,6 +10,7 @@ use std::{
 };
 
 use rusqlite::{Connection, OptionalExtension, params};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -236,12 +237,12 @@ pub struct Target {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTarget {
-    name: String,
-    kind: TargetKind,
-    environment: TargetEnvironment,
-    description: Option<String>,
-    credential_reference_id: Option<Uuid>,
-    postgres: Option<PostgresTargetConfig>,
+    pub(crate) name: String,
+    pub(crate) kind: TargetKind,
+    pub(crate) environment: TargetEnvironment,
+    pub(crate) description: Option<String>,
+    pub(crate) credential_reference_id: Option<Uuid>,
+    pub(crate) postgres: Option<PostgresTargetConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -256,7 +257,7 @@ pub struct UpdateTarget {
     expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalOperation {
     InspectMetadata,
@@ -283,7 +284,7 @@ impl ApprovalOperation {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalResultScope {
     StatusOnly,
@@ -307,7 +308,7 @@ impl ApprovalResultScope {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalState {
     Pending,
@@ -335,12 +336,12 @@ pub struct ActionTemplate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateActionTemplate {
-    target_id: Uuid,
-    name: String,
-    operation: ApprovalOperation,
-    result_scope: ApprovalResultScope,
-    description: Option<String>,
-    timeout_seconds: u64,
+    pub(crate) target_id: Uuid,
+    pub(crate) name: String,
+    pub(crate) operation: ApprovalOperation,
+    pub(crate) result_scope: ApprovalResultScope,
+    pub(crate) description: Option<String>,
+    pub(crate) timeout_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -356,14 +357,14 @@ pub struct UpdateActionTemplate {
     expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecision {
     EligibleForApproval,
     Denied,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyReasonCode {
     FixedSyntheticScope,
@@ -377,7 +378,7 @@ pub enum PolicyReasonCode {
     ResultScopeUnsupported,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRequirement {
     ExplicitApproval,
@@ -451,19 +452,19 @@ pub struct Approval {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateApproval {
-    action_template_id: Uuid,
-    reason: Option<String>,
-    expires_in_seconds: u64,
+    pub(crate) action_template_id: Uuid,
+    pub(crate) reason: Option<String>,
+    pub(crate) expires_in_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DecideApproval {
-    expected_version: u64,
-    note: Option<String>,
+    pub(crate) expected_version: u64,
+    pub(crate) note: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
@@ -517,17 +518,17 @@ pub struct SyntheticRun {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSyntheticRun {
-    approval_id: Uuid,
-    idempotency_key: String,
+    pub(crate) approval_id: Uuid,
+    pub(crate) idempotency_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CancelSyntheticRun {
-    expected_version: u64,
+    pub(crate) expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SafeEventKind {
     AuthorizationRevoked,
@@ -1267,6 +1268,12 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| CatalogError::Storage)
+    }
+
+    pub fn get_approval(&self, id: Uuid) -> Result<Approval, CatalogError> {
+        let connection = self.lock();
+        expire_approvals(&connection, now_unix_ms_i64()?)?;
+        approval_by_id(&connection, id)?.ok_or(CatalogError::NotFound)
     }
 
     pub fn create_approval(&self, request: &CreateApproval) -> Result<Approval, CatalogError> {

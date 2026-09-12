@@ -1,7 +1,7 @@
 {
   "name": "@secretbridge/web",
   "private": true,
-  "version": "0.1.0-alpha.12",
+  "version": "0.1.0-alpha.13",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "scripts": {
