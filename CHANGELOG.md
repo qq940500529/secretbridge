@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.14 · detached MCP bridge
+
+- Split the long-lived Web broker from the lightweight `--mcp-stdio` bridge so an MCP disconnect no longer stops the console, controlled runs or persistent terminal sessions.
+- Publish an ephemeral, versioned connection document in the private application-data directory; store a random bridge bearer token only in that runtime file and its digest in broker memory, never in SQLite, command arguments or environment variables.
+- Restrict the private bridge to exact loopback endpoints for the existing eight fixed tools, disable proxies and redirects, require a valid token and cap response bodies at 512 KiB.
+- Reload the connection document before every MCP request so one bridge process can reconnect after broker address and token rotation without replaying an operation automatically.
+- Remove the bridge document on orderly broker shutdown only when it still belongs to that broker instance, and reject symlinks, non-loopback addresses, malformed tokens and oversized documents.
+- Add lifecycle tests for invalid authentication, MCP disconnect, broker survival and broker replacement; retain the explicit `unverified_same_user` posture because a bearer file and loopback transport are not OS identity isolation.
+- Lock Reqwest 0.13.5 with default features disabled and only JSON support for the private HTTP client; record its MIT-or-Apache-2.0 license and transitive dependency impact.
+
 ### 0.1.0-alpha.13 · bounded MCP stdio tools
 
 - Add an MCP stdio server using the official Rust SDK, started with `--mcp-stdio` alongside the local Web console in one SecretBridge process.

@@ -308,7 +308,7 @@ impl ApprovalResultScope {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalState {
     Pending,
@@ -357,14 +357,14 @@ pub struct UpdateActionTemplate {
     expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyDecision {
     EligibleForApproval,
     Denied,
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyReasonCode {
     FixedSyntheticScope,
@@ -378,7 +378,7 @@ pub enum PolicyReasonCode {
     ResultScopeUnsupported,
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRequirement {
     ExplicitApproval,
@@ -464,7 +464,7 @@ pub struct DecideApproval {
     pub(crate) note: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
     Queued,
@@ -528,7 +528,7 @@ pub struct CancelSyntheticRun {
     pub(crate) expected_version: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SafeEventKind {
     AuthorizationRevoked,

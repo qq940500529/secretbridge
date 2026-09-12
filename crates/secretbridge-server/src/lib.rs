@@ -67,6 +67,7 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 8 * 1024;
 #[derive(Clone)]
 pub struct AppState {
     bootstrap_token: Arc<RwLock<Option<[u8; 32]>>>,
+    mcp_bridge_token: Arc<RwLock<Option<[u8; 32]>>>,
     session_tokens: Arc<RwLock<HashMap<[u8; 32], Instant>>>,
     session_revocations: broadcast::Sender<[u8; 32]>,
     trusted_origins: Arc<HashSet<String>>,
@@ -169,6 +170,7 @@ impl AppState {
         let (session_revocations, _) = broadcast::channel(64);
         let state = Self {
             bootstrap_token: Arc::new(RwLock::new(Some(token_digest(&bootstrap_token)))),
+            mcp_bridge_token: Arc::new(RwLock::new(None)),
             session_tokens: Arc::new(RwLock::new(HashMap::new())),
             session_revocations,
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
@@ -182,6 +184,11 @@ impl AppState {
             terminals: TerminalManager::new(program),
         };
         (state, bootstrap_token)
+    }
+
+    /// Installs or rotates the bearer token accepted by the private MCP bridge routes.
+    pub async fn install_mcp_bridge_token(&self, token: &str) {
+        *self.mcp_bridge_token.write().await = Some(token_digest(token));
     }
 
     async fn issue_session(&self) -> (String, u64) {
@@ -528,6 +535,7 @@ pub fn router_with_web(state: AppState, web_root: impl AsRef<Path>) -> Router {
 
 fn api_router(state: AppState) -> Router {
     Router::new()
+        .merge(mcp::bridge_routes())
         .route("/api/v1/status", get(status))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session", get(session).delete(revoke_session))
@@ -1360,14 +1368,16 @@ async fn cancel_run_for_state(
     Ok(run)
 }
 
-/// Serves the bounded MCP tool surface over the process standard streams.
+/// Serves the bounded MCP tool surface over stdio by connecting to a running local broker.
 ///
 /// # Errors
 ///
-/// Returns an error when the stdio transport cannot initialize or the MCP service terminates with
-/// a protocol or I/O failure.
-pub async fn serve_mcp_stdio(state: AppState) -> Result<(), Box<dyn Error + Send + Sync>> {
-    mcp::serve_stdio(state).await
+/// Returns an error when the authenticated broker connection or stdio transport cannot initialize,
+/// or when the MCP service terminates with a protocol or I/O failure.
+pub async fn serve_mcp_stdio_bridge(
+    connection_file: PathBuf,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    mcp::serve_stdio_bridge(connection_file).await
 }
 
 async fn list_run_safe_events(

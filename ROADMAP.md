@@ -66,7 +66,8 @@ A later milestone may be developed in synthetic mode, but cannot enable security
 - [x] Implement one scoped database adapter with least-privilege access.
   - `0.1.0-alpha.12` provides a fixed PostgreSQL `SELECT 1` check with native protocol TLS verification, a read-only serializable transaction and status-only output. Least-privilege grants and behavior against an authorized real test database remain M3 evidence.
 - [x] Implement MCP request, status, cancellation and safe-event tools.
-  - `0.1.0-alpha.13` adds eight fixed stdio tools for template discovery, policy evaluation, approval request/status, approved run creation/status/cancellation and database-enforced safe events. Approval decisions, secret access, target addresses, SQL, shell input and raw adapter output are absent. The current MCP host owns the same process as the Web console; attaching to an independently running broker remains future lifecycle work.
+  - `0.1.0-alpha.13` adds eight fixed stdio tools for template discovery, policy evaluation, approval request/status, approved run creation/status/cancellation and database-enforced safe events. Approval decisions, secret access, target addresses, SQL, shell input and raw adapter output are absent.
+  - `0.1.0-alpha.14` moves stdio into a lightweight bridge attached to the independently running Web broker. A bridge disconnect no longer owns broker or terminal lifetime, and the bridge reloads its private connection document after broker restart. Verified OS identity IPC remains an M0/M3 security gate; authenticated loopback is only a same-user compatibility transport.
 - [x] Validate idempotency and unknown-result handling.
   - One approval maps to at most one run, idempotency keys are digested, timeout/failure/restart become explicit bounded states, and active runs are never silently replayed.
 - [x] Reject arbitrary credentialed shell input and output bypasses.
