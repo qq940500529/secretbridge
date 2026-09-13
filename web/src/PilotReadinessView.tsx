@@ -53,7 +53,6 @@ export function PilotReadinessView({
   const zh = language === "zh-CN";
   const text = zh
     ? {
-        eyebrow: "M3 · 安全试点准入",
         title: "把“能运行”与“允许试点”分开证明",
         subtitle:
           "汇总测试目标、凭据状态、受控模板和最近安全自检，生成不可静默篡改的准入快照。快照不读取秘密、不连接远端，也不代替业务授权或独立评审。",
@@ -89,7 +88,6 @@ export function PilotReadinessView({
         json: "下载 JSON",
       }
     : {
-        eyebrow: "M3 · Security pilot readiness",
         title: "Prove that runnable is not the same as authorized",
         subtitle:
           "Aggregate test targets, credential state, controlled templates and the latest security validation into a tamper-evident readiness snapshot. No secret is read and no remote target is contacted.",
@@ -202,46 +200,45 @@ export function PilotReadinessView({
     <section className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div className="max-w-3xl">
-          <p className="m-0 text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">{text.eyebrow}</p>
-          <h1 className="mb-0 mt-2 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
+          <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
           <p className="mb-0 mt-3 text-sm leading-6 text-slate-600">{text.subtitle}</p>
         </div>
-        <button type="button" onClick={() => void createSnapshot()} disabled={creating} className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-cyan-800 disabled:cursor-wait disabled:opacity-70">
+        <button type="button" onClick={() => void createSnapshot()} disabled={creating} className="inline-flex h-11 items-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-wait disabled:opacity-70">
           {creating ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
           {creating ? text.creating : text.create}
         </button>
       </header>
 
-      <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+      <div className="flex gap-3 border-l-4 border-amber-400 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-950">
         <ShieldQuestion className="mt-0.5 size-5 shrink-0" />
         <div><strong>{text.disclosureTitle}</strong><p className="mb-0 mt-1">{text.disclosure}</p></div>
       </div>
-      {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+      {error && <p role="alert" className="border-l-4 border-rose-400 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
 
       <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className="enterprise-surface p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="m-0 inline-flex items-center gap-2 text-sm font-semibold text-slate-900"><History className="size-4" />{text.history}</h2>
             <button type="button" onClick={() => void refresh()} aria-label={text.refresh} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-cyan-700"><RefreshCw className="size-4" /></button>
           </div>
-          {loading ? <LoaderCircle className="mx-auto my-10 size-6 animate-spin text-cyan-600" /> : items.length === 0 ? <p className="my-8 text-center text-sm leading-6 text-slate-500">{text.empty}</p> : <ol className="m-0 space-y-2 p-0">{items.map((item) => <li key={item.id} className="list-none"><button type="button" onClick={() => setSelectedId(item.id)} className={`w-full rounded-xl border p-3 text-left transition ${selected?.id === item.id ? "border-cyan-300 bg-cyan-50" : "border-transparent bg-slate-50 hover:border-slate-200"}`}><div className="flex items-center justify-between gap-2"><ReadinessBadge status={item.status} text={text} /><time className="text-[11px] text-slate-400">{new Intl.DateTimeFormat(language, { dateStyle: "short", timeStyle: "short" }).format(item.created_at_unix_ms)}</time></div><p className="mb-0 mt-2 truncate font-mono text-[11px] text-slate-500">{item.id}</p></button></li>)}</ol>}
+          {loading ? <LoaderCircle className="mx-auto my-10 size-6 animate-spin text-cyan-600" /> : items.length === 0 ? <p className="my-8 text-center text-sm leading-6 text-slate-500">{text.empty}</p> : <ol className="m-0 divide-y divide-slate-200 border-y border-slate-200 p-0">{items.map((item) => <li key={item.id} className="list-none"><button type="button" onClick={() => setSelectedId(item.id)} className={`w-full border-l-2 px-3 py-3 text-left transition ${selected?.id === item.id ? "border-cyan-500 bg-cyan-50" : "border-transparent hover:bg-slate-50"}`}><div className="flex items-center justify-between gap-2"><ReadinessBadge status={item.status} text={text} /><time className="text-[11px] text-slate-400">{new Intl.DateTimeFormat(language, { dateStyle: "short", timeStyle: "short" }).format(item.created_at_unix_ms)}</time></div><p className="mb-0 mt-2 truncate font-mono text-[11px] text-slate-500">{item.id}</p></button></li>)}</ol>}
         </aside>
-        {selected ? <ReadinessDetail snapshot={selected} language={language} text={text} onDownload={download} /> : <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500"><div><ClipboardList className="mx-auto mb-4 size-9 text-slate-300" />{text.empty}</div></div>}
+        {selected ? <ReadinessDetail snapshot={selected} language={language} text={text} onDownload={download} /> : <div className="grid min-h-80 place-items-center border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500"><div><ClipboardList className="mx-auto mb-4 size-9 text-slate-300" />{text.empty}</div></div>}
       </div>
     </section>
   );
 }
 
 function ReadinessDetail({ snapshot, language, text, onDownload }: { snapshot: PilotReadinessSnapshot; language: Language; text: Record<string, string>; onDownload: (format: "markdown" | "json") => Promise<void> }) {
-  return <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-    <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 via-slate-900 to-cyan-950 p-6 text-white">
+  return <article className="enterprise-surface">
+    <div className="border-b border-slate-200 bg-slate-950 p-6 text-white">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><ReadinessBadge status={snapshot.status} text={text} inverse /><h2 className="mb-0 mt-3 text-xl font-semibold">{snapshot.checks.length} {text.checks}</h2><p className="mb-0 mt-2 font-mono text-xs text-slate-400">{snapshot.id}</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void onDownload("markdown")} className={downloadClass}><Download className="size-4" />{text.markdown}</button><button type="button" onClick={() => void onDownload("json")} className={downloadClass}><FileJson2 className="size-4" />{text.json}</button></div></div>
       <div className="mt-6 grid gap-3 sm:grid-cols-2"><Metric icon={Database} label={text.candidate} value={snapshot.candidate_test_targets} /><Metric icon={CheckCircle2} label={text.eligible} value={snapshot.eligible_test_targets} /></div>
       <dl className="mt-5 grid gap-3 text-xs sm:grid-cols-3"><Datum label={text.latestValidation} value={snapshot.latest_validation_id ?? text.noValidation} /><Datum label={text.profile} value={snapshot.profile_version} /><Datum label={text.platform} value={snapshot.platform} /></dl>
     </div>
     <div className="p-6">
-      <div className={`mb-5 rounded-xl border p-4 ${snapshot.digest_verified ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}><div className={`flex items-center gap-2 text-sm font-semibold ${snapshot.digest_verified ? "text-emerald-800" : "text-rose-800"}`}><Fingerprint className="size-4" />{text.digest} · {snapshot.digest_verified ? text.verified : text.mismatch}</div><p className="mb-0 mt-2 break-all font-mono text-[11px] leading-5 text-slate-600">{snapshot.evidence_digest_sha256}</p></div>
-      <ol className="m-0 space-y-3 p-0">{snapshot.checks.map((check) => <CheckCard key={check.code} check={check} language={language} text={text} />)}</ol>
+      <div className={`mb-5 border-l-4 p-4 ${snapshot.digest_verified ? "border-emerald-400 bg-emerald-50" : "border-rose-400 bg-rose-50"}`}><div className={`flex items-center gap-2 text-sm font-semibold ${snapshot.digest_verified ? "text-emerald-800" : "text-rose-800"}`}><Fingerprint className="size-4" />{text.digest} · {snapshot.digest_verified ? text.verified : text.mismatch}</div><p className="mb-0 mt-2 break-all font-mono text-[11px] leading-5 text-slate-600">{snapshot.evidence_digest_sha256}</p></div>
+      <ol className="enterprise-checklist m-0 border-y border-slate-200 p-0">{snapshot.checks.map((check) => <CheckCard key={check.code} check={check} language={language} text={text} />)}</ol>
     </div>
   </article>;
 }
@@ -257,8 +254,8 @@ function CheckCard({ check, language, text }: { check: PilotReadinessCheck; lang
       : localized[2]
     : check.evidence;
   const category = check.category === "configuration" ? text.configuration : check.category === "evidence" ? text.evidence : text.manualGate;
-  const style = check.status === "passed" ? "border-emerald-200 bg-emerald-50/50 text-emerald-700" : check.status === "warning" ? "border-amber-200 bg-amber-50/50 text-amber-700" : "border-rose-200 bg-rose-50/50 text-rose-700";
-  return <li className={`list-none rounded-xl border p-4 ${style}`}><div className="flex items-start gap-3"><Icon className="mt-0.5 size-5 shrink-0" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="m-0 text-sm font-semibold text-slate-900">{title}</h3><span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">{category}</span></div><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">{summary}</p><p className="mb-0 mt-2 text-xs leading-5">{evidence}</p></div></div></li>;
+  const style = check.status === "passed" ? "text-emerald-700" : check.status === "warning" ? "text-amber-700" : "text-rose-700";
+  return <li className="list-none py-4"><div className="flex items-start gap-3"><Icon className={`mt-0.5 size-5 shrink-0 ${style}`} /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="m-0 text-sm font-semibold text-slate-900">{title}</h3><span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{category}</span></div><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">{summary}</p><p className="mb-0 mt-2 text-xs leading-5 text-slate-600">{evidence}</p></div></div></li>;
 }
 
 function evidenceCount(evidence: string): string | null {
@@ -272,7 +269,7 @@ function ReadinessBadge({ status, text, inverse = false }: { status: PilotReadin
 }
 
 function Metric({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: number }) {
-  return <div className="flex items-center gap-3 rounded-xl bg-white/10 p-4 ring-1 ring-inset ring-white/10"><div className="grid size-10 place-items-center rounded-lg bg-cyan-400/15 text-cyan-200"><Icon className="size-5" /></div><div><p className="m-0 text-xs text-slate-400">{label}</p><p className="m-0 mt-1 text-2xl font-bold">{value}</p></div></div>;
+  return <div className="flex items-center gap-3 border-l border-white/20 pl-4 first:border-l-0 first:pl-0"><Icon className="size-5 text-cyan-200" /><div><p className="m-0 text-xs text-slate-400">{label}</p><p className="m-0 mt-1 text-2xl font-bold">{value}</p></div></div>;
 }
 
 function Datum({ label, value }: { label: string; value: string }) {

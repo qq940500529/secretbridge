@@ -50,3 +50,45 @@ a:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Dense enterprise work surfaces: one container, row-level hierarchy, restrained elevation. */
+.enterprise-surface {
+  overflow: hidden;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.75rem;
+  background: white;
+}
+
+.enterprise-table > article,
+.enterprise-table > li {
+  margin: 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid rgb(226 232 240) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: white !important;
+}
+
+.enterprise-table > article:last-child,
+.enterprise-table > li:last-child {
+  border-bottom: 0 !important;
+}
+
+.enterprise-checklist > li {
+  border-width: 0 0 1px !important;
+  border-color: rgb(226 232 240) !important;
+  border-radius: 0 !important;
+  background: white !important;
+}
+
+.enterprise-checklist > li:last-child {
+  border-bottom: 0 !important;
+}
+
+.enterprise-disclosure > summary {
+  list-style: none;
+}
+
+.enterprise-disclosure > summary::-webkit-details-marker {
+  display: none;
+}

@@ -52,7 +52,6 @@ export function SecurityValidationView({
   const zh = language === "zh-CN";
   const text = zh
     ? {
-        eyebrow: "M3 · 安全验证与证据",
         title: "进入真实试点前，先让安全结论可重复",
         subtitle:
           "一次运行同时检查当前配置库，并在隔离内存中重演审批绕过、重复消费、配置轮换、授权撤销和异常恢复。过程不读取凭据值，也不连接业务系统。",
@@ -83,7 +82,6 @@ export function SecurityValidationView({
         detail: "证据",
       }
     : {
-        eyebrow: "M3 · Security validation and evidence",
         title: "Make security conclusions repeatable before a real pilot",
         subtitle:
           "One run inspects the current catalog and replays approval bypass, duplicate consumption, rotation, revocation and recovery in isolated memory. It reads no secret values and connects to no business system.",
@@ -195,37 +193,36 @@ export function SecurityValidationView({
     <section className="space-y-6">
       <header className="flex flex-wrap items-end justify-between gap-5">
         <div className="max-w-3xl">
-          <p className="m-0 text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">{text.eyebrow}</p>
-          <h1 className="mb-0 mt-2 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
+          <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
           <p className="mb-0 mt-3 text-sm leading-6 text-slate-600">{text.subtitle}</p>
         </div>
         <button
           type="button"
           onClick={() => void runValidation()}
           disabled={running}
-          className="inline-flex h-11 items-center gap-2 rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white shadow-lg shadow-slate-300 transition hover:bg-cyan-800 disabled:cursor-wait disabled:opacity-70"
+          className="inline-flex h-11 items-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-wait disabled:opacity-70"
         >
           {running ? <LoaderCircle className="size-4 animate-spin" /> : <Play className="size-4" />}
           {running ? text.running : text.run}
         </button>
       </header>
 
-      <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+      <div className="flex gap-3 border-l-4 border-amber-400 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-950">
         <ShieldAlert className="mt-0.5 size-5 shrink-0" />
         <div><strong>{text.disclosureTitle}</strong><p className="mb-0 mt-1">{text.disclosure}</p></div>
       </div>
-      {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+      {error && <p role="alert" className="border-l-4 border-rose-400 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
 
       <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className="enterprise-surface p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="m-0 inline-flex items-center gap-2 text-sm font-semibold text-slate-900"><History className="size-4" />{text.history}</h2>
             <button type="button" onClick={() => void refresh()} aria-label={text.refresh} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-cyan-700"><RefreshCw className="size-4" /></button>
           </div>
-          {loading ? <LoaderCircle className="mx-auto my-10 size-6 animate-spin text-cyan-600" /> : runs.length === 0 ? <p className="my-8 text-center text-sm leading-6 text-slate-500">{text.noRuns}</p> : <ol className="m-0 space-y-2 p-0">{runs.map((run) => <li key={run.id} className="list-none"><button type="button" onClick={() => setSelectedId(run.id)} className={`w-full rounded-xl border p-3 text-left transition ${selected?.id === run.id ? "border-cyan-300 bg-cyan-50" : "border-transparent bg-slate-50 hover:border-slate-200"}`}><div className="flex items-center justify-between gap-2"><StatusBadge status={run.status} labels={text} /><time className="text-[11px] text-slate-400">{new Intl.DateTimeFormat(language, { dateStyle: "short", timeStyle: "short" }).format(run.finished_at_unix_ms)}</time></div><p className="mb-0 mt-2 truncate font-mono text-[11px] text-slate-500">{run.id}</p></button></li>)}</ol>}
+          {loading ? <LoaderCircle className="mx-auto my-10 size-6 animate-spin text-cyan-600" /> : runs.length === 0 ? <p className="my-8 text-center text-sm leading-6 text-slate-500">{text.noRuns}</p> : <ol className="m-0 divide-y divide-slate-200 border-y border-slate-200 p-0">{runs.map((run) => <li key={run.id} className="list-none"><button type="button" onClick={() => setSelectedId(run.id)} className={`w-full border-l-2 px-3 py-3 text-left transition ${selected?.id === run.id ? "border-cyan-500 bg-cyan-50" : "border-transparent hover:bg-slate-50"}`}><div className="flex items-center justify-between gap-2"><StatusBadge status={run.status} labels={text} /><time className="text-[11px] text-slate-400">{new Intl.DateTimeFormat(language, { dateStyle: "short", timeStyle: "short" }).format(run.finished_at_unix_ms)}</time></div><p className="mb-0 mt-2 truncate font-mono text-[11px] text-slate-500">{run.id}</p></button></li>)}</ol>}
         </aside>
 
-        {selected ? <ValidationDetail run={selected} language={language} text={text} onDownload={download} /> : <div className="grid min-h-80 place-items-center rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500"><div><FlaskConical className="mx-auto mb-4 size-9 text-slate-300" />{text.noRuns}</div></div>}
+        {selected ? <ValidationDetail run={selected} language={language} text={text} onDownload={download} /> : <div className="grid min-h-80 place-items-center border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500"><div><FlaskConical className="mx-auto mb-4 size-9 text-slate-300" />{text.noRuns}</div></div>}
       </div>
     </section>
   );
@@ -233,14 +230,14 @@ export function SecurityValidationView({
 
 function ValidationDetail({ run, language, text, onDownload }: { run: SecurityValidationRun; language: Language; text: Record<string, string>; onDownload: (format: "markdown" | "json") => Promise<void> }) {
   const passed = run.checks.filter((check) => check.status === "passed").length;
-  return <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-    <div className="border-b border-slate-200 bg-gradient-to-r from-slate-950 to-slate-800 p-6 text-white">
+  return <article className="enterprise-surface">
+    <div className="border-b border-slate-200 bg-slate-950 p-6 text-white">
       <div className="flex flex-wrap items-start justify-between gap-4"><div><StatusBadge status={run.status} labels={text} inverse /><h2 className="mb-0 mt-3 text-xl font-semibold">{passed}/{run.checks.length} {text.checks}</h2><p className="mb-0 mt-2 font-mono text-xs text-slate-400">{run.id}</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void onDownload("markdown")} className={downloadClass}><Download className="size-4" />{text.markdown}</button><button type="button" onClick={() => void onDownload("json")} className={downloadClass}><FileJson2 className="size-4" />{text.json}</button></div></div>
       <dl className="mt-6 grid gap-3 text-xs sm:grid-cols-3"><Datum label={text.version} value={run.application_version} /><Datum label={text.suite} value={run.suite_version} /><Datum label={text.platform} value={run.platform} /></dl>
     </div>
     <div className="p-6">
-      <div className={`mb-5 rounded-xl border p-4 ${run.digest_verified ? "border-emerald-200 bg-emerald-50" : "border-rose-200 bg-rose-50"}`}><div className={`flex items-center gap-2 text-sm font-semibold ${run.digest_verified ? "text-emerald-800" : "text-rose-800"}`}><Fingerprint className="size-4" />{text.digest} · {run.digest_verified ? text.verified : text.mismatch}</div><p className={`mb-0 mt-2 break-all font-mono text-[11px] leading-5 ${run.digest_verified ? "text-emerald-700" : "text-rose-700"}`}>{run.evidence_digest_sha256}</p></div>
-      <ol className="m-0 space-y-3 p-0">{run.checks.map((check) => <CheckCard key={check.code} check={check} language={language} text={text} />)}</ol>
+      <div className={`mb-5 border-l-4 p-4 ${run.digest_verified ? "border-emerald-400 bg-emerald-50" : "border-rose-400 bg-rose-50"}`}><div className={`flex items-center gap-2 text-sm font-semibold ${run.digest_verified ? "text-emerald-800" : "text-rose-800"}`}><Fingerprint className="size-4" />{text.digest} · {run.digest_verified ? text.verified : text.mismatch}</div><p className={`mb-0 mt-2 break-all font-mono text-[11px] leading-5 ${run.digest_verified ? "text-emerald-700" : "text-rose-700"}`}>{run.evidence_digest_sha256}</p></div>
+      <ol className="enterprise-checklist m-0 border-y border-slate-200 p-0">{run.checks.map((check) => <CheckCard key={check.code} check={check} language={language} text={text} />)}</ol>
     </div>
   </article>;
 }
@@ -252,8 +249,8 @@ function CheckCard({ check, language, text }: { check: SecurityValidationCheck; 
   const summary = localized?.[1] ?? check.summary;
   const evidence = localized?.[2] ?? check.evidence;
   const category = check.category === "instance" ? text.instance : check.category === "isolated_scenario" ? text.isolated : text.manual;
-  const color = check.status === "passed" ? "border-emerald-200 bg-emerald-50/50 text-emerald-700" : check.status === "warning" ? "border-amber-200 bg-amber-50/50 text-amber-700" : "border-rose-200 bg-rose-50/50 text-rose-700";
-  return <li className={`list-none rounded-xl border p-4 ${color}`}><div className="flex items-start gap-3"><Icon className="mt-0.5 size-5 shrink-0" /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="m-0 text-sm font-semibold text-slate-900">{title}</h3><span className="rounded-full bg-white/70 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">{category}</span></div><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">{summary}</p><p className="mb-0 mt-2 text-xs leading-5"><strong>{text.detail}：</strong>{evidence}</p></div></div></li>;
+  const color = check.status === "passed" ? "text-emerald-700" : check.status === "warning" ? "text-amber-700" : "text-rose-700";
+  return <li className="list-none py-4"><div className="flex items-start gap-3"><Icon className={`mt-0.5 size-5 shrink-0 ${color}`} /><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="m-0 text-sm font-semibold text-slate-900">{title}</h3><span className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{category}</span></div><p className="mb-0 mt-1 text-xs leading-5 text-slate-600">{summary}</p><p className="mb-0 mt-2 text-xs leading-5 text-slate-600"><strong>{text.detail}：</strong>{evidence}</p></div></div></li>;
 }
 
 function StatusBadge({ status, labels, inverse = false }: { status: SecurityValidationStatus; labels: Record<string, string>; inverse?: boolean }) {
