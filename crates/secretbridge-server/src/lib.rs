@@ -51,8 +51,9 @@ use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
     CreateSyntheticRun, CreateTarget, CredentialKind, CredentialReference, DecideApproval,
-    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SecurityValidationRun,
-    SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    PilotReadinessSnapshot, PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState,
+    SecurityValidationRun, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
+    UpdateTarget,
 };
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
@@ -372,6 +373,20 @@ struct SecurityValidationReportResponse {
     disclosure: &'static str,
 }
 
+#[derive(Serialize)]
+struct PilotReadinessListResponse {
+    items: Vec<PilotReadinessSnapshot>,
+    evidence_policy: &'static str,
+}
+
+#[derive(Serialize)]
+struct PilotReadinessReportResponse {
+    snapshot: PilotReadinessSnapshot,
+    digest_verified: bool,
+    markdown: String,
+    disclosure: &'static str,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -603,6 +618,15 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/security-validations/{id}/report",
             get(get_security_validation_report),
+        )
+        .route(
+            "/api/v1/pilot-readiness",
+            get(list_pilot_readiness).post(create_pilot_readiness),
+        )
+        .route("/api/v1/pilot-readiness/{id}", get(get_pilot_readiness))
+        .route(
+            "/api/v1/pilot-readiness/{id}/report",
+            get(get_pilot_readiness_report),
         )
         .route(
             "/api/v1/terminals",
@@ -1540,6 +1564,121 @@ fn render_security_validation_markdown(
     report.push_str(
         "\n## Scope disclosure\n\n\
          This report contains server-generated fixed evidence only. It is a repeatable self-validation artifact, not an independent security certification. The operating-system identity boundary remains a manual gate while the runtime reports `unverified_same_user`.\n",
+    );
+    report
+}
+
+async fn list_pilot_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<PilotReadinessListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_pilot_readiness_snapshots())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(PilotReadinessListResponse {
+        items,
+        evidence_policy: "server_generated_non_secret_readiness_evidence",
+    }))
+}
+
+async fn create_pilot_readiness(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<PilotReadinessSnapshot>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    if !body.is_empty() {
+        return Err(ApiError::BadRequest);
+    }
+    let _configuration = state.configuration_gate.read().await;
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || catalog.execute_pilot_readiness_snapshot())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(snapshot)))
+}
+
+async fn get_pilot_readiness(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PilotReadinessSnapshot>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || catalog.get_pilot_readiness_snapshot(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(snapshot))
+}
+
+async fn get_pilot_readiness_report(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PilotReadinessReportResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || catalog.get_pilot_readiness_snapshot(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    let digest_verified = snapshot.digest_verified;
+    let markdown = render_pilot_readiness_markdown(&snapshot, digest_verified);
+    Ok(Json(PilotReadinessReportResponse {
+        snapshot,
+        digest_verified,
+        markdown,
+        disclosure: "readiness_snapshot_not_pilot_authorization_or_certification",
+    }))
+}
+
+fn render_pilot_readiness_markdown(
+    snapshot: &PilotReadinessSnapshot,
+    digest_verified: bool,
+) -> String {
+    let latest_validation = snapshot
+        .latest_validation_id
+        .map_or_else(|| "none".to_owned(), |value| value.to_string());
+    let mut report = format!(
+        "# SecretBridge Pilot Readiness Report\n\n\
+         - Snapshot: `{}`\n\
+         - Profile: `{}`\n\
+         - Application: `{}`\n\
+         - Platform: `{}`\n\
+         - Result: `{:?}`\n\
+         - Created (Unix ms): `{}`\n\
+         - Latest validation: `{latest_validation}`\n\
+         - Candidate test targets: `{}`\n\
+         - Technically eligible targets: `{}`\n\
+         - Evidence SHA-256: `{}`\n\
+         - Digest verified: `{digest_verified}`\n\n\
+         ## Readiness checks\n\n",
+        snapshot.id,
+        snapshot.profile_version,
+        snapshot.application_version,
+        snapshot.platform,
+        snapshot.status,
+        snapshot.created_at_unix_ms,
+        snapshot.candidate_test_targets,
+        snapshot.eligible_test_targets,
+        snapshot.evidence_digest_sha256,
+    );
+    for check in &snapshot.checks {
+        let _ = write!(
+            report,
+            "- **{:?}** `{}` — {}\n  - Evidence: {}\n",
+            check.status, check.code, check.summary, check.evidence
+        );
+    }
+    report.push_str(
+        "\n## Scope disclosure\n\n\
+         This snapshot is generated from local non-secret metadata and existing self-validation evidence. It is not target-owner authorization, proof of remote least-privilege grants, operating-system identity certification or an independent security review. A technically eligible target must not be treated as production-ready.\n",
     );
     report
 }
@@ -2947,6 +3086,100 @@ mod tests {
         let markdown = report["markdown"].as_str().expect("Markdown report");
         assert!(markdown.contains("identity boundary remains a manual gate"));
         assert!(!markdown.to_ascii_lowercase().contains("password="));
+    }
+
+    #[tokio::test]
+    async fn pilot_readiness_api_is_authenticated_bounded_and_exportable() {
+        let (app, bootstrap) = test_app();
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/pilot-readiness")
+                    .body(Body::empty())
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let token = pair_test_session(&app, &bootstrap).await;
+        let missing_origin = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/v1/pilot-readiness",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+        let payload_attempt = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/pilot-readiness",
+                &token,
+                ORIGIN,
+                r#"{"target":"caller-selected"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(payload_attempt.status(), StatusCode::BAD_REQUEST);
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/v1/pilot-readiness",
+                &token,
+                Some(ORIGIN),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let snapshot = response_json(created).await;
+        assert_eq!(snapshot["status"], "blocked");
+        assert_eq!(snapshot["checks"].as_array().map(Vec::len), Some(10));
+        assert_eq!(snapshot["digest_verified"], true);
+        let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
+
+        let history = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/pilot-readiness",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let history = response_json(history).await;
+        assert_eq!(
+            history["evidence_policy"],
+            "server_generated_non_secret_readiness_evidence"
+        );
+        assert_eq!(history["items"].as_array().map(Vec::len), Some(1));
+
+        let report = app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/pilot-readiness/{snapshot_id}/report"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let report = response_json(report).await;
+        assert_eq!(report["digest_verified"], true);
+        assert_eq!(
+            report["disclosure"],
+            "readiness_snapshot_not_pilot_authorization_or_certification"
+        );
+        let markdown = report["markdown"].as_str().expect("Markdown report");
+        assert!(markdown.contains("Pilot Readiness Report"));
+        assert!(!markdown.to_ascii_lowercase().contains("password="));
+        assert!(!markdown.contains("pilot.test.example"));
     }
 
     #[tokio::test]

@@ -6,6 +6,17 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.17 · pilot readiness evidence workspace
+
+- Add a paired-Web pilot-readiness workspace that aggregates the complete local test-target configuration chain and the latest security-validation evidence without reading secrets or contacting a remote target.
+- Evaluate ten fixed gates covering a dedicated test database, complete PostgreSQL TLS metadata, native credential availability, an enabled status-only template, validation evidence and four explicit external/manual requirements.
+- Keep technical eligibility distinct from authorization: missing technical prerequisites produce `blocked`, while a complete local chain remains `attention` until OS identity, target-owner authorization, remote least privilege and independent review have external evidence.
+- Persist bounded readiness snapshots and ordered checks in SQLite schema version 9, recompute canonical SHA-256 digests on reads and preserve validation history through the v8-to-v9 migration.
+- Add authenticated history, creation, detail and report APIs. Creation requires exact Origin and an empty body so callers cannot select a favorable target, omit checks or supply their own conclusion.
+- Add a bilingual Pilot readiness view with history, candidate/eligible counts, gate details and Markdown/JSON downloads; reports contain aggregate counts and fixed evidence, never target names, addresses, usernames, credential references or approval notes.
+- Replace the milestone-only roadmap with a complete acceptance-package history and forward plan, and add a mature-state architecture and feature specification for orderly future development.
+- Add catalog aggregation, evidence-tamper, migration, HTTP-boundary and Web-client tests plus a dedicated operating and acceptance guide.
+
 ### 0.1.0-alpha.16 · security validation and evidence center
 
 - Add a paired-Web security validation center that runs a complete suite without accepting commands, parameters, target identifiers or secret values from the caller.
