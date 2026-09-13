@@ -68,6 +68,7 @@ A later milestone may be developed in synthetic mode, but cannot enable security
 - [x] Implement MCP request, status, cancellation and safe-event tools.
   - `0.1.0-alpha.13` adds eight fixed stdio tools for template discovery, policy evaluation, approval request/status, approved run creation/status/cancellation and database-enforced safe events. Approval decisions, secret access, target addresses, SQL, shell input and raw adapter output are absent.
   - `0.1.0-alpha.14` moves stdio into a lightweight bridge attached to the independently running Web broker. A bridge disconnect no longer owns broker or terminal lifetime, and the bridge reloads its private connection document after broker restart. Verified OS identity IPC remains an M0/M3 security gate; authenticated loopback is only a same-user compatibility transport.
+  - `0.1.0-alpha.15` replaces the internal loopback HTTP hop with Windows named pipes or Unix domain sockets, bounded framed messages and a defense-in-depth rotating token. Unix peers must match the private data-directory owner UID; installed Windows ACL behavior and hostile same-user isolation remain M3 evidence, so the public posture stays `unverified_same_user`.
 - [x] Validate idempotency and unknown-result handling.
   - One approval maps to at most one run, idempotency keys are digested, timeout/failure/restart become explicit bounded states, and active runs are never silently replayed.
 - [x] Reject arbitrary credentialed shell input and output bypasses.

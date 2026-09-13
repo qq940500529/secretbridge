@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.15 · native local MCP bridge transport
+
+- Replace the broker-to-stdio-bridge loopback HTTP client and private Web routes with a length-prefixed native IPC protocol: Windows named pipes and Unix domain sockets on Linux/macOS.
+- Keep the MCP surface at the same eight fixed operations, require a rotated 256-bit runtime token as defense in depth, reject unknown document/request/response fields and cap requests, responses, concurrent connections and I/O time.
+- Create Windows pipes as first instances with remote clients rejected; place Unix sockets inside the private application-data directory, set socket and connection-document permissions to `0600`, and require the peer UID to match the directory owner.
+- Reload the version-2 connection document before every request so a detached stdio bridge follows broker endpoint and token rotation without replaying a failed operation.
+- Validate the data directory, connection file type, platform endpoint shape and Unix ownership/permissions; remove the connection document and Unix socket only with their owning broker lifecycle.
+- Remove Reqwest and the internal MCP HTTP surface from the runtime dependency graph, while retaining the explicit `unverified_same_user` posture until installed ACLs and hostile-client boundaries are independently verified on all three platforms.
+
 ### 0.1.0-alpha.14 · detached MCP bridge
 
 - Split the long-lived Web broker from the lightweight `--mcp-stdio` bridge so an MCP disconnect no longer stops the console, controlled runs or persistent terminal sessions.

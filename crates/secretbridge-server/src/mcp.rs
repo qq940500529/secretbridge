@@ -3,36 +3,41 @@
 
 use std::{
     error::Error,
-    fs, io,
-    net::SocketAddr,
+    fs,
+    io::{self, Write as _},
+    mem,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
-use axum::{
-    Json as AxumJson, Router,
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-    routing::{get, post},
-};
-use reqwest::Client;
 use rmcp::{
     ErrorData, Json as McpJson, ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ErrorCode, Implementation, ServerCapabilities, ServerInfo},
+    model::{Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
     transport::stdio,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tokio::task;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    sync::Semaphore,
+    task, time,
+};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
+
 use crate::{
-    AppState, bearer_token, cancel_run_for_state,
+    AppState, cancel_run_for_state,
     catalog::{
         ActionTemplate, Approval, ApprovalOperation, ApprovalResultScope, ApprovalState,
         CancelSyntheticRun, CatalogError, CreateApproval, CreateSyntheticRun, PolicyDecision,
@@ -83,7 +88,7 @@ impl McpBackend {
                     items: items.into_iter().map(TemplateSummary::from).collect(),
                 })
             }
-            Self::Remote(client) => client.get("/internal/mcp/templates").await,
+            Self::Remote(client) => client.call(OP_LIST_TEMPLATES, &BridgeEmpty {}).await,
         }
     }
 
@@ -95,7 +100,7 @@ impl McpBackend {
                 let evaluation = catalog_task(move || catalog.evaluate_action_template(id)).await?;
                 Ok(PolicySummary::from(evaluation))
             }
-            Self::Remote(client) => client.post("/internal/mcp/policy", &params).await,
+            Self::Remote(client) => client.call(OP_EVALUATE_POLICY, &params).await,
         }
     }
 
@@ -114,7 +119,7 @@ impl McpBackend {
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
                 Ok(ApprovalSummary::from(approval))
             }
-            Self::Remote(client) => client.post("/internal/mcp/approval/request", &params).await,
+            Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
         }
     }
 
@@ -126,7 +131,7 @@ impl McpBackend {
                 let approval = catalog_task(move || catalog.get_approval(id)).await?;
                 Ok(ApprovalSummary::from(approval))
             }
-            Self::Remote(client) => client.post("/internal/mcp/approval/get", &params).await,
+            Self::Remote(client) => client.call(OP_GET_APPROVAL, &params).await,
         }
     }
 
@@ -148,7 +153,7 @@ impl McpBackend {
                     run: RunSummary::from(outcome.run),
                 })
             }
-            Self::Remote(client) => client.post("/internal/mcp/run/create", &params).await,
+            Self::Remote(client) => client.call(OP_CREATE_RUN, &params).await,
         }
     }
 
@@ -160,7 +165,7 @@ impl McpBackend {
                 let run = catalog_task(move || catalog.get_synthetic_run(id)).await?;
                 Ok(RunSummary::from(run))
             }
-            Self::Remote(client) => client.post("/internal/mcp/run/get", &params).await,
+            Self::Remote(client) => client.call(OP_GET_RUN, &params).await,
         }
     }
 
@@ -178,7 +183,7 @@ impl McpBackend {
                 .map_err(catalog_error)?;
                 Ok(RunSummary::from(run))
             }
-            Self::Remote(client) => client.post("/internal/mcp/run/cancel", &params).await,
+            Self::Remote(client) => client.call(OP_CANCEL_RUN, &params).await,
         }
     }
 
@@ -193,7 +198,7 @@ impl McpBackend {
                     items: items.into_iter().map(EventSummary::from).collect(),
                 })
             }
-            Self::Remote(client) => client.post("/internal/mcp/run/events", &params).await,
+            Self::Remote(client) => client.call(OP_LIST_RUN_EVENTS, &params).await,
         }
     }
 }
@@ -318,7 +323,7 @@ impl ServerHandler for SecretBridgeMcp {
 pub async fn serve_stdio_bridge(
     connection_file: PathBuf,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let client = BridgeClient::from_file(connection_file)?;
+    let client = BridgeClient::from_file(connection_file);
     client.health().await.map_err(Box::new)?;
     SecretBridgeMcp::new_remote(client)
         .serve(stdio())
@@ -328,74 +333,86 @@ pub async fn serve_stdio_bridge(
     Ok(())
 }
 
-pub fn bridge_routes() -> Router<AppState> {
-    Router::new()
-        .route("/internal/mcp/health", get(bridge_health))
-        .route("/internal/mcp/templates", get(bridge_list_templates))
-        .route("/internal/mcp/policy", post(bridge_evaluate_policy))
-        .route(
-            "/internal/mcp/approval/request",
-            post(bridge_request_approval),
-        )
-        .route("/internal/mcp/approval/get", post(bridge_get_approval))
-        .route("/internal/mcp/run/create", post(bridge_create_run))
-        .route("/internal/mcp/run/get", post(bridge_get_run))
-        .route("/internal/mcp/run/cancel", post(bridge_cancel_run))
-        .route("/internal/mcp/run/events", post(bridge_list_run_events))
-}
-
+const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
+const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
+const BRIDGE_PROTOCOL: &str = "secretbridge-native-ipc-v1";
+const MAX_BRIDGE_REQUEST_BYTES: usize = 16 * 1024;
+#[cfg(windows)]
+const MAX_BRIDGE_PIPE_BUFFER_BYTES: u32 = 16 * 1024;
 const MAX_BRIDGE_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_BRIDGE_CONNECTION_BYTES: u64 = 4 * 1024;
-const BRIDGE_CONNECTION_SCHEMA: u8 = 1;
+const MAX_BRIDGE_CONNECTIONS: usize = 32;
+#[cfg(windows)]
+const MAX_BRIDGE_PIPE_INSTANCES: usize = MAX_BRIDGE_CONNECTIONS + 1;
+const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(10);
+
+const OP_HEALTH: &str = "health";
+const OP_LIST_TEMPLATES: &str = "list_action_templates";
+const OP_EVALUATE_POLICY: &str = "evaluate_policy";
+const OP_REQUEST_APPROVAL: &str = "request_approval";
+const OP_GET_APPROVAL: &str = "get_approval";
+const OP_CREATE_RUN: &str = "create_run";
+const OP_GET_RUN: &str = "get_run";
+const OP_CANCEL_RUN: &str = "cancel_run";
+const OP_LIST_RUN_EVENTS: &str = "list_run_events";
 
 #[derive(Clone)]
 struct BridgeClient {
-    client: Client,
-    connection: BridgeConnectionSource,
-}
-
-#[derive(Clone)]
-enum BridgeConnectionSource {
-    File(Arc<PathBuf>),
+    connection_file: Arc<PathBuf>,
 }
 
 struct BridgeConnection {
-    address: SocketAddr,
+    endpoint: BridgeEndpoint,
     token: Zeroizing<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+enum BridgeEndpoint {
+    #[cfg(unix)]
+    UnixSocket { path: PathBuf },
+    #[cfg(windows)]
+    WindowsNamedPipe { name: String },
+}
+
+pub struct LocalMcpBridge {
+    listener: BridgeListener,
+    state: AppState,
+    token_digest: [u8; 32],
+    _connection_guard: BridgeConnectionGuard,
+}
+
+enum BridgeListener {
+    #[cfg(unix)]
+    Unix {
+        listener: UnixListener,
+        owner_uid: u32,
+    },
+    #[cfg(windows)]
+    Windows {
+        server: NamedPipeServer,
+        name: String,
+    },
+}
+
 impl BridgeClient {
-    fn from_file(path: PathBuf) -> Result<Self, reqwest::Error> {
-        Self::build(BridgeConnectionSource::File(Arc::new(path)))
-    }
-
-    fn build(connection: BridgeConnectionSource) -> Result<Self, reqwest::Error> {
-        let client = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .http1_only()
-            .timeout(Duration::from_secs(10))
-            .build()?;
-        Ok(Self { client, connection })
-    }
-
-    async fn connection(&self) -> Result<BridgeConnection, ErrorData> {
-        match &self.connection {
-            BridgeConnectionSource::File(path) => {
-                let path = Arc::clone(path);
-                task::spawn_blocking(move || read_bridge_connection(&path))
-                    .await
-                    .map_err(|_| {
-                        ErrorData::internal_error("secretbridge_bridge_unavailable", None)
-                    })?
-                    .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))
-            }
+    fn from_file(path: PathBuf) -> Self {
+        Self {
+            connection_file: Arc::new(path),
         }
     }
 
+    async fn connection(&self) -> Result<BridgeConnection, ErrorData> {
+        let path = Arc::clone(&self.connection_file);
+        task::spawn_blocking(move || read_bridge_connection(&path))
+            .await
+            .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))?
+            .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))
+    }
+
     async fn health(&self) -> Result<(), ErrorData> {
-        let health: BridgeHealth = self.get("/internal/mcp/health").await?;
-        if health.status == "ready" && health.protocol == "secretbridge-mcp-bridge-v1" {
+        let health: BridgeHealth = self.call(OP_HEALTH, &BridgeEmpty {}).await?;
+        if health.status == "ready" && health.protocol == BRIDGE_PROTOCOL {
             Ok(())
         } else {
             Err(ErrorData::internal_error(
@@ -405,87 +422,77 @@ impl BridgeClient {
         }
     }
 
-    async fn get<T>(&self, path: &str) -> Result<T, ErrorData>
-    where
-        T: DeserializeOwned,
-    {
-        let connection = self.connection().await?;
-        self.send(
-            self.client
-                .get(format!("http://{}{path}", connection.address))
-                .bearer_auth(connection.token.as_str()),
-        )
-        .await
-    }
-
-    async fn post<T, B>(&self, path: &str, body: &B) -> Result<T, ErrorData>
+    async fn call<T, B>(&self, operation: &str, payload: &B) -> Result<T, ErrorData>
     where
         T: DeserializeOwned,
         B: Serialize + ?Sized,
     {
         let connection = self.connection().await?;
-        self.send(
-            self.client
-                .post(format!("http://{}{path}", connection.address))
-                .bearer_auth(connection.token.as_str())
-                .json(body),
-        )
-        .await
-    }
-
-    async fn send<T>(&self, request: reqwest::RequestBuilder) -> Result<T, ErrorData>
-    where
-        T: DeserializeOwned,
-    {
-        let mut response = request
-            .send()
+        let request = BridgeRequestRef {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            token: connection.token.as_str(),
+            operation,
+            payload,
+        };
+        let encoded = Zeroizing::new(serde_json::to_vec(&request).map_err(|_| {
+            ErrorData::internal_error("secretbridge_bridge_request_rejected", None)
+        })?);
+        if encoded.len() > MAX_BRIDGE_REQUEST_BYTES {
+            return Err(ErrorData::invalid_params(
+                "secretbridge_bridge_request_rejected",
+                None,
+            ));
+        }
+        let exchange = async {
+            let mut stream = connect_bridge(&connection.endpoint).await?;
+            write_frame(&mut stream, &encoded, MAX_BRIDGE_REQUEST_BYTES).await?;
+            read_frame(&mut stream, MAX_BRIDGE_RESPONSE_BYTES).await
+        };
+        let response = time::timeout(BRIDGE_IO_TIMEOUT, exchange)
             .await
+            .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))?
             .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))?;
-        let status = response.status();
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_BRIDGE_RESPONSE_BYTES as u64)
-        {
+        let response = serde_json::from_slice::<BridgeResponse>(&response).map_err(|_| {
+            ErrorData::internal_error("secretbridge_bridge_response_rejected", None)
+        })?;
+        if response.schema_version != BRIDGE_CONNECTION_SCHEMA {
             return Err(ErrorData::internal_error(
                 "secretbridge_bridge_response_rejected",
                 None,
             ));
         }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| ErrorData::internal_error("secretbridge_bridge_unavailable", None))?
-        {
-            if bytes.len().saturating_add(chunk.len()) > MAX_BRIDGE_RESPONSE_BYTES {
+        if response.ok {
+            let payload = response.payload.ok_or_else(|| {
+                ErrorData::internal_error("secretbridge_bridge_response_rejected", None)
+            })?;
+            if response.error.is_some() {
                 return Err(ErrorData::internal_error(
                     "secretbridge_bridge_response_rejected",
                     None,
                 ));
             }
-            bytes.extend_from_slice(&chunk);
-        }
-        if status.is_success() {
-            serde_json::from_slice(&bytes).map_err(|_| {
+            serde_json::from_value(payload).map_err(|_| {
                 ErrorData::internal_error("secretbridge_bridge_response_rejected", None)
             })
         } else {
-            let error = serde_json::from_slice::<BridgeErrorBody>(&bytes).unwrap_or_else(|_| {
-                BridgeErrorBody {
-                    code: "secretbridge_bridge_unavailable".to_owned(),
-                }
-            });
-            Err(remote_error(&error.code))
+            if response.payload.is_some() {
+                return Err(ErrorData::internal_error(
+                    "secretbridge_bridge_response_rejected",
+                    None,
+                ));
+            }
+            Err(remote_error(response.error.as_deref().unwrap_or_default()))
         }
     }
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BridgeConnectionDocument {
     schema_version: u8,
     #[serde(rename = "instance_id")]
     _instance_id: Uuid,
-    address: SocketAddr,
+    endpoint: BridgeEndpoint,
     token: String,
 }
 
@@ -499,6 +506,7 @@ fn read_bridge_connection(path: &Path) -> io::Result<BridgeConnection> {
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
         || metadata.len() > MAX_BRIDGE_CONNECTION_BYTES
+        || !valid_bridge_connection_metadata(&metadata, path)
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -513,7 +521,7 @@ fn read_bridge_connection(path: &Path) -> io::Result<BridgeConnection> {
         )
     })?;
     if document.schema_version != BRIDGE_CONNECTION_SCHEMA
-        || !document.address.ip().is_loopback()
+        || !valid_bridge_endpoint(&document.endpoint, path)
         || document.token.len() != 64
         || !document.token.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
@@ -523,10 +531,55 @@ fn read_bridge_connection(path: &Path) -> io::Result<BridgeConnection> {
         ));
     }
     Ok(BridgeConnection {
-        address: document.address,
+        endpoint: document.endpoint,
         token: Zeroizing::new(document.token),
     })
 }
+
+#[derive(Serialize)]
+struct BridgeConnectionDocumentRef<'a> {
+    schema_version: u8,
+    instance_id: Uuid,
+    endpoint: &'a BridgeEndpoint,
+    token: &'a str,
+}
+
+#[derive(Deserialize)]
+struct BridgeConnectionIdentity {
+    instance_id: Uuid,
+}
+
+#[derive(Serialize)]
+struct BridgeRequestRef<'a, T: Serialize + ?Sized> {
+    schema_version: u8,
+    token: &'a str,
+    operation: &'a str,
+    payload: &'a T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeRequest {
+    schema_version: u8,
+    token: String,
+    operation: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeResponse {
+    schema_version: u8,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BridgeEmpty {}
 
 #[derive(Deserialize, Serialize)]
 struct BridgeHealth {
@@ -534,173 +587,539 @@ struct BridgeHealth {
     protocol: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct BridgeErrorBody {
-    code: String,
-}
-
-struct BridgeHttpError {
-    status: StatusCode,
-    code: String,
-}
-
-impl BridgeHttpError {
-    fn unauthorized() -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            code: "bridge_unauthorized".to_owned(),
-        }
-    }
-}
-
-impl From<ErrorData> for BridgeHttpError {
-    fn from(error: ErrorData) -> Self {
-        let status = if error.code == ErrorCode::RESOURCE_NOT_FOUND {
-            StatusCode::NOT_FOUND
-        } else if error.code == ErrorCode::INTERNAL_ERROR {
-            StatusCode::INTERNAL_SERVER_ERROR
-        } else {
-            StatusCode::UNPROCESSABLE_ENTITY
+impl LocalMcpBridge {
+    /// Creates the native bridge endpoint and publishes its ephemeral connection document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the data directory is not a private absolute directory, the
+    /// platform endpoint cannot be created, or another bridge owns the connection document.
+    pub fn bind(data_directory: &Path, state: AppState) -> Result<Self, Box<dyn Error>> {
+        validate_bridge_data_directory(data_directory)?;
+        let connection_path = data_directory.join(BRIDGE_CONNECTION_FILE);
+        prepare_bridge_connection_path(&connection_path)?;
+        let instance_id = Uuid::new_v4();
+        let token = Zeroizing::new(new_bridge_token());
+        let token_digest = token_digest(token.as_str());
+        let (listener, endpoint, socket_path) = bind_bridge_listener(data_directory, instance_id)?;
+        let connection_guard = match BridgeConnectionGuard::create(
+            &connection_path,
+            instance_id,
+            &endpoint,
+            token.as_str(),
+            socket_path.as_deref(),
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                #[cfg(unix)]
+                if let Some(socket_path) = socket_path {
+                    let _ = fs::remove_file(socket_path);
+                }
+                return Err(error);
+            }
         };
-        Self {
-            status,
-            code: error.message.into_owned(),
+        Ok(Self {
+            listener,
+            state,
+            token_digest,
+            _connection_guard: connection_guard,
+        })
+    }
+
+    /// Serves bounded native bridge requests until cancellation or a listener error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when accepting a connection or creating the next Windows pipe
+    /// instance fails.
+    pub async fn serve(self, cancellation: CancellationToken) -> io::Result<()> {
+        let Self {
+            listener,
+            state,
+            token_digest,
+            _connection_guard,
+        } = self;
+        let capacity = Arc::new(Semaphore::new(MAX_BRIDGE_CONNECTIONS));
+        serve_bridge_listener(listener, state, token_digest, capacity, cancellation).await
+    }
+}
+
+struct BridgeConnectionGuard {
+    path: PathBuf,
+    instance_id: Uuid,
+    #[cfg(unix)]
+    socket_path: PathBuf,
+}
+
+impl BridgeConnectionGuard {
+    fn create(
+        path: &Path,
+        instance_id: Uuid,
+        endpoint: &BridgeEndpoint,
+        token: &str,
+        socket_path: Option<&Path>,
+    ) -> Result<Self, Box<dyn Error>> {
+        #[cfg(windows)]
+        let _ = &socket_path;
+        let document = BridgeConnectionDocumentRef {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            instance_id,
+            endpoint,
+            token,
+        };
+        let encoded = Zeroizing::new(serde_json::to_vec(&document)?);
+        let temporary_path = path.with_extension(format!("tmp-{}", Uuid::new_v4().simple()));
+        let write_result = write_private_file(&temporary_path, &encoded)
+            .and_then(|()| fs::hard_link(&temporary_path, path));
+        let _ = fs::remove_file(&temporary_path);
+        write_result?;
+        Ok(Self {
+            path: path.to_owned(),
+            instance_id,
+            #[cfg(unix)]
+            socket_path: socket_path
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "missing Unix socket path")
+                })?
+                .to_owned(),
+        })
+    }
+}
+
+impl Drop for BridgeConnectionGuard {
+    fn drop(&mut self) {
+        if let Ok(contents) = fs::read_to_string(&self.path) {
+            let contents = Zeroizing::new(contents);
+            if serde_json::from_str::<BridgeConnectionIdentity>(&contents)
+                .is_ok_and(|document| document.instance_id == self.instance_id)
+            {
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let _ = fs::remove_file(&self.socket_path);
         }
     }
 }
 
-impl IntoResponse for BridgeHttpError {
-    fn into_response(self) -> Response {
-        (self.status, AxumJson(BridgeErrorBody { code: self.code })).into_response()
+fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    file.sync_all()
+}
+
+fn validate_bridge_data_directory(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !path.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the SecretBridge data directory is invalid",
+        ));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the SecretBridge data directory permissions are too broad",
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_bridge_connection_path(path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let connection = read_bridge_connection(path)?;
+    if bridge_endpoint_is_active(&connection.endpoint) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "another SecretBridge broker owns the data directory",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        let BridgeEndpoint::UnixSocket { path: socket_path } = &connection.endpoint;
+        match fs::remove_file(socket_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    fs::remove_file(path)
+}
+
+#[cfg(unix)]
+fn bridge_endpoint_is_active(endpoint: &BridgeEndpoint) -> bool {
+    use std::os::unix::net::UnixStream as StdUnixStream;
+
+    let BridgeEndpoint::UnixSocket { path } = endpoint;
+    StdUnixStream::connect(path).is_ok()
+}
+
+#[cfg(windows)]
+fn bridge_endpoint_is_active(endpoint: &BridgeEndpoint) -> bool {
+    let BridgeEndpoint::WindowsNamedPipe { name } = endpoint;
+    match ClientOptions::new().open(name) {
+        Ok(_) => true,
+        Err(error) => error.raw_os_error() == Some(231),
     }
 }
 
-async fn authorize_bridge(state: &AppState, headers: &HeaderMap) -> Result<(), BridgeHttpError> {
-    if headers.contains_key("origin") {
-        return Err(BridgeHttpError::unauthorized());
+#[cfg(unix)]
+fn valid_bridge_connection_metadata(metadata: &fs::Metadata, path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    metadata.permissions().mode() & 0o077 == 0
+        && fs::metadata(parent).is_ok_and(|parent_metadata| parent_metadata.uid() == metadata.uid())
+}
+
+#[cfg(windows)]
+fn valid_bridge_connection_metadata(_metadata: &fs::Metadata, _path: &Path) -> bool {
+    true
+}
+
+fn new_bridge_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+async fn handle_bridge_stream<S>(
+    mut stream: S,
+    state: AppState,
+    expected_token: [u8; 32],
+    peer_authorized: bool,
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let exchange = async {
+        let request = read_frame(&mut stream, MAX_BRIDGE_REQUEST_BYTES).await?;
+        let response =
+            process_bridge_request(&state, expected_token, peer_authorized, &request).await;
+        let encoded = serde_json::to_vec(&response)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bridge response failed"))?;
+        write_frame(&mut stream, &encoded, MAX_BRIDGE_RESPONSE_BYTES).await
+    };
+    let _ = time::timeout(BRIDGE_IO_TIMEOUT, exchange).await;
+}
+
+async fn process_bridge_request(
+    state: &AppState,
+    expected_token: [u8; 32],
+    peer_authorized: bool,
+    encoded: &[u8],
+) -> BridgeResponse {
+    let Ok(mut request) = serde_json::from_slice::<BridgeRequest>(encoded) else {
+        return BridgeResponse::error("invalid_request");
+    };
+    let token = Zeroizing::new(mem::take(&mut request.token));
+    if !peer_authorized
+        || request.schema_version != BRIDGE_CONNECTION_SCHEMA
+        || !constant_time_equal(&token_digest(token.as_str()), &expected_token)
+    {
+        return BridgeResponse::error("bridge_unauthorized");
     }
-    let token = bearer_token(headers).ok_or_else(BridgeHttpError::unauthorized)?;
-    let presented = token_digest(token);
-    let expected = *state.mcp_bridge_token.read().await;
-    if expected.is_some_and(|expected| constant_time_equal(&presented, &expected)) {
-        Ok(())
-    } else {
-        Err(BridgeHttpError::unauthorized())
+    match dispatch_bridge_request(state.clone(), &request.operation, request.payload).await {
+        Ok(payload) => BridgeResponse::success(payload),
+        Err(error) => BridgeResponse::error(&safe_bridge_error_code(error)),
     }
 }
 
-async fn bridge_health(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<AxumJson<BridgeHealth>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    Ok(AxumJson(BridgeHealth {
-        status: "ready".to_owned(),
-        protocol: "secretbridge-mcp-bridge-v1".to_owned(),
-    }))
+async fn dispatch_bridge_request(
+    state: AppState,
+    operation: &str,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, ErrorData> {
+    let backend = McpBackend::Local(state);
+    match operation {
+        OP_HEALTH => {
+            parse_bridge_payload::<BridgeEmpty>(payload)?;
+            serialize_bridge_payload(BridgeHealth {
+                status: "ready".to_owned(),
+                protocol: BRIDGE_PROTOCOL.to_owned(),
+            })
+        }
+        OP_LIST_TEMPLATES => {
+            parse_bridge_payload::<BridgeEmpty>(payload)?;
+            serialize_bridge_payload(backend.list_action_templates().await?)
+        }
+        OP_EVALUATE_POLICY => serialize_bridge_payload(
+            backend
+                .evaluate_policy(parse_bridge_payload(payload)?)
+                .await?,
+        ),
+        OP_REQUEST_APPROVAL => serialize_bridge_payload(
+            backend
+                .request_approval(parse_bridge_payload(payload)?)
+                .await?,
+        ),
+        OP_GET_APPROVAL => {
+            serialize_bridge_payload(backend.get_approval(parse_bridge_payload(payload)?).await?)
+        }
+        OP_CREATE_RUN => {
+            serialize_bridge_payload(backend.create_run(parse_bridge_payload(payload)?).await?)
+        }
+        OP_GET_RUN => {
+            serialize_bridge_payload(backend.get_run(parse_bridge_payload(payload)?).await?)
+        }
+        OP_CANCEL_RUN => {
+            serialize_bridge_payload(backend.cancel_run(parse_bridge_payload(payload)?).await?)
+        }
+        OP_LIST_RUN_EVENTS => serialize_bridge_payload(
+            backend
+                .list_run_events(parse_bridge_payload(payload)?)
+                .await?,
+        ),
+        _ => Err(ErrorData::invalid_params("invalid_request", None)),
+    }
 }
 
-async fn bridge_list_templates(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<AxumJson<TemplateList>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .list_action_templates()
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+fn parse_bridge_payload<T: DeserializeOwned>(payload: serde_json::Value) -> Result<T, ErrorData> {
+    serde_json::from_value(payload).map_err(|_| ErrorData::invalid_params("invalid_request", None))
 }
 
-async fn bridge_evaluate_policy(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<IdentifierParams>,
-) -> Result<AxumJson<PolicySummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .evaluate_policy(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+fn serialize_bridge_payload<T: Serialize>(payload: T) -> Result<serde_json::Value, ErrorData> {
+    serde_json::to_value(payload)
+        .map_err(|_| ErrorData::internal_error("secretbridge_operation_failed", None))
 }
 
-async fn bridge_request_approval(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<RequestApprovalParams>,
-) -> Result<AxumJson<ApprovalSummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .request_approval(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+fn safe_bridge_error_code(error: ErrorData) -> String {
+    let code = error.message.into_owned();
+    match code.as_str() {
+        "not_found"
+        | "approval_consumed"
+        | "approval_not_usable"
+        | "capacity_exceeded"
+        | "credential_reference_not_found"
+        | "invalid_request"
+        | "invalid_approval_transition"
+        | "invalid_run_transition"
+        | "idempotency_conflict"
+        | "policy_denied"
+        | "resource_in_use"
+        | "version_conflict" => code,
+        _ => "secretbridge_operation_failed".to_owned(),
+    }
 }
 
-async fn bridge_get_approval(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<IdentifierParams>,
-) -> Result<AxumJson<ApprovalSummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .get_approval(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+impl BridgeResponse {
+    fn success(payload: serde_json::Value) -> Self {
+        Self {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            ok: true,
+            payload: Some(payload),
+            error: None,
+        }
+    }
+
+    fn error(code: &str) -> Self {
+        Self {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            ok: false,
+            payload: None,
+            error: Some(code.to_owned()),
+        }
+    }
 }
 
-async fn bridge_create_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<CreateRunParams>,
-) -> Result<AxumJson<CreateRunSummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .create_run(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+async fn read_frame<S>(stream: &mut S, maximum: usize) -> io::Result<Zeroizing<Vec<u8>>>
+where
+    S: AsyncRead + Unpin,
+{
+    let mut length = [0_u8; 4];
+    stream.read_exact(&mut length).await?;
+    let length = usize::try_from(u32::from_be_bytes(length))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid bridge frame"))?;
+    if length == 0 || length > maximum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid bridge frame",
+        ));
+    }
+    let mut payload = Zeroizing::new(vec![0_u8; length]);
+    stream.read_exact(&mut payload).await?;
+    Ok(payload)
 }
 
-async fn bridge_get_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<IdentifierParams>,
-) -> Result<AxumJson<RunSummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .get_run(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+async fn write_frame<S>(stream: &mut S, payload: &[u8], maximum: usize) -> io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    if payload.is_empty() || payload.len() > maximum || payload.len() > u32::MAX as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid bridge frame",
+        ));
+    }
+    let length = u32::try_from(payload.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid bridge frame"))?;
+    stream.write_all(&length.to_be_bytes()).await?;
+    stream.write_all(payload).await?;
+    stream.shutdown().await
 }
 
-async fn bridge_cancel_run(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<CancelRunParams>,
-) -> Result<AxumJson<RunSummary>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .cancel_run(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+#[cfg(unix)]
+fn bind_bridge_listener(
+    data_directory: &Path,
+    instance_id: Uuid,
+) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
+    let identifier = instance_id.simple().to_string();
+    let socket_path = data_directory.join(format!("mcp-{}.sock", &identifier[..16]));
+    let listener = UnixListener::bind(&socket_path)?;
+    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+    let owner_uid = fs::metadata(data_directory)?.uid();
+    Ok((
+        BridgeListener::Unix {
+            listener,
+            owner_uid,
+        },
+        BridgeEndpoint::UnixSocket {
+            path: socket_path.clone(),
+        },
+        Some(socket_path),
+    ))
 }
 
-async fn bridge_list_run_events(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumJson(params): AxumJson<IdentifierParams>,
-) -> Result<AxumJson<EventList>, BridgeHttpError> {
-    authorize_bridge(&state, &headers).await?;
-    McpBackend::Local(state)
-        .list_run_events(params)
-        .await
-        .map(AxumJson)
-        .map_err(BridgeHttpError::from)
+#[cfg(windows)]
+fn bind_bridge_listener(
+    _data_directory: &Path,
+    instance_id: Uuid,
+) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
+    let name = format!(r"\\.\pipe\secretbridge-{}", instance_id.simple());
+    let server = ServerOptions::new()
+        .first_pipe_instance(true)
+        .reject_remote_clients(true)
+        .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
+        .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
+        .out_buffer_size(64 * 1024)
+        .create(&name)?;
+    Ok((
+        BridgeListener::Windows {
+            server,
+            name: name.clone(),
+        },
+        BridgeEndpoint::WindowsNamedPipe { name },
+        None,
+    ))
+}
+
+#[cfg(unix)]
+async fn serve_bridge_listener(
+    listener: BridgeListener,
+    state: AppState,
+    token_digest: [u8; 32],
+    capacity: Arc<Semaphore>,
+    cancellation: CancellationToken,
+) -> io::Result<()> {
+    let BridgeListener::Unix {
+        listener,
+        owner_uid,
+    } = listener;
+    loop {
+        let permit = tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = Arc::clone(&capacity).acquire_owned() => result.map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "bridge capacity closed")
+            })?,
+        };
+        let (stream, _) = tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = listener.accept() => result?,
+        };
+        let peer_authorized = stream
+            .peer_cred()
+            .is_ok_and(|credentials| credentials.uid() == owner_uid);
+        let state = state.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            handle_bridge_stream(stream, state, token_digest, peer_authorized).await;
+        });
+    }
+}
+
+#[cfg(windows)]
+async fn serve_bridge_listener(
+    listener: BridgeListener,
+    state: AppState,
+    token_digest: [u8; 32],
+    capacity: Arc<Semaphore>,
+    cancellation: CancellationToken,
+) -> io::Result<()> {
+    let BridgeListener::Windows { mut server, name } = listener;
+    loop {
+        let permit = tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = Arc::clone(&capacity).acquire_owned() => result.map_err(|_| {
+                io::Error::new(io::ErrorKind::BrokenPipe, "bridge capacity closed")
+            })?,
+        };
+        tokio::select! {
+            () = cancellation.cancelled() => return Ok(()),
+            result = server.connect() => result?,
+        }
+        let connected = server;
+        server = ServerOptions::new()
+            .reject_remote_clients(true)
+            .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
+            .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
+            .out_buffer_size(64 * 1024)
+            .create(&name)?;
+        let state = state.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            handle_bridge_stream(connected, state, token_digest, true).await;
+        });
+    }
+}
+
+#[cfg(unix)]
+async fn connect_bridge(endpoint: &BridgeEndpoint) -> io::Result<UnixStream> {
+    let BridgeEndpoint::UnixSocket { path } = endpoint;
+    UnixStream::connect(path).await
+}
+
+#[cfg(windows)]
+async fn connect_bridge(
+    endpoint: &BridgeEndpoint,
+) -> io::Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+    let BridgeEndpoint::WindowsNamedPipe { name } = endpoint;
+    loop {
+        match ClientOptions::new().open(name) {
+            Ok(client) => return Ok(client),
+            Err(error) if error.raw_os_error() == Some(231) => {
+                time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, connection_file: &Path) -> bool {
+    let BridgeEndpoint::UnixSocket { path } = endpoint;
+    path.is_absolute()
+        && path.parent() == connection_file.parent()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.starts_with("mcp-") && name.ends_with(".sock") && name.len() == 25
+            })
+        && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+}
+
+#[cfg(windows)]
+fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, _connection_file: &Path) -> bool {
+    let BridgeEndpoint::WindowsNamedPipe { name } = endpoint;
+    let Some(identifier) = name.strip_prefix(r"\\.\pipe\secretbridge-") else {
+        return false;
+    };
+    identifier.len() == 32 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn remote_error(code: &str) -> ErrorData {
@@ -953,14 +1372,14 @@ impl From<SafeEvent> for EventSummary {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::Path};
+    use std::{collections::BTreeMap, fs};
 
-    use axum::http::StatusCode;
     use rmcp::{ServiceExt, model::CallToolRequestParams};
     use serde_json::{Map, Value, json};
+    use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
-    use super::{BridgeClient, SecretBridgeMcp};
+    use super::{BridgeClient, LocalMcpBridge, SecretBridgeMcp};
     use crate::{
         AppState,
         catalog::{
@@ -970,20 +1389,6 @@ mod tests {
     };
 
     const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
-
-    fn write_bridge_connection(path: &Path, address: std::net::SocketAddr, token: &str) {
-        fs::write(
-            path,
-            serde_json::to_vec(&json!({
-                "schema_version": 1,
-                "instance_id": Uuid::new_v4(),
-                "address": address,
-                "token": token,
-            }))
-            .expect("serialize bridge connection"),
-        )
-        .expect("write bridge connection");
-    }
 
     async fn connect(
         state: AppState,
@@ -1086,45 +1491,99 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one native IPC lifecycle scenario keeps authentication, validation and restart behavior contiguous"
+    )]
     async fn detached_stdio_bridge_authenticates_reloads_and_does_not_own_broker_lifecycle() {
         let directory =
             std::env::temp_dir().join(format!("secretbridge-detached-mcp-test-{}", Uuid::new_v4()));
         fs::create_dir(&directory).expect("create bridge test directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                .expect("restrict bridge test directory");
+        }
         let connection_file = directory.join("mcp-bridge.json");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind broker");
-        let address = listener.local_addr().expect("broker address");
-        let origin = format!("http://{address}");
-        let (state, _) = AppState::new([origin]);
-        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        state.install_mcp_bridge_token(token).await;
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        let bridge = LocalMcpBridge::bind(&directory, state).expect("bind native bridge");
+        let (second_state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        assert!(
+            LocalMcpBridge::bind(&directory, second_state).is_err(),
+            "one data directory must not publish two active bridges"
+        );
+        let cancellation = CancellationToken::new();
+        let broker_cancellation = cancellation.clone();
         let broker = tokio::spawn(async move {
-            axum::serve(listener, crate::router(state))
+            bridge
+                .serve(broker_cancellation)
                 .await
-                .expect("broker serves");
+                .expect("native bridge serves");
         });
 
-        write_bridge_connection(
-            &connection_file,
-            address,
-            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        let bridge_client = BridgeClient::from_file(connection_file.clone());
+        bridge_client.health().await.expect("authenticated health");
+
+        let original_document = fs::read(&connection_file).expect("read connection document");
+        let mut invalid_document =
+            serde_json::from_slice::<Value>(&original_document).expect("parse connection document");
+        invalid_document["token"] = Value::String(
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned(),
         );
-        let bridge_client =
-            BridgeClient::from_file(connection_file.clone()).expect("bridge client");
+        fs::write(
+            &connection_file,
+            serde_json::to_vec(&invalid_document).expect("serialize invalid connection document"),
+        )
+        .expect("write invalid connection document");
         assert!(bridge_client.health().await.is_err());
 
-        write_bridge_connection(&connection_file, address, token);
-        bridge_client.health().await.expect("authenticated health");
-        let browser_origin_response = bridge_client
-            .client
-            .get(format!("http://{address}/internal/mcp/health"))
-            .bearer_auth(token)
-            .header("origin", "https://untrusted.example")
-            .send()
+        invalid_document =
+            serde_json::from_slice::<Value>(&original_document).expect("parse connection document");
+        invalid_document["schema_version"] = Value::from(1);
+        fs::write(
+            &connection_file,
+            serde_json::to_vec(&invalid_document).expect("serialize old connection schema"),
+        )
+        .expect("write old connection schema");
+        assert!(bridge_client.health().await.is_err());
+
+        invalid_document =
+            serde_json::from_slice::<Value>(&original_document).expect("parse connection document");
+        invalid_document["unexpected"] = Value::Bool(true);
+        fs::write(
+            &connection_file,
+            serde_json::to_vec(&invalid_document).expect("serialize document with unknown field"),
+        )
+        .expect("write document with unknown field");
+        assert!(bridge_client.health().await.is_err());
+
+        invalid_document =
+            serde_json::from_slice::<Value>(&original_document).expect("parse connection document");
+        #[cfg(windows)]
+        {
+            invalid_document["endpoint"]["name"] =
+                Value::String(r"\\.\pipe\not-secretbridge".to_owned());
+        }
+        #[cfg(unix)]
+        {
+            invalid_document["endpoint"]["path"] =
+                Value::String(directory.join("outside-pattern.sock").display().to_string());
+        }
+        fs::write(
+            &connection_file,
+            serde_json::to_vec(&invalid_document).expect("serialize invalid endpoint"),
+        )
+        .expect("write invalid endpoint");
+        assert!(bridge_client.health().await.is_err());
+
+        fs::write(&connection_file, &original_document).expect("restore connection document");
+        bridge_client
+            .health()
             .await
-            .expect("origin-bearing bridge request returns a response");
-        assert_eq!(browser_origin_response.status(), StatusCode::UNAUTHORIZED);
+            .expect("restored token authenticates");
+
         let (mcp_client, mcp_server) =
             connect_server(SecretBridgeMcp::new_remote(bridge_client.clone())).await;
         let result = mcp_client
@@ -1148,34 +1607,111 @@ mod tests {
             .health()
             .await
             .expect("broker survives MCP disconnect");
-        broker.abort();
-        let _ = broker.await;
+        cancellation.cancel();
+        broker.await.expect("join native bridge");
+        assert!(!connection_file.exists());
 
-        let replacement_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind replacement broker");
-        let replacement_address = replacement_listener
-            .local_addr()
-            .expect("replacement broker address");
-        let (replacement_state, _) = AppState::new([format!("http://{replacement_address}")]);
-        let replacement_token = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-        replacement_state
-            .install_mcp_bridge_token(replacement_token)
-            .await;
+        let (replacement_state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        let replacement_bridge =
+            LocalMcpBridge::bind(&directory, replacement_state).expect("bind replacement bridge");
+        let replacement_cancellation = CancellationToken::new();
+        let replacement_server_cancellation = replacement_cancellation.clone();
         let replacement_broker = tokio::spawn(async move {
-            axum::serve(replacement_listener, crate::router(replacement_state))
+            replacement_bridge
+                .serve(replacement_server_cancellation)
                 .await
-                .expect("replacement broker serves");
+                .expect("replacement bridge serves");
         });
-        write_bridge_connection(&connection_file, replacement_address, replacement_token);
         bridge_client
             .health()
             .await
             .expect("bridge reloads replacement broker connection");
-        replacement_broker.abort();
-        let _ = replacement_broker.await;
-        fs::remove_file(connection_file).expect("remove bridge connection file");
+        replacement_cancellation.cancel();
+        replacement_broker.await.expect("join replacement bridge");
         fs::remove_dir(directory).expect("remove bridge test directory");
+    }
+
+    #[tokio::test]
+    async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
+        let directory =
+            std::env::temp_dir().join(format!("secretbridge-stale-bridge-test-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).expect("create stale bridge test directory");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                .expect("restrict stale bridge test directory");
+        }
+        let connection_file = directory.join("mcp-bridge.json");
+        #[cfg(windows)]
+        let endpoint = json!({
+            "kind": "windows_named_pipe",
+            "name": r"\\.\pipe\secretbridge-00000000000000000000000000000000"
+        });
+        #[cfg(unix)]
+        let endpoint = {
+            let socket_path = directory.join("mcp-0000000000000000.sock");
+            let listener =
+                std::os::unix::net::UnixListener::bind(&socket_path).expect("bind stale socket");
+            drop(listener);
+            json!({"kind": "unix_socket", "path": socket_path})
+        };
+        fs::write(
+            &connection_file,
+            serde_json::to_vec(&json!({
+                "schema_version": 2,
+                "instance_id": Uuid::nil(),
+                "endpoint": endpoint,
+                "token": "0000000000000000000000000000000000000000000000000000000000000000"
+            }))
+            .expect("serialize stale connection document"),
+        )
+        .expect("write stale connection document");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&connection_file, fs::Permissions::from_mode(0o600))
+                .expect("restrict stale connection document");
+        }
+
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        let bridge = LocalMcpBridge::bind(&directory, state).expect("replace stale bridge");
+        drop(bridge);
+        assert!(!connection_file.exists());
+        fs::remove_dir(directory).expect("remove stale bridge test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_bridge_rejects_broad_and_symlinked_data_directories() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let root = std::env::temp_dir().join(format!(
+            "secretbridge-bridge-directory-test-{}",
+            Uuid::new_v4()
+        ));
+        let broad = root.join("broad");
+        let private = root.join("private");
+        let linked = root.join("linked");
+        fs::create_dir_all(&broad).expect("create broad directory");
+        fs::set_permissions(&broad, fs::Permissions::from_mode(0o755))
+            .expect("set broad permissions");
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        assert!(LocalMcpBridge::bind(&broad, state).is_err());
+
+        fs::create_dir(&private).expect("create private directory");
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o700))
+            .expect("set private permissions");
+        symlink(&private, &linked).expect("create directory symlink");
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        assert!(LocalMcpBridge::bind(&linked, state).is_err());
+
+        fs::remove_file(linked).expect("remove directory symlink");
+        fs::remove_dir(private).expect("remove private directory");
+        fs::remove_dir(broad).expect("remove broad directory");
+        fs::remove_dir(root).expect("remove test root");
     }
 
     #[tokio::test]
