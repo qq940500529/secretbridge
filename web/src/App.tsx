@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Command,
   FileClock,
+  FlaskConical,
   Gauge,
   KeyRound,
   Languages,
@@ -56,6 +57,11 @@ const OperationsView = lazy(() =>
 const AuditView = lazy(() =>
   import("./AuditView").then((module) => ({ default: module.AuditView })),
 );
+const SecurityValidationView = lazy(() =>
+  import("./SecurityValidationView").then((module) => ({
+    default: module.SecurityValidationView,
+  })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -70,6 +76,7 @@ interface Copy {
   policies: string;
   terminal: string;
   audit: string;
+  securityValidation: string;
   settings: string;
   overview: string;
   subtitle: string;
@@ -128,10 +135,11 @@ const copy: Record<Language, Copy> = {
     policies: "执行策略",
     terminal: "安全终端",
     audit: "审计记录",
+    securityValidation: "安全验证",
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    stage: "M2 首个业务适配器",
+    stage: "M3 安全验证与证据",
     syntheticTitle: "PostgreSQL 受控检查已接入",
     syntheticBody:
       "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
@@ -152,7 +160,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "仅限本机",
     nextTitle: "下一阶段",
     nextBody:
-      "使用专用低权限测试账号进行真实环境试点，并继续补充连接诊断、操作员确认与可审计的固定数据库操作。",
+      "完成操作系统身份边界的独立验证与安全复核后，使用专用低权限测试账号进入真实环境试点。",
     learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
@@ -186,11 +194,12 @@ const copy: Record<Language, Copy> = {
     policies: "Policies",
     terminal: "Secure terminal",
     audit: "Audit log",
+    securityValidation: "Security validation",
     settings: "Settings",
     overview: "Secure execution overview",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    stage: "M2 first business adapter",
+    stage: "M3 security validation and evidence",
     syntheticTitle: "Controlled PostgreSQL check is connected",
     syntheticBody:
       "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
@@ -214,7 +223,7 @@ const copy: Record<Language, Copy> = {
     localOnly: "Loopback only",
     nextTitle: "Next milestone",
     nextBody:
-      "Pilot the adapter with a dedicated least-privilege test account, then add connection diagnostics, operator confirmation, and auditable fixed database operations.",
+      "Complete independent OS identity-boundary validation and security review, then enter a real pilot with a dedicated least-privilege test account.",
     learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
@@ -251,6 +260,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "policies", icon: Workflow },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
+  { id: "securityValidation", icon: FlaskConical },
   { id: "settings", icon: Settings },
 ];
 
@@ -497,6 +507,13 @@ export function App() {
             ) : activePage === "audit" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <AuditView language={language} sessionToken={sessionToken} />
+              </Suspense>
+            ) : activePage === "securityValidation" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <SecurityValidationView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
               </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />
