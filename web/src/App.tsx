@@ -22,6 +22,7 @@ import {
   ServerCog,
   Settings,
   ShieldCheck,
+  ShieldQuestion,
   Sparkles,
   SquareTerminal,
   Workflow,
@@ -62,6 +63,11 @@ const SecurityValidationView = lazy(() =>
     default: module.SecurityValidationView,
   })),
 );
+const PilotReadinessView = lazy(() =>
+  import("./PilotReadinessView").then((module) => ({
+    default: module.PilotReadinessView,
+  })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -77,6 +83,7 @@ interface Copy {
   terminal: string;
   audit: string;
   securityValidation: string;
+  pilotReadiness: string;
   settings: string;
   overview: string;
   subtitle: string;
@@ -136,10 +143,11 @@ const copy: Record<Language, Copy> = {
     terminal: "安全终端",
     audit: "审计记录",
     securityValidation: "安全验证",
+    pilotReadiness: "试点准入",
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    stage: "M3 安全验证与证据",
+    stage: "M3 试点准入与证据",
     syntheticTitle: "PostgreSQL 受控检查已接入",
     syntheticBody:
       "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
@@ -195,11 +203,12 @@ const copy: Record<Language, Copy> = {
     terminal: "Secure terminal",
     audit: "Audit log",
     securityValidation: "Security validation",
+    pilotReadiness: "Pilot readiness",
     settings: "Settings",
     overview: "Secure execution overview",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    stage: "M3 security validation and evidence",
+    stage: "M3 pilot readiness and evidence",
     syntheticTitle: "Controlled PostgreSQL check is connected",
     syntheticBody:
       "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
@@ -261,6 +270,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
   { id: "securityValidation", icon: FlaskConical },
+  { id: "pilotReadiness", icon: ShieldQuestion },
   { id: "settings", icon: Settings },
 ];
 
@@ -511,6 +521,13 @@ export function App() {
             ) : activePage === "securityValidation" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <SecurityValidationView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
+              </Suspense>
+            ) : activePage === "pilotReadiness" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <PilotReadinessView
                   language={language}
                   sessionToken={sessionToken}
                 />

@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const SECURITY_VALIDATION_SUITE_VERSION: &str = "security-validation-v1";
+const PILOT_READINESS_PROFILE_VERSION: &str = "pilot-readiness-v1";
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -25,6 +26,7 @@ const MAX_APPROVALS: i64 = 512;
 const MAX_ACTION_TEMPLATES: i64 = 256;
 const MAX_RUNS: i64 = 1_024;
 const MAX_SECURITY_VALIDATION_RUNS: i64 = 128;
+const MAX_PILOT_READINESS_SNAPSHOTS: i64 = 128;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
@@ -630,6 +632,72 @@ pub struct SecurityValidationRun {
     pub checks: Vec<SecurityValidationCheck>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PilotReadinessStatus {
+    Ready,
+    Attention,
+    Blocked,
+}
+
+impl PilotReadinessStatus {
+    const fn as_storage(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Attention => "attention",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    fn from_storage(value: &str) -> rusqlite::Result<Self> {
+        match value {
+            "ready" => Ok(Self::Ready),
+            "attention" => Ok(Self::Attention),
+            "blocked" => Ok(Self::Blocked),
+            _ => Err(rusqlite::Error::InvalidQuery),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PilotReadinessCheck {
+    pub code: String,
+    pub category: String,
+    pub status: SecurityValidationStatus,
+    pub summary: String,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PilotReadinessSnapshot {
+    pub id: Uuid,
+    pub profile_version: String,
+    pub status: PilotReadinessStatus,
+    pub application_version: String,
+    pub platform: String,
+    pub created_at_unix_ms: u64,
+    pub latest_validation_id: Option<Uuid>,
+    pub candidate_test_targets: u64,
+    pub eligible_test_targets: u64,
+    pub evidence_digest_sha256: String,
+    pub digest_verified: bool,
+    pub checks: Vec<PilotReadinessCheck>,
+}
+
+#[derive(Serialize)]
+struct PilotReadinessEvidence<'a> {
+    id: Uuid,
+    profile_version: &'a str,
+    status: PilotReadinessStatus,
+    application_version: &'a str,
+    platform: &'a str,
+    created_at_unix_ms: u64,
+    latest_validation_id: Option<Uuid>,
+    candidate_test_targets: u64,
+    eligible_test_targets: u64,
+    checks: &'a [PilotReadinessCheck],
+}
+
 #[derive(Serialize)]
 struct SecurityValidationEvidence<'a> {
     id: Uuid,
@@ -834,7 +902,32 @@ impl Catalog {
                     PRIMARY KEY (run_id, ordinal),
                     UNIQUE (run_id, code)
                  );
-                 PRAGMA user_version = 8;
+                 CREATE TABLE pilot_readiness_snapshots (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+                    status TEXT NOT NULL CHECK (status IN ('ready', 'attention', 'blocked')),
+                    application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
+                    platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    latest_validation_id TEXT REFERENCES security_validation_runs(id) ON DELETE RESTRICT,
+                    candidate_test_targets INTEGER NOT NULL CHECK (candidate_test_targets >= 0),
+                    eligible_test_targets INTEGER NOT NULL CHECK (eligible_test_targets >= 0),
+                    evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
+                 );
+                 CREATE INDEX pilot_readiness_snapshots_created_idx
+                    ON pilot_readiness_snapshots(created_at_unix_ms DESC, id);
+                 CREATE TABLE pilot_readiness_checks (
+                    snapshot_id TEXT NOT NULL REFERENCES pilot_readiness_snapshots(id) ON DELETE CASCADE,
+                    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
+                    code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+                    category TEXT NOT NULL CHECK (category IN ('configuration', 'evidence', 'manual_gate')),
+                    status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
+                    summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
+                    evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
+                    PRIMARY KEY (snapshot_id, ordinal),
+                    UNIQUE (snapshot_id, code)
+                 );
+                 PRAGMA user_version = 9;
                  COMMIT;",
             )?;
         }
@@ -944,6 +1037,9 @@ impl Catalog {
         }
         if (1..=7).contains(&version) {
             migrate_security_validation_schema(&connection)?;
+        }
+        if (1..=8).contains(&version) {
+            migrate_pilot_readiness_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -1986,6 +2082,289 @@ impl Catalog {
         security_validation_with_checks(&connection, run)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "readiness collection and its transactional evidence write remain auditable together"
+    )]
+    pub fn execute_pilot_readiness_snapshot(&self) -> Result<PilotReadinessSnapshot, CatalogError> {
+        let created_at = now_unix_ms_i64()?;
+        let id = Uuid::new_v4();
+        let mut connection = self.lock();
+        let candidate_test_targets = count_query(
+            &connection,
+            "SELECT COUNT(*) FROM targets
+              WHERE kind = 'database' AND environment = 'test'",
+        )?;
+        let configured_test_targets = count_query(
+            &connection,
+            "SELECT COUNT(*) FROM targets
+              WHERE kind = 'database' AND environment = 'test'
+                AND postgres_host IS NOT NULL AND postgres_port IS NOT NULL
+                AND postgres_database IS NOT NULL AND postgres_username IS NOT NULL
+                AND postgres_tls_mode = 'verify_full'",
+        )?;
+        let credential_ready_targets = count_query(
+            &connection,
+            "SELECT COUNT(DISTINCT targets.id)
+               FROM targets
+               JOIN credential_references
+                 ON credential_references.id = targets.credential_reference_id
+              WHERE targets.kind = 'database' AND targets.environment = 'test'
+                AND credential_references.secret_configured = 1",
+        )?;
+        let eligible_test_targets = count_query(
+            &connection,
+            "SELECT COUNT(DISTINCT targets.id)
+               FROM targets
+               JOIN credential_references
+                 ON credential_references.id = targets.credential_reference_id
+               JOIN action_templates ON action_templates.target_id = targets.id
+              WHERE targets.kind = 'database' AND targets.environment = 'test'
+                AND targets.postgres_host IS NOT NULL AND targets.postgres_port IS NOT NULL
+                AND targets.postgres_database IS NOT NULL AND targets.postgres_username IS NOT NULL
+                AND targets.postgres_tls_mode = 'verify_full'
+                AND credential_references.secret_configured = 1
+                AND action_templates.operation = 'postgres_connection_check'
+                AND action_templates.result_scope = 'status_only'
+                AND action_templates.enabled = 1",
+        )?;
+        let latest_validation = connection
+            .query_row(
+                "SELECT id, suite_version, status, application_version, platform,
+                        started_at_unix_ms, finished_at_unix_ms, evidence_digest_sha256
+                   FROM security_validation_runs
+                  ORDER BY finished_at_unix_ms DESC, id DESC LIMIT 1",
+                [],
+                security_validation_run_header_from_row,
+            )
+            .optional()
+            .map_err(|_| CatalogError::Storage)?
+            .map(|run| security_validation_with_checks(&connection, run))
+            .transpose()?;
+
+        let mut checks = vec![
+            readiness_check(
+                "test_target_available",
+                "configuration",
+                candidate_test_targets > 0,
+                "A dedicated test database target is registered",
+                format!("{candidate_test_targets} test database target(s) found"),
+            ),
+            readiness_check(
+                "postgres_configuration_complete",
+                "configuration",
+                configured_test_targets > 0,
+                "A test target has complete PostgreSQL TLS configuration",
+                format!("{configured_test_targets} fully configured test target(s) found"),
+            ),
+            readiness_check(
+                "credential_available",
+                "configuration",
+                credential_ready_targets > 0,
+                "A test target references an available native credential",
+                format!("{credential_ready_targets} credential-ready test target(s) found"),
+            ),
+            readiness_check(
+                "controlled_template_available",
+                "configuration",
+                eligible_test_targets > 0,
+                "A fixed status-only PostgreSQL check is enabled for a test target",
+                format!("{eligible_test_targets} technically eligible test target(s) found"),
+            ),
+        ];
+        if let Some(validation) = &latest_validation {
+            checks.push(readiness_check(
+                "latest_validation_digest",
+                "evidence",
+                validation.digest_verified,
+                "The latest security-validation evidence digest is intact",
+                if validation.digest_verified {
+                    "Latest validation digest recomputation matched stored evidence".to_owned()
+                } else {
+                    "Latest validation digest did not match stored evidence".to_owned()
+                },
+            ));
+            checks.push(PilotReadinessCheck {
+                code: "latest_validation_result".to_owned(),
+                category: "evidence".to_owned(),
+                status: match validation.status {
+                    SecurityValidationStatus::Failed => SecurityValidationStatus::Failed,
+                    SecurityValidationStatus::Warning => SecurityValidationStatus::Warning,
+                    SecurityValidationStatus::Passed => SecurityValidationStatus::Passed,
+                },
+                summary: "The latest complete security-validation result is included".to_owned(),
+                evidence: format!(
+                    "Validation {} completed with status {}",
+                    validation.id,
+                    validation.status.as_storage()
+                ),
+            });
+        } else {
+            checks.push(readiness_check(
+                "latest_validation_digest",
+                "evidence",
+                false,
+                "A digest-verified security-validation run is available",
+                "No security-validation evidence has been created".to_owned(),
+            ));
+            checks.push(readiness_check(
+                "latest_validation_result",
+                "evidence",
+                false,
+                "A complete security-validation result is included",
+                "No security-validation result is available".to_owned(),
+            ));
+        }
+        checks.extend([
+            readiness_manual_gate(
+                "identity_boundary_evidence",
+                "Installed operating-system identity controls require platform evidence",
+                "The runtime still declares unverified_same_user",
+            ),
+            readiness_manual_gate(
+                "pilot_authorization_record",
+                "The target owner must authorize a time-bounded non-production pilot",
+                "No independent target-owner authorization is recorded by this self-check",
+            ),
+            readiness_manual_gate(
+                "least_privilege_review",
+                "Database grants must be independently confirmed as least privilege",
+                "Credential availability does not prove the remote account grant set",
+            ),
+            readiness_manual_gate(
+                "independent_security_review",
+                "Security-sensitive implementation requires independent review",
+                "Product-generated evidence is not an independent certification",
+            ),
+        ]);
+        let status = if checks
+            .iter()
+            .any(|check| check.status == SecurityValidationStatus::Failed)
+        {
+            PilotReadinessStatus::Blocked
+        } else if checks
+            .iter()
+            .any(|check| check.status == SecurityValidationStatus::Warning)
+        {
+            PilotReadinessStatus::Attention
+        } else {
+            PilotReadinessStatus::Ready
+        };
+        let mut snapshot = PilotReadinessSnapshot {
+            id,
+            profile_version: PILOT_READINESS_PROFILE_VERSION.to_owned(),
+            status,
+            application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            platform: std::env::consts::OS.to_owned(),
+            created_at_unix_ms: created_at.try_into().map_err(|_| CatalogError::Storage)?,
+            latest_validation_id: latest_validation.as_ref().map(|run| run.id),
+            candidate_test_targets: candidate_test_targets
+                .try_into()
+                .map_err(|_| CatalogError::Storage)?,
+            eligible_test_targets: eligible_test_targets
+                .try_into()
+                .map_err(|_| CatalogError::Storage)?,
+            evidence_digest_sha256: String::new(),
+            digest_verified: false,
+            checks,
+        };
+        snapshot.evidence_digest_sha256 = pilot_readiness_digest(&snapshot)?;
+        snapshot.digest_verified = true;
+
+        ensure_capacity(
+            &connection,
+            "pilot_readiness_snapshots",
+            MAX_PILOT_READINESS_SNAPSHOTS,
+        )?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO pilot_readiness_snapshots
+                    (id, profile_version, status, application_version, platform,
+                     created_at_unix_ms, latest_validation_id, candidate_test_targets,
+                     eligible_test_targets, evidence_digest_sha256)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    snapshot.id.to_string(),
+                    snapshot.profile_version,
+                    snapshot.status.as_storage(),
+                    snapshot.application_version,
+                    snapshot.platform,
+                    created_at,
+                    snapshot.latest_validation_id.map(|value| value.to_string()),
+                    candidate_test_targets,
+                    eligible_test_targets,
+                    snapshot.evidence_digest_sha256
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        for (index, check) in snapshot.checks.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO pilot_readiness_checks
+                        (snapshot_id, ordinal, code, category, status, summary, evidence)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        snapshot.id.to_string(),
+                        i64::try_from(index + 1).map_err(|_| CatalogError::Storage)?,
+                        check.code,
+                        check.category,
+                        check.status.as_storage(),
+                        check.summary,
+                        check.evidence
+                    ],
+                )
+                .map_err(|_| CatalogError::Storage)?;
+        }
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        Ok(snapshot)
+    }
+
+    pub fn list_pilot_readiness_snapshots(
+        &self,
+    ) -> Result<Vec<PilotReadinessSnapshot>, CatalogError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, profile_version, status, application_version, platform,
+                        created_at_unix_ms, latest_validation_id, candidate_test_targets,
+                        eligible_test_targets, evidence_digest_sha256
+                   FROM pilot_readiness_snapshots
+                  ORDER BY created_at_unix_ms DESC, id DESC",
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        let rows = statement
+            .query_map([], pilot_readiness_header_from_row)
+            .map_err(|_| CatalogError::Storage)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| CatalogError::Storage)?;
+        rows.into_iter()
+            .map(|snapshot| pilot_readiness_with_checks(&connection, snapshot))
+            .collect()
+    }
+
+    pub fn get_pilot_readiness_snapshot(
+        &self,
+        id: Uuid,
+    ) -> Result<PilotReadinessSnapshot, CatalogError> {
+        let connection = self.lock();
+        let snapshot = connection
+            .query_row(
+                "SELECT id, profile_version, status, application_version, platform,
+                        created_at_unix_ms, latest_validation_id, candidate_test_targets,
+                        eligible_test_targets, evidence_digest_sha256
+                   FROM pilot_readiness_snapshots WHERE id = ?1",
+                [id.to_string()],
+                pilot_readiness_header_from_row,
+            )
+            .optional()
+            .map_err(|_| CatalogError::Storage)?
+            .ok_or(CatalogError::NotFound)?;
+        pilot_readiness_with_checks(&connection, snapshot)
+    }
+
     fn instance_security_validation_checks(&self) -> Vec<SecurityValidationCheck> {
         let connection = self.lock();
         let integrity_ok = connection
@@ -2298,6 +2677,109 @@ fn security_validation_digest(run: &SecurityValidationRun) -> Result<String, Cat
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
+fn readiness_check(
+    code: &str,
+    category: &str,
+    passed: bool,
+    summary: &str,
+    evidence: String,
+) -> PilotReadinessCheck {
+    PilotReadinessCheck {
+        code: code.to_owned(),
+        category: category.to_owned(),
+        status: if passed {
+            SecurityValidationStatus::Passed
+        } else {
+            SecurityValidationStatus::Failed
+        },
+        summary: summary.to_owned(),
+        evidence,
+    }
+}
+
+fn readiness_manual_gate(code: &str, summary: &str, evidence: &str) -> PilotReadinessCheck {
+    PilotReadinessCheck {
+        code: code.to_owned(),
+        category: "manual_gate".to_owned(),
+        status: SecurityValidationStatus::Warning,
+        summary: summary.to_owned(),
+        evidence: evidence.to_owned(),
+    }
+}
+
+fn count_query(connection: &Connection, statement: &str) -> Result<i64, CatalogError> {
+    connection
+        .query_row(statement, [], |row| row.get(0))
+        .map_err(|_| CatalogError::Storage)
+}
+
+fn pilot_readiness_digest(snapshot: &PilotReadinessSnapshot) -> Result<String, CatalogError> {
+    let payload = PilotReadinessEvidence {
+        id: snapshot.id,
+        profile_version: &snapshot.profile_version,
+        status: snapshot.status,
+        application_version: &snapshot.application_version,
+        platform: &snapshot.platform,
+        created_at_unix_ms: snapshot.created_at_unix_ms,
+        latest_validation_id: snapshot.latest_validation_id,
+        candidate_test_targets: snapshot.candidate_test_targets,
+        eligible_test_targets: snapshot.eligible_test_targets,
+        checks: &snapshot.checks,
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|_| CatalogError::Storage)?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn pilot_readiness_header_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PilotReadinessSnapshot> {
+    Ok(PilotReadinessSnapshot {
+        id: uuid_from_row(row, 0)?,
+        profile_version: row.get(1)?,
+        status: PilotReadinessStatus::from_storage(&row.get::<_, String>(2)?)?,
+        application_version: row.get(3)?,
+        platform: row.get(4)?,
+        created_at_unix_ms: u64_from_row(row, 5)?,
+        latest_validation_id: row
+            .get::<_, Option<String>>(6)?
+            .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?,
+        candidate_test_targets: u64_from_row(row, 7)?,
+        eligible_test_targets: u64_from_row(row, 8)?,
+        evidence_digest_sha256: row.get(9)?,
+        digest_verified: false,
+        checks: Vec::new(),
+    })
+}
+
+fn pilot_readiness_with_checks(
+    connection: &Connection,
+    mut snapshot: PilotReadinessSnapshot,
+) -> Result<PilotReadinessSnapshot, CatalogError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT code, category, status, summary, evidence
+               FROM pilot_readiness_checks WHERE snapshot_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    snapshot.checks = statement
+        .query_map([snapshot.id.to_string()], |row| {
+            Ok(PilotReadinessCheck {
+                code: row.get(0)?,
+                category: row.get(1)?,
+                status: SecurityValidationStatus::from_storage(&row.get::<_, String>(2)?)?,
+                summary: row.get(3)?,
+                evidence: row.get(4)?,
+            })
+        })
+        .map_err(|_| CatalogError::Storage)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| CatalogError::Storage)?;
+    snapshot.digest_verified = pilot_readiness_digest(&snapshot)
+        .is_ok_and(|digest| digest == snapshot.evidence_digest_sha256);
+    Ok(snapshot)
+}
+
 fn security_validation_run_header_from_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<SecurityValidationRun> {
@@ -2594,6 +3076,39 @@ fn migrate_security_validation_schema(connection: &Connection) -> rusqlite::Resu
             UNIQUE (run_id, code)
          );
          PRAGMA user_version = 8;
+         COMMIT;",
+    )
+}
+
+fn migrate_pilot_readiness_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE IF NOT EXISTS pilot_readiness_snapshots (
+            id TEXT PRIMARY KEY NOT NULL,
+            profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+            status TEXT NOT NULL CHECK (status IN ('ready', 'attention', 'blocked')),
+            application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
+            platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
+            created_at_unix_ms INTEGER NOT NULL,
+            latest_validation_id TEXT REFERENCES security_validation_runs(id) ON DELETE RESTRICT,
+            candidate_test_targets INTEGER NOT NULL CHECK (candidate_test_targets >= 0),
+            eligible_test_targets INTEGER NOT NULL CHECK (eligible_test_targets >= 0),
+            evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
+         );
+         CREATE INDEX IF NOT EXISTS pilot_readiness_snapshots_created_idx
+            ON pilot_readiness_snapshots(created_at_unix_ms DESC, id);
+         CREATE TABLE IF NOT EXISTS pilot_readiness_checks (
+            snapshot_id TEXT NOT NULL REFERENCES pilot_readiness_snapshots(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
+            code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+            category TEXT NOT NULL CHECK (category IN ('configuration', 'evidence', 'manual_gate')),
+            status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
+            summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
+            evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
+            PRIMARY KEY (snapshot_id, ordinal),
+            UNIQUE (snapshot_id, code)
+         );
+         PRAGMA user_version = 9;
          COMMIT;",
     )
 }
@@ -3041,6 +3556,7 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
         "action_templates" => "SELECT COUNT(*) FROM action_templates",
         "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
         "security_validation_runs" => "SELECT COUNT(*) FROM security_validation_runs",
+        "pilot_readiness_snapshots" => "SELECT COUNT(*) FROM pilot_readiness_snapshots",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -3169,10 +3685,11 @@ mod tests {
         ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
         CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
         CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, POSTGRES_POLICY_VERSION,
-        PolicyDecision, PolicyReasonCode, PolicyRequirement, PostgresRunResult,
-        PostgresTargetConfig, PostgresTlsMode, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
-        SecretState, SecurityValidationStatus, TargetEnvironment, TargetKind, UpdateActionTemplate,
-        UpdateCredentialReference, UpdateTarget,
+        PilotReadinessStatus, PolicyDecision, PolicyReasonCode, PolicyRequirement,
+        PostgresRunResult, PostgresTargetConfig, PostgresTlsMode, RunState,
+        SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState, SecurityValidationStatus,
+        TargetEnvironment, TargetKind, UpdateActionTemplate, UpdateCredentialReference,
+        UpdateTarget,
     };
 
     #[test]
@@ -3227,6 +3744,121 @@ mod tests {
         let stored = catalog
             .get_security_validation_run(run.id)
             .expect("stored validation");
+        assert!(!stored.digest_verified);
+    }
+
+    #[test]
+    fn pilot_readiness_is_blocked_without_prerequisites_and_persists_evidence() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let snapshot = catalog
+            .execute_pilot_readiness_snapshot()
+            .expect("pilot readiness snapshot");
+
+        assert_eq!(snapshot.status, PilotReadinessStatus::Blocked);
+        assert_eq!(snapshot.candidate_test_targets, 0);
+        assert_eq!(snapshot.eligible_test_targets, 0);
+        assert_eq!(snapshot.checks.len(), 10);
+        assert!(snapshot.digest_verified);
+        assert!(
+            snapshot
+                .checks
+                .iter()
+                .any(|check| check.code == "latest_validation_digest"
+                    && check.status == SecurityValidationStatus::Failed)
+        );
+        let stored = catalog
+            .get_pilot_readiness_snapshot(snapshot.id)
+            .expect("stored readiness snapshot");
+        assert!(stored.digest_verified);
+        assert_eq!(
+            catalog
+                .list_pilot_readiness_snapshots()
+                .expect("readiness history")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn pilot_readiness_aggregates_eligible_target_and_latest_validation() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let validation = catalog
+            .execute_security_validation()
+            .expect("security validation");
+        let credential = create_credential(&catalog);
+        catalog
+            .set_credential_secret_state(credential.id, credential.version, true)
+            .expect("configured secret metadata");
+        let target = catalog
+            .create_target(&CreateTarget {
+                name: "Dedicated pilot database".to_owned(),
+                kind: TargetKind::Database,
+                environment: TargetEnvironment::Test,
+                description: None,
+                credential_reference_id: Some(credential.id),
+                postgres: Some(PostgresTargetConfig {
+                    host: "pilot.test.example".to_owned(),
+                    port: 5432,
+                    database: "pilot".to_owned(),
+                    username: "pilot_reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            })
+            .expect("pilot target");
+        catalog
+            .create_action_template(&CreateActionTemplate {
+                target_id: target.id,
+                name: "Pilot connection check".to_owned(),
+                operation: ApprovalOperation::PostgresConnectionCheck,
+                result_scope: ApprovalResultScope::StatusOnly,
+                description: None,
+                timeout_seconds: 15,
+            })
+            .expect("pilot template");
+
+        let snapshot = catalog
+            .execute_pilot_readiness_snapshot()
+            .expect("pilot readiness snapshot");
+        assert_eq!(snapshot.status, PilotReadinessStatus::Attention);
+        assert_eq!(snapshot.latest_validation_id, Some(validation.id));
+        assert_eq!(snapshot.candidate_test_targets, 1);
+        assert_eq!(snapshot.eligible_test_targets, 1);
+        assert_eq!(
+            snapshot
+                .checks
+                .iter()
+                .filter(|check| check.status == SecurityValidationStatus::Failed)
+                .count(),
+            0
+        );
+        assert_eq!(
+            snapshot
+                .checks
+                .iter()
+                .filter(|check| check.status == SecurityValidationStatus::Warning)
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn pilot_readiness_digest_detects_evidence_tampering() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let snapshot = catalog
+            .execute_pilot_readiness_snapshot()
+            .expect("pilot readiness snapshot");
+        catalog
+            .lock()
+            .execute(
+                "UPDATE pilot_readiness_checks SET evidence = 'tampered'
+                  WHERE snapshot_id = ?1 AND ordinal = 1",
+                [snapshot.id.to_string()],
+            )
+            .expect("tamper readiness evidence");
+
+        let stored = catalog
+            .get_pilot_readiness_snapshot(snapshot.id)
+            .expect("stored readiness snapshot");
         assert!(!stored.digest_verified);
     }
 
@@ -3595,7 +4227,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 
     #[test]
@@ -3655,7 +4287,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            9
         );
     }
 
@@ -3689,7 +4321,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            9
         );
     }
 
@@ -3727,7 +4359,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            9
         );
     }
 
@@ -3763,7 +4395,50 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            9
+        );
+    }
+
+    #[test]
+    fn version_eight_database_adds_pilot_readiness_without_losing_validation() {
+        let database = TemporaryDatabase::new();
+        let validation_id = {
+            let catalog = Catalog::open(&database.path).expect("create current catalog");
+            catalog
+                .execute_security_validation()
+                .expect("security validation")
+                .id
+        };
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "DROP TABLE pilot_readiness_checks;
+                     DROP TABLE pilot_readiness_snapshots;
+                     PRAGMA user_version = 8;",
+                )
+                .expect("restore version eight layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v8 catalog");
+        assert_eq!(
+            catalog
+                .list_security_validation_runs()
+                .expect("preserved validation")[0]
+                .id,
+            validation_id
+        );
+        let readiness = catalog
+            .execute_pilot_readiness_snapshot()
+            .expect("readiness after migration");
+        assert_eq!(readiness.latest_validation_id, Some(validation_id));
+        assert!(readiness.digest_verified);
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            9
         );
     }
 

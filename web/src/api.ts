@@ -320,6 +320,43 @@ export interface SecurityValidationReportResponse {
   disclosure: "self_validation_evidence_not_independent_certification";
 }
 
+export type PilotReadinessStatus = "ready" | "attention" | "blocked";
+
+export interface PilotReadinessCheck {
+  code: string;
+  category: "configuration" | "evidence" | "manual_gate";
+  status: SecurityValidationStatus;
+  summary: string;
+  evidence: string;
+}
+
+export interface PilotReadinessSnapshot {
+  id: string;
+  profile_version: string;
+  status: PilotReadinessStatus;
+  application_version: string;
+  platform: string;
+  created_at_unix_ms: number;
+  latest_validation_id: string | null;
+  candidate_test_targets: number;
+  eligible_test_targets: number;
+  evidence_digest_sha256: string;
+  digest_verified: boolean;
+  checks: PilotReadinessCheck[];
+}
+
+export interface PilotReadinessListResponse {
+  items: PilotReadinessSnapshot[];
+  evidence_policy: "server_generated_non_secret_readiness_evidence";
+}
+
+export interface PilotReadinessReportResponse {
+  snapshot: PilotReadinessSnapshot;
+  digest_verified: boolean;
+  markdown: string;
+  disclosure: "readiness_snapshot_not_pilot_authorization_or_certification";
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -738,6 +775,44 @@ export async function getSecurityValidationReport(
 ): Promise<SecurityValidationReportResponse> {
   return readJson<SecurityValidationReportResponse>(
     await fetch(`/api/v1/security-validations/${id}/report`, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listPilotReadiness(
+  sessionToken: string,
+): Promise<PilotReadinessListResponse> {
+  return readJson<PilotReadinessListResponse>(
+    await fetch("/api/v1/pilot-readiness", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createPilotReadiness(
+  sessionToken: string,
+): Promise<PilotReadinessSnapshot> {
+  return readJson<PilotReadinessSnapshot>(
+    await fetch("/api/v1/pilot-readiness", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function getPilotReadinessReport(
+  sessionToken: string,
+  id: string,
+): Promise<PilotReadinessReportResponse> {
+  return readJson<PilotReadinessReportResponse>(
+    await fetch(`/api/v1/pilot-readiness/${id}/report`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

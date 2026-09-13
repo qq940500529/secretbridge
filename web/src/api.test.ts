@@ -9,10 +9,13 @@ import {
   createActionTemplate,
   createSyntheticRun,
   createSecurityValidation,
+  createPilotReadiness,
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
   getSecurityValidationReport,
+  getPilotReadinessReport,
+  listPilotReadiness,
   setCredentialSecret,
   clearCredentialSecret,
   updateCredentialReference,
@@ -325,5 +328,48 @@ describe("configuration API client", () => {
       "/api/v1/security-validations/validation-id/report",
     );
     expect(fetch.mock.calls[1]?.[1]).not.toHaveProperty("body");
+  });
+
+  it("creates, lists and exports pilot readiness without caller input", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "readiness-id", status: "blocked" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            snapshot: { id: "readiness-id" },
+            digest_verified: true,
+            markdown: "# Pilot readiness",
+            disclosure: "readiness_snapshot_not_pilot_authorization_or_certification",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await createPilotReadiness("synthetic-session-token");
+    await listPilotReadiness("synthetic-session-token");
+    await getPilotReadinessReport("synthetic-session-token", "readiness-id");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/pilot-readiness");
+    expect(fetch.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ method: "POST", credentials: "omit" }),
+    );
+    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("body");
+    expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/pilot-readiness");
+    expect(fetch.mock.calls[2]?.[0]).toBe(
+      "/api/v1/pilot-readiness/readiness-id/report",
+    );
   });
 });

@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. The Security validation page now runs current-instance checks and isolated attack scenarios, persists fixed evidence and exports digest-verifiable reports. Approval decisions remain in the trusted Web console. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
+> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Security validation produces repeatable self-test evidence; Pilot readiness now aggregates configuration, validation and explicit external gates without treating technical eligibility as authorization. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. The validation center persists server-generated evidence in SQLite schema v8 and verifies report integrity with SHA-256; it does not connect to real targets or claim independent certification. PTY reconnection uses output cursors, concurrent attachments enforce one writer with read-only observers, and ordinary terminals never receive credentials. The status API explicitly reports the identity posture as unverified same-user compatibility. See [milestone acceptance criteria](ROADMAP.md) for remaining work.
+One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. SQLite schema v9 stores digest-verifiable security-validation and pilot-readiness evidence. Readiness reports expose counts and fixed gates, never target addresses, and remain explicit that self-generated evidence is not authorization or independent certification. See the [complete roadmap](ROADMAP.md) for remaining work.
 
 ## How it works
 
@@ -59,6 +59,8 @@ The assistant does not receive the stored secret. Ordinary terminals and credent
 | :--- | :--- |
 | Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
 | Run and interpret security self-validation | [Security validation and evidence](docs/安全验证中心.md) — Chinese |
+| Assess technical and external pilot gates | [Pilot readiness center](docs/试点准入中心.md) — Chinese |
+| Understand the complete future product | [Mature architecture and feature specification](docs/成熟态软件架构与功能说明.md) — Chinese |
 | Find the right technical document | [Documentation hub](docs/README.md) |
 | Contribute code, design or tests | [Contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) |
 | Review architecture and platform behavior | [Architecture](docs/开发设计.md) and [platform/UI specification](docs/跨平台与UI规范.md) |
