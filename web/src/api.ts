@@ -285,6 +285,41 @@ export interface SafeEventListResponse {
   payload_policy: "fixed_safe_messages_only";
 }
 
+export type SecurityValidationStatus = "passed" | "warning" | "failed";
+
+export interface SecurityValidationCheck {
+  code: string;
+  category: "instance" | "isolated_scenario" | "manual_gate";
+  status: SecurityValidationStatus;
+  summary: string;
+  evidence: string;
+}
+
+export interface SecurityValidationRun {
+  id: string;
+  suite_version: string;
+  status: SecurityValidationStatus;
+  application_version: string;
+  platform: string;
+  started_at_unix_ms: number;
+  finished_at_unix_ms: number;
+  evidence_digest_sha256: string;
+  digest_verified: boolean;
+  checks: SecurityValidationCheck[];
+}
+
+export interface SecurityValidationListResponse {
+  items: SecurityValidationRun[];
+  evidence_policy: "server_generated_fixed_evidence_only";
+}
+
+export interface SecurityValidationReportResponse {
+  run: SecurityValidationRun;
+  digest_verified: boolean;
+  markdown: string;
+  disclosure: "self_validation_evidence_not_independent_certification";
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -665,6 +700,44 @@ export async function listSafeEvents(
 ): Promise<SafeEventListResponse> {
   return readJson<SafeEventListResponse>(
     await fetch("/api/v1/safe-events", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listSecurityValidations(
+  sessionToken: string,
+): Promise<SecurityValidationListResponse> {
+  return readJson<SecurityValidationListResponse>(
+    await fetch("/api/v1/security-validations", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createSecurityValidation(
+  sessionToken: string,
+): Promise<SecurityValidationRun> {
+  return readJson<SecurityValidationRun>(
+    await fetch("/api/v1/security-validations", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function getSecurityValidationReport(
+  sessionToken: string,
+  id: string,
+): Promise<SecurityValidationReportResponse> {
+  return readJson<SecurityValidationReportResponse>(
+    await fetch(`/api/v1/security-validations/${id}/report`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

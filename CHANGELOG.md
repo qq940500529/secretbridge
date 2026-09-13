@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.16 · security validation and evidence center
+
+- Add a paired-Web security validation center that runs a complete suite without accepting commands, parameters, target identifiers or secret values from the caller.
+- Inspect the current SQLite catalog for integrity, foreign-key violations, secret-value-shaped credential columns and persisted safe-event messages outside the fixed allowlist.
+- Reuse the production catalog, policy and transition code in disposable in-memory scenarios to verify approval-bypass rejection, single-use/idempotent execution, target-rotation invalidation, approval revocation and interrupted-run recovery.
+- Persist server-generated fixed evidence in SQLite schema version 8 with bounded history, stable check codes, application/platform metadata and a canonical SHA-256 evidence digest.
+- Add authenticated history/detail/report APIs plus a bilingual Web view with status summaries and Markdown/JSON downloads; report retrieval verifies the stored digest and states that self-validation is not independent certification.
+- Keep OS identity isolation as an explicit manual warning and leave real least-privilege targets, hostile same-user tests and independent review as M3 gates.
+- Add catalog tamper-detection, schema migration, HTTP boundary and Web-client coverage, and document the operating procedure, report interpretation and acceptance baseline.
+
 ### 0.1.0-alpha.15 · native local MCP bridge transport
 
 - Replace the broker-to-stdio-bridge loopback HTTP client and private Web routes with a length-prefixed native IPC protocol: Windows named pipes and Unix domain sockets on Linux/macOS.

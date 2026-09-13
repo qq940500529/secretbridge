@@ -2,7 +2,7 @@
 
 [Home](README.md) / Roadmap
 
-Milestones describe acceptance gates rather than promised dates. **M2 controlled-operation development is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets and perform one fixed PostgreSQL check, but unresolved identity, platform and real-target gates still block production claims.
+Milestones describe acceptance gates rather than promised dates. **M3 security-pilot preparation is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets, perform one fixed PostgreSQL check and produce repeatable self-validation evidence, but unresolved identity, platform, independent-review and real-target gates still block production claims.
 
 ## Progress at a glance
 
@@ -10,9 +10,9 @@ Milestones describe acceptance gates rather than promised dates. **M2 controlled
 | :--- | :--- | :--- |
 | Foundation | Architecture, threat model, platform/UI targets and repository governance | Available |
 | M0 · Feasibility | Synthetic credential and isolation experiments | In progress |
-| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | In progress |
-| M2 · Controlled operations | Scoped adapter and MCP integration | In progress |
-| M3 · Security pilot | Approved low-privilege testing and independent review | Planned |
+| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | Complete |
+| M2 · Controlled operations | Scoped adapter and MCP integration | Complete |
+| M3 · Security pilot | Repeatable evidence, approved low-privilege testing and independent review | In progress |
 | M4 · Distribution | Validated packages, source correspondence and recovery | Planned |
 
 ```mermaid
@@ -80,9 +80,11 @@ A later milestone may be developed in synthetic mode, but cannot enable security
 <summary>M3 — Security pilot</summary>
 
 - [ ] Complete attack and leakage tests in the threat model.
+  - `0.1.0-alpha.16` adds a product-level security validation center that combines current-instance SQLite integrity and bounded-payload checks with isolated approval-bypass, replay, rotation, revocation and restart-recovery scenarios. It persists fixed safe evidence with a SHA-256 digest and exports Markdown/JSON reports. OS identity, hostile same-user, real-target and independent tests remain open.
 - [ ] Resolve high-risk findings before connecting real test credentials.
 - [ ] Obtain explicit approval for a dedicated low-privilege test environment.
 - [ ] Validate rotation, revocation and failure recovery.
+  - The `alpha.16` isolated suite establishes a repeatable synthetic baseline for target-version rotation, approval revocation and interrupted-run recovery. Native-store and remote-session behavior still requires the approved pilot environment.
 - [ ] Complete independent review of security-sensitive implementation.
 
 </details>

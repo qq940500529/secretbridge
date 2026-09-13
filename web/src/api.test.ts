@@ -8,9 +8,11 @@ import {
   createApproval,
   createActionTemplate,
   createSyntheticRun,
+  createSecurityValidation,
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
+  getSecurityValidationReport,
   setCredentialSecret,
   clearCredentialSecret,
   updateCredentialReference,
@@ -287,5 +289,41 @@ describe("configuration API client", () => {
     expect(path).toBe("/api/v1/runs/run-id/cancel");
     expect(request.method).toBe("POST");
     expect(JSON.parse(request.body as string)).toEqual({ expected_version: 2 });
+  });
+
+  it("runs and exports security validation without a caller-supplied payload", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "validation-id", status: "warning" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            run: { id: "validation-id" },
+            digest_verified: true,
+            markdown: "# Safe report",
+            disclosure: "self_validation_evidence_not_independent_certification",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await createSecurityValidation("synthetic-session-token");
+    await getSecurityValidationReport("synthetic-session-token", "validation-id");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/security-validations");
+    expect(fetch.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ method: "POST", credentials: "omit" }),
+    );
+    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("body");
+    expect(fetch.mock.calls[1]?.[0]).toBe(
+      "/api/v1/security-validations/validation-id/report",
+    );
+    expect(fetch.mock.calls[1]?.[1]).not.toHaveProperty("body");
   });
 });
