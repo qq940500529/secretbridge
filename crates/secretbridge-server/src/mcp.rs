@@ -772,6 +772,10 @@ fn bridge_endpoint_is_active(endpoint: &BridgeEndpoint) -> bool {
 }
 
 #[cfg(unix)]
+#[allow(
+    clippy::verbose_bit_mask,
+    reason = "the security check intentionally names the group/other permission-bit mask"
+)]
 fn valid_bridge_connection_metadata(metadata: &fs::Metadata, path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
@@ -969,7 +973,7 @@ fn bind_bridge_listener(
     instance_id: Uuid,
 ) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
     let identifier = instance_id.simple().to_string();
-    let socket_path = data_directory.join(format!("mcp-{}.sock", &identifier[..16]));
+    let socket_path = data_directory.join(format!("sb-{}", &identifier[..16]));
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
     let owner_uid = fs::metadata(data_directory)?.uid();
@@ -1107,8 +1111,9 @@ fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, connection_file: &Path) -> b
         && path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| {
-                name.starts_with("mcp-") && name.ends_with(".sock") && name.len() == 25
+            .and_then(|name| name.strip_prefix("sb-"))
+            .is_some_and(|identifier| {
+                identifier.len() == 16 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
         && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
 }
@@ -1496,8 +1501,8 @@ mod tests {
         reason = "one native IPC lifecycle scenario keeps authentication, validation and restart behavior contiguous"
     )]
     async fn detached_stdio_bridge_authenticates_reloads_and_does_not_own_broker_lifecycle() {
-        let directory =
-            std::env::temp_dir().join(format!("secretbridge-detached-mcp-test-{}", Uuid::new_v4()));
+        let identifier = Uuid::new_v4().simple().to_string();
+        let directory = std::env::temp_dir().join(format!("sb-m-{}", &identifier[..8]));
         fs::create_dir(&directory).expect("create bridge test directory");
         #[cfg(unix)]
         {
@@ -1633,8 +1638,8 @@ mod tests {
 
     #[tokio::test]
     async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
-        let directory =
-            std::env::temp_dir().join(format!("secretbridge-stale-bridge-test-{}", Uuid::new_v4()));
+        let identifier = Uuid::new_v4().simple().to_string();
+        let directory = std::env::temp_dir().join(format!("sb-s-{}", &identifier[..8]));
         fs::create_dir(&directory).expect("create stale bridge test directory");
         #[cfg(unix)]
         {
@@ -1651,7 +1656,7 @@ mod tests {
         });
         #[cfg(unix)]
         let endpoint = {
-            let socket_path = directory.join("mcp-0000000000000000.sock");
+            let socket_path = directory.join("sb-0000000000000000");
             let listener =
                 std::os::unix::net::UnixListener::bind(&socket_path).expect("bind stale socket");
             drop(listener);
