@@ -107,7 +107,6 @@ export function CredentialReferencesView({
   const common = sharedCopy[language];
   const text = language === "zh-CN"
     ? {
-        eyebrow: "M1 · 凭据引用",
         title: "建立凭据用途清单",
         subtitle: "名称、类型和用途保存在本机配置库；密码与 API 令牌单独写入操作系统凭据库，页面与 API 都不会回读秘密值。",
         formTitle: "添加凭据引用",
@@ -127,7 +126,6 @@ export function CredentialReferencesView({
         sshPending: "SSH 私钥写入将在专用文件型凭据适配器中提供。",
       }
     : {
-        eyebrow: "M1 · Credential references",
         title: "Build a credential-purpose catalog",
         subtitle: "Names, types, and purposes stay in local configuration. Passwords and API tokens are written separately to the OS credential store and are never returned by the page or API.",
         formTitle: "Add credential reference",
@@ -290,7 +288,6 @@ export function CredentialReferencesView({
 
   return (
     <CatalogPage
-      eyebrow={text.eyebrow}
       title={text.title}
       subtitle={text.subtitle}
       language={language}
@@ -327,7 +324,7 @@ export function CredentialReferencesView({
         emptyLabel={common.empty}
       >
         {items.map((item) => (
-          <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <article key={item.id} className="p-5">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -376,7 +373,6 @@ export function TargetsView({
   const common = sharedCopy[language];
   const text = language === "zh-CN"
     ? {
-        eyebrow: "M1 · 连接目标",
         title: "定义逻辑目标与凭据关系",
         subtitle: "数据库目标可登记 PostgreSQL 主机、端口、库名和账号；密码来自关联的系统凭据库。当前不会绕过审批主动连接业务系统。",
         formTitle: "添加逻辑目标",
@@ -398,7 +394,6 @@ export function TargetsView({
         verifyFull: "强制加密并验证证书与主机名",
       }
     : {
-        eyebrow: "M1 · Targets",
         title: "Define logical targets and credential relationships",
         subtitle: "Database targets can record a PostgreSQL host, port, database, and user; passwords come from the linked OS credential entry. No business connection bypasses approval.",
         formTitle: "Add logical target",
@@ -567,7 +562,6 @@ export function TargetsView({
 
   return (
     <CatalogPage
-      eyebrow={text.eyebrow}
       title={text.title}
       subtitle={text.subtitle}
       language={language}
@@ -683,7 +677,7 @@ export function TargetsView({
         emptyLabel={common.empty}
       >
         {items.map((item) => (
-          <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <article key={item.id} className="p-5">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -725,7 +719,6 @@ const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100";
 
 function CatalogPage({
-  eyebrow,
   title,
   subtitle,
   language,
@@ -733,7 +726,6 @@ function CatalogPage({
   error,
   children,
 }: {
-  eyebrow: string;
   title: string;
   subtitle: string;
   language: Language;
@@ -746,11 +738,10 @@ function CatalogPage({
   return (
     <>
       <div className="mb-6">
-        <p className="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">{eyebrow}</p>
-        <h1 className="mb-0 mt-2 text-3xl font-bold tracking-tight text-slate-950">{title}</h1>
+        <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">{title}</h1>
         <p className="mb-0 mt-3 max-w-3xl text-base leading-7 text-slate-600">{subtitle}</p>
       </div>
-      <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
+      <div className="mb-6 flex items-start gap-3 border-l-4 border-amber-400 bg-amber-50 px-4 py-3 text-amber-950">
         <CircleAlert className="mt-0.5 size-5 shrink-0 text-amber-700" />
         <div>
           <p className="m-0 text-sm font-semibold">
@@ -766,30 +757,28 @@ function CatalogPage({
           {error}
         </div>
       )}
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(280px,0.72fr)_minmax(0,1.28fr)]">{children}</div>
+      <div className="space-y-5">{children}</div>
     </>
   );
 }
 
 function CatalogForm({ title, onSubmit, busy, submitLabel, busyLabel, onCancel, cancelLabel, children }: { title: string; onSubmit: (event: FormEvent) => void; busy: boolean; submitLabel: string; busyLabel: string; onCancel?: () => void; cancelLabel: string; children: ReactNode }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-5 flex items-center gap-3">
-        <div className="grid size-10 place-items-center rounded-xl bg-cyan-50 text-cyan-700"><Plus className="size-5" /></div>
-        <h2 className="m-0 text-base font-semibold text-slate-950">{title}</h2>
-      </div>
-      <div className="space-y-4">{children}</div>
-      <button type="submit" disabled={busy} className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60">
-        {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
-        {busy ? busyLabel : submitLabel}
-      </button>
-      {onCancel && (
-        <button type="button" onClick={onCancel} disabled={busy} className="mt-2 inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold text-slate-600 transition hover:bg-slate-100 disabled:opacity-60">
-          <X className="size-4" />
-          {cancelLabel}
-        </button>
-      )}
-    </form>
+    <details className="enterprise-disclosure enterprise-surface" open={onCancel ? true : undefined}>
+      <summary className="flex cursor-pointer items-center justify-between border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50">
+        <span className="inline-flex items-center gap-2"><Plus className="size-4 text-cyan-700" />{title}</span>
+        <span className="text-xs font-medium text-slate-400">{onCancel ? "" : "+"}</span>
+      </summary>
+      <form onSubmit={onSubmit} className="max-w-4xl p-5">
+        <div className="grid gap-4 md:grid-cols-2">{children}</div>
+        <div className="mt-5 flex justify-end gap-2">
+          {onCancel && <button type="button" onClick={onCancel} disabled={busy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"><X className="size-4" />{cancelLabel}</button>}
+          <button type="submit" disabled={busy} className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cyan-700 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-60">
+            {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}{busy ? busyLabel : submitLabel}
+          </button>
+        </div>
+      </form>
+    </details>
   );
 }
 
@@ -801,18 +790,16 @@ function CatalogList({ title, icon, loading, loadingLabel, emptyLabel, children 
   const isEmpty = Array.isArray(children) && children.length === 0;
   return (
     <section aria-busy={loading}>
-      <div className="mb-4 flex items-center gap-3">
-        <div className="grid size-10 place-items-center rounded-xl bg-indigo-50 text-indigo-700">
-          {icon === "target" ? <ServerCog className="size-5" /> : <KeyRound className="size-5" />}
-        </div>
-        <h2 className="m-0 text-base font-semibold text-slate-950">{title}</h2>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="m-0 inline-flex items-center gap-2 text-base font-semibold text-slate-950">{icon === "target" ? <ServerCog className="size-4 text-slate-500" /> : <KeyRound className="size-4 text-slate-500" />}{title}</h2>
+        {!loading && !isEmpty && <span className="text-xs tabular-nums text-slate-500">{Array.isArray(children) ? children.length : ""}</span>}
       </div>
       {loading ? (
         <div className="flex min-h-40 items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white text-sm text-slate-500"><LoaderCircle className="size-4 animate-spin" />{loadingLabel}</div>
       ) : isEmpty ? (
         <div className="grid min-h-40 place-items-center rounded-2xl border border-dashed border-slate-300 bg-white/60 text-sm text-slate-500">{emptyLabel}</div>
       ) : (
-        <div className="space-y-4">{children}</div>
+        <div className="enterprise-surface enterprise-table">{children}</div>
       )}
     </section>
   );

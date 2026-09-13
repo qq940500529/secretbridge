@@ -67,7 +67,6 @@ export function ApprovalView({
 }) {
   const text = language === "zh-CN"
     ? {
-        eyebrow: "M1 · 审批中心",
         title: "范围化审批与撤销",
         subtitle: "授权通过已启用的受控操作模板绑定固定操作、逻辑目标、返回范围和模板版本，并以有效期与记录版本防止越界或过期决定。",
         safety: "审批本身不会连接目标；获批后的 PostgreSQL 检查只允许固定只读探测，并在每次状态转换时复核授权。",
@@ -128,7 +127,6 @@ export function ApprovalView({
         } satisfies Record<ApprovalState, string>,
       }
     : {
-        eyebrow: "M1 · Approval center",
         title: "Scoped approvals and revocation",
         subtitle: "Authorization binds a fixed operation, logical target, result scope and template version through an enabled controlled-action template, with expiry and record versions preventing stale decisions.",
         safety: "Approval itself never contacts a target. An approved PostgreSQL check permits only the fixed read-only probe and revalidates authorization on every transition.",
@@ -308,75 +306,73 @@ export function ApprovalView({
   return (
     <section className="space-y-6">
       <header>
-        <p className="m-0 text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">{text.eyebrow}</p>
-        <h1 className="mb-0 mt-2 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
+        <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">{text.title}</h1>
         <p className="mb-0 mt-3 max-w-3xl text-sm leading-6 text-slate-600">{text.subtitle}</p>
       </header>
 
-      <div className="flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-900">
+      <div className="flex gap-3 border-l-4 border-amber-400 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900">
         <ShieldAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
         <p className="m-0 font-medium">{text.safety}</p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(0,1.4fr)]">
-        <form onSubmit={submit} className="h-fit rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="m-0 text-lg font-semibold text-slate-950">{text.create}</h2>
+      <details className="enterprise-disclosure enterprise-surface">
+        <summary className="flex cursor-pointer items-center justify-between px-5 py-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
+          {text.create}
+          <span className="text-xs font-normal text-slate-500">＋</span>
+        </summary>
+        <form onSubmit={submit} className="border-t border-slate-200 px-5 py-5">
           {targets.length === 0 && !loading && <p className="mb-0 mt-4 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-800">{text.noTargets}</p>}
           {targets.length > 0 && enabledTemplates.length === 0 && !loading && <p className="mb-0 mt-4 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-800">{text.noTemplates}</p>}
-          <div className="mt-5 space-y-4">
+          <div className="grid gap-5 lg:grid-cols-2">
             <Field label={text.template} htmlFor="approval-template">
               <select id="approval-template" required value={templateId} onChange={(event) => setTemplateId(event.target.value)} className={inputClass}>
                 <option value="">{text.chooseTemplate}</option>
                 {enabledTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · {targetNames.get(template.target_id) ?? template.target_id}</option>)}
               </select>
             </Field>
-            {templateId && (
-              <div className={`rounded-2xl border p-4 ${policyEvaluation?.decision === "eligible_for_approval" ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50"}`}>
-                <div className="flex items-start gap-3">
-                  <ShieldCheck className={`mt-0.5 size-5 shrink-0 ${policyEvaluation?.decision === "eligible_for_approval" ? "text-emerald-700" : "text-amber-700"}`} aria-hidden="true" />
-                  <div className="min-w-0">
-                    <p className="m-0 text-xs font-bold uppercase tracking-[0.12em] text-slate-500">{text.policyTitle}</p>
-                    <p className="mb-0 mt-1 text-sm font-semibold text-slate-900">{policyLoading ? text.policyChecking : policyEvaluation?.decision === "eligible_for_approval" ? text.policyEligible : text.policyDenied}</p>
-                    {policyEvaluation && <><p className="mb-0 mt-2 text-xs text-slate-600">{text.policyVersion}：{policyEvaluation.policy_version} · {text.templateSnapshot}：{policyEvaluation.action_template_version}/{policyEvaluation.target_version}</p><div className="mt-3 flex flex-wrap gap-1.5">{policyEvaluation.requirements.map((requirement) => <span key={requirement} className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{text.requirements[requirement]}</span>)}</div></>}
-                  </div>
-                </div>
-              </div>
-            )}
-            <Field label={text.reason} htmlFor="approval-reason">
-              <textarea id="approval-reason" rows={3} maxLength={240} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={text.reasonPlaceholder} className={inputClass} />
-            </Field>
             <Field label={text.ttl} htmlFor="approval-ttl">
               <select id="approval-ttl" value={ttlMinutes} onChange={(event) => setTtlMinutes(Number(event.target.value))} className={inputClass}>
                 {[1, 5, 15, 30, 60].map((minutes) => <option key={minutes} value={minutes}>{minutes} {text.minutes}</option>)}
               </select>
             </Field>
+            <Field label={text.reason} htmlFor="approval-reason">
+              <textarea id="approval-reason" rows={3} maxLength={240} value={reason} onChange={(event) => setReason(event.target.value)} placeholder={text.reasonPlaceholder} className={inputClass} />
+            </Field>
+            {templateId && (
+              <div className={`border-l-4 px-4 py-3 ${policyEvaluation?.decision === "eligible_for_approval" ? "border-emerald-400 bg-emerald-50" : "border-amber-400 bg-amber-50"}`}>
+                <div className="flex items-start gap-3">
+                  <ShieldCheck className={`mt-0.5 size-5 shrink-0 ${policyEvaluation?.decision === "eligible_for_approval" ? "text-emerald-700" : "text-amber-700"}`} aria-hidden="true" />
+                  <div className="min-w-0"><p className="m-0 text-xs font-semibold text-slate-500">{text.policyTitle}</p><p className="mb-0 mt-1 text-sm font-semibold text-slate-900">{policyLoading ? text.policyChecking : policyEvaluation?.decision === "eligible_for_approval" ? text.policyEligible : text.policyDenied}</p>{policyEvaluation && <><p className="mb-0 mt-2 text-xs text-slate-600">{text.policyVersion}：{policyEvaluation.policy_version} · {text.templateSnapshot}：{policyEvaluation.action_template_version}/{policyEvaluation.target_version}</p><div className="mt-3 flex flex-wrap gap-1.5">{policyEvaluation.requirements.map((requirement) => <span key={requirement} className="rounded-md bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">{text.requirements[requirement]}</span>)}</div></>}</div>
+                </div>
+              </div>
+            )}
           </div>
-          <button type="submit" disabled={!templateId || policyLoading || policyEvaluation?.decision !== "eligible_for_approval" || busyId !== null} className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50">
+          <div className="mt-5 flex justify-end"><button type="submit" disabled={!templateId || policyLoading || policyEvaluation?.decision !== "eligible_for_approval" || busyId !== null} className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50">
             <ClipboardCheck className="size-4" aria-hidden="true" />
             {busyId === "create" ? text.saving : text.submit}
-          </button>
+          </button></div>
         </form>
+      </details>
 
-        <div>
+      <div>
           <div className="mb-4 flex items-center justify-between gap-4">
             <h2 className="m-0 text-lg font-semibold text-slate-950">{text.records}</h2>
-            <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-500 shadow-sm ring-1 ring-slate-200">{items.length}</span>
+            <span className="text-sm font-medium text-slate-500">{items.length}</span>
           </div>
-          {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
+          {error && <p role="alert" className="border-l-4 border-rose-400 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
           {loading ? (
-            <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm">{text.loading}</p>
+            <p className="enterprise-surface p-6 text-sm text-slate-500">{text.loading}</p>
           ) : items.length === 0 ? (
-            <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-sm">{text.empty}</p>
+            <p className="enterprise-surface p-6 text-sm text-slate-500">{text.empty}</p>
           ) : (
-            <div className="space-y-4">
+            <div className="enterprise-surface enterprise-table">
               {items.map((item) => (
-                <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <article key={item.id} className="p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${stateStyles[item.state]}`}>{text.states[item.state]}</span>
-                        <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">{operationLabels[language][item.operation]}</span>
-                        <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700">{scopeLabels[language][item.result_scope]}</span>
+                        <span className="text-xs font-medium text-slate-500">{operationLabels[language][item.operation]} · {scopeLabels[language][item.result_scope]}</span>
                       </div>
                       <h3 className="mb-0 mt-3 text-base font-semibold text-slate-950">{item.action_template_id ? (templateNames.get(item.action_template_id) ?? item.action_template_id) : operationLabels[language][item.operation]}</h3>
                       <p className="mb-0 mt-2 text-sm text-slate-500">{targetNames.get(item.target_id) ?? item.target_id}{item.action_template_version ? ` · ${text.version} ${item.action_template_version}/${item.target_version}` : ""}</p>
@@ -406,7 +402,6 @@ export function ApprovalView({
               ))}
             </div>
           )}
-        </div>
       </div>
     </section>
   );

@@ -4,18 +4,14 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Activity,
-  ArrowRight,
   CheckCircle2,
   CircleAlert,
   ClipboardCheck,
-  Command,
   FileClock,
   FlaskConical,
   Gauge,
   KeyRound,
   Languages,
-  LockKeyhole,
-  Network,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -23,12 +19,11 @@ import {
   Settings,
   ShieldCheck,
   ShieldQuestion,
-  Sparkles,
   SquareTerminal,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { getSession, getStatus, pair, type ServiceStatus } from "./api";
 import { consumePairingToken } from "./pairing";
@@ -87,15 +82,8 @@ interface Copy {
   settings: string;
   overview: string;
   subtitle: string;
-  stage: string;
   syntheticTitle: string;
   syntheticBody: string;
-  boundaryTitle: string;
-  boundaryBody: string;
-  sessionTitle: string;
-  sessionBody: string;
-  platformTitle: string;
-  platformBody: string;
   service: string;
   online: string;
   offline: string;
@@ -105,9 +93,6 @@ interface Copy {
   pairing: string;
   authError: string;
   localOnly: string;
-  nextTitle: string;
-  nextBody: string;
-  learnMore: string;
   statusTitle: string;
   apiVersion: string;
   runtimeMode: string;
@@ -147,16 +132,9 @@ const copy: Record<Language, Copy> = {
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    stage: "M3 试点准入与证据",
     syntheticTitle: "PostgreSQL 受控检查已接入",
     syntheticBody:
       "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
-    boundaryTitle: "本机安全边界",
-    boundaryBody: "服务只监听回环地址，不接受局域网或公网连接。",
-    sessionTitle: "一次性浏览器配对",
-    sessionBody: "启动令牌使用后立即失效，会话令牌仅保留在当前页面内存。",
-    platformTitle: "跨平台基线",
-    platformBody: "同一套 Web 管理端与 Rust 服务面向 Windows、Linux 和 macOS。",
     service: "本地服务",
     online: "在线",
     offline: "未连接",
@@ -166,10 +144,6 @@ const copy: Record<Language, Copy> = {
     pairing: "正在配对",
     authError: "配对失败",
     localOnly: "仅限本机",
-    nextTitle: "下一阶段",
-    nextBody:
-      "完成操作系统身份边界的独立验证与安全复核后，使用专用低权限测试账号进入真实环境试点。",
-    learnMore: "查看开发路线",
     statusTitle: "运行状态",
     apiVersion: "接口版本",
     runtimeMode: "运行模式",
@@ -208,19 +182,9 @@ const copy: Record<Language, Copy> = {
     overview: "Secure execution overview",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    stage: "M3 pilot readiness and evidence",
     syntheticTitle: "Controlled PostgreSQL check is connected",
     syntheticBody:
       "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
-    boundaryTitle: "Local trust boundary",
-    boundaryBody:
-      "The service binds only to loopback and rejects LAN or public access.",
-    sessionTitle: "One-time browser pairing",
-    sessionBody:
-      "The bootstrap token expires after use; the session token stays only in page memory.",
-    platformTitle: "Cross-platform baseline",
-    platformBody:
-      "One Web console and Rust service target Windows, Linux, and macOS.",
     service: "Local service",
     online: "Online",
     offline: "Disconnected",
@@ -230,10 +194,6 @@ const copy: Record<Language, Copy> = {
     pairing: "Pairing",
     authError: "Pairing failed",
     localOnly: "Loopback only",
-    nextTitle: "Next milestone",
-    nextBody:
-      "Complete independent OS identity-boundary validation and security review, then enter a real pilot with a dedicated least-privilege test account.",
-    learnMore: "View roadmap",
     statusTitle: "Runtime status",
     apiVersion: "API version",
     runtimeMode: "Runtime mode",
@@ -330,30 +290,6 @@ export function App() {
       active = false;
     };
   }, []);
-
-  const featureCards = useMemo(
-    () => [
-      {
-        icon: LockKeyhole,
-        title: text.boundaryTitle,
-        body: text.boundaryBody,
-        accent: "bg-cyan-50 text-cyan-700",
-      },
-      {
-        icon: Network,
-        title: text.sessionTitle,
-        body: text.sessionBody,
-        accent: "bg-indigo-50 text-indigo-700",
-      },
-      {
-        icon: Command,
-        title: text.platformTitle,
-        body: text.platformBody,
-        accent: "bg-emerald-50 text-emerald-700",
-      },
-    ],
-    [text],
-  );
 
   return (
     <Tooltip.Provider delayDuration={250}>
@@ -479,11 +415,7 @@ export function App() {
             className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10"
           >
             {activePage === "dashboard" ? (
-              <Dashboard
-                text={text}
-                status={serviceStatus}
-                featureCards={featureCards}
-              />
+              <Dashboard text={text} status={serviceStatus} />
             ) : activePage === "terminal" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <TerminalView language={language} sessionToken={sessionToken} />
@@ -582,25 +514,14 @@ function StatusPill({
 function Dashboard({
   text,
   status,
-  featureCards,
 }: {
   text: Copy;
   status: ServiceStatus | null;
-  featureCards: Array<{
-    icon: LucideIcon;
-    title: string;
-    body: string;
-    accent: string;
-  }>;
 }) {
   return (
     <>
-      <div className="mb-8 flex flex-wrap items-end justify-between gap-5">
+      <div className="mb-7 flex flex-wrap items-end justify-between gap-5">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
-            <Sparkles className="size-3.5" />
-            {text.stage}
-          </div>
           <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">
             {text.overview}
           </h1>
@@ -608,17 +529,15 @@ function Dashboard({
             {text.subtitle}
           </p>
         </div>
-        <span className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm">
+        <span className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600">
           <span className="size-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]" />
           {text.localOnly}
         </span>
       </div>
 
-      <section className="mb-6 overflow-hidden rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 shadow-sm">
-        <div className="flex items-start gap-4 p-5">
-          <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-100 text-amber-700">
-            <CircleAlert className="size-5" aria-hidden="true" />
-          </div>
+      <section className="mb-6 border-l-4 border-amber-400 bg-amber-50 px-5 py-4">
+        <div className="flex items-start gap-3">
+          <CircleAlert className="mt-0.5 size-5 shrink-0 text-amber-700" aria-hidden="true" />
           <div>
             <h2 className="m-0 text-base font-semibold text-amber-950">
               {text.syntheticTitle}
@@ -630,81 +549,42 @@ function Dashboard({
         </div>
       </section>
 
-      <section className="grid gap-5 md:grid-cols-3">
-        {featureCards.map(({ icon: Icon, title, body, accent }) => (
-          <article
-            key={title}
-            className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
-          >
-            <div className={`mb-5 grid size-11 place-items-center rounded-xl ${accent}`}>
-              <Icon className="size-5" aria-hidden="true" />
-            </div>
-            <h2 className="m-0 text-base font-semibold text-slate-900">{title}</h2>
-            <p className="mb-0 mt-2 text-sm leading-6 text-slate-600">{body}</p>
-          </article>
-        ))}
-      </section>
-
-      <section className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-        <article className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="m-0 text-base font-semibold text-slate-900">
-              {text.statusTitle}
-            </h2>
-            <Activity className="size-5 text-cyan-600" aria-hidden="true" />
-          </div>
-          <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
-            <StatusDatum
-              label={text.runtimeMode}
-              value={status?.mode === "controlled_operations" ? text.controlledOperations : status?.mode === "credential_configuration" ? text.credentialConfiguration : status?.mode === "synthetic_only" ? text.syntheticOnly : "—"}
-            />
-            <StatusDatum
-              label={text.identityBoundary}
-              value={
-                status?.identity_boundary === "unverified_same_user"
-                  ? text.unverifiedSameUser
+      <section className="enterprise-surface">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <h2 className="m-0 text-base font-semibold text-slate-900">
+            {text.statusTitle}
+          </h2>
+          <Activity className="size-5 text-cyan-600" aria-hidden="true" />
+        </div>
+        <dl className="divide-y divide-slate-200">
+          <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
+          <StatusDatum
+            label={text.runtimeMode}
+            value={status?.mode === "controlled_operations" ? text.controlledOperations : status?.mode === "credential_configuration" ? text.credentialConfiguration : status?.mode === "synthetic_only" ? text.syntheticOnly : "—"}
+          />
+          <StatusDatum
+            label={text.identityBoundary}
+            value={
+              status?.identity_boundary === "unverified_same_user"
+                ? text.unverifiedSameUser
+                : "—"
+            }
+          />
+          <StatusDatum
+            label={text.configurationStorage}
+            value={
+              status?.configuration_storage === "sqlite"
+                ? text.localDatabase
+                : status?.configuration_storage === "memory_only"
+                  ? text.memoryOnly
                   : "—"
-              }
-            />
-            <StatusDatum
-              label={text.configurationStorage}
-              value={
-                status?.configuration_storage === "sqlite"
-                  ? text.localDatabase
-                  : status?.configuration_storage === "memory_only"
-                    ? text.memoryOnly
-                    : "—"
-              }
-            />
-            <StatusDatum
-              label={text.realCredentials}
-              value={status?.real_credentials_enabled ? text.enabled : text.disabled}
-            />
-          </dl>
-        </article>
-
-        <article className="relative overflow-hidden rounded-2xl bg-slate-950 p-6 text-white shadow-lg">
-          <div className="absolute -right-8 -top-8 size-36 rounded-full bg-cyan-400/10 blur-2xl" />
-          <div className="relative">
-            <p className="m-0 text-xs font-semibold uppercase tracking-[0.14em] text-cyan-300">
-              Roadmap
-            </p>
-            <h2 className="mb-0 mt-2 text-lg font-semibold">{text.nextTitle}</h2>
-            <p className="mb-5 mt-2 text-sm leading-6 text-slate-300">
-              {text.nextBody}
-            </p>
-            <a
-              href="https://github.com/qq940500529/secretbridge/blob/main/ROADMAP.md"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 text-sm font-semibold text-cyan-300 hover:text-cyan-200"
-            >
-              {text.learnMore}
-              <ArrowRight className="size-4" aria-hidden="true" />
-            </a>
-          </div>
-        </article>
+            }
+          />
+          <StatusDatum
+            label={text.realCredentials}
+            value={status?.real_credentials_enabled ? text.enabled : text.disabled}
+          />
+        </dl>
       </section>
     </>
   );
@@ -712,11 +592,11 @@ function Dashboard({
 
 function StatusDatum({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-slate-50 p-4">
-      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+    <div className="grid gap-1 px-5 py-3 sm:grid-cols-[14rem_1fr] sm:items-center">
+      <dt className="text-sm font-medium text-slate-500">
         {label}
       </dt>
-      <dd className="mb-0 mt-2 text-sm font-semibold text-slate-900">{value}</dd>
+      <dd className="m-0 text-sm font-semibold text-slate-900">{value}</dd>
     </div>
   );
 }

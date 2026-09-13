@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.18 · enterprise workflow UI
+
+- Remove milestone labels, roadmap promotion and implementation-phase copy from the runtime UI so operators see business purpose, state and next action instead of development metadata.
+- Replace dashboard feature-card grids with a compact operational status surface and reserve notices for actionable security boundaries.
+- Move credential, target, policy, approval and run creation into collapsible task entry areas above their records instead of permanently placing creation cards beside lists.
+- Present catalogs, approvals, runs and audit events as continuous row-based collections with restrained borders, hierarchy and inline metadata.
+- Use master-detail navigation for validation and pilot-readiness evidence; render checks as ordered rows rather than independent status cards.
+- Align terminal sessions with the same master-workspace pattern and retain the terminal itself as the sole high-emphasis work surface.
+- Add a source-level regression check that prevents milestone labels and development-stage fields from returning to rendered Web views.
+
 ### 0.1.0-alpha.17 · pilot readiness evidence workspace
 
 - Add a paired-Web pilot-readiness workspace that aggregates the complete local test-target configuration chain and the latest security-validation evidence without reading secrets or contacting a remote target.

@@ -8,7 +8,6 @@ import {
   PlugZap,
   Plus,
   RefreshCw,
-  ShieldCheck,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -369,10 +368,7 @@ export function TerminalView({
     <section>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-            <ShieldCheck className="size-3.5" /> {text.safety}
-          </span>
-          <h1 className="mb-0 mt-3 text-3xl font-bold tracking-tight text-slate-950">
+          <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">
             {text.title}
           </h1>
           <p className="mb-0 mt-2 max-w-3xl leading-7 text-slate-600">{text.subtitle}</p>
@@ -381,7 +377,7 @@ export function TerminalView({
           type="button"
           disabled={busy}
           onClick={() => void handleCreate()}
-          className="inline-flex h-11 items-center gap-2 rounded-xl bg-cyan-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex h-11 items-center gap-2 rounded-lg bg-cyan-700 px-4 text-sm font-semibold text-white transition hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Plus className="size-4" /> {text.create}
         </button>
@@ -390,25 +386,25 @@ export function TerminalView({
       {error && (
         <p
           role="alert"
-          className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+          className="border-l-4 border-rose-400 bg-rose-50 px-4 py-3 text-sm text-rose-700"
         >
           {error}
         </p>
       )}
 
       <div className="grid gap-5 xl:grid-cols-[18rem_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <aside className="enterprise-surface p-4">
           <h2 className="mb-3 mt-0 text-sm font-semibold text-slate-900">{text.sessions}</h2>
-          <div className="space-y-2">
+          <div className="divide-y divide-slate-200 border-y border-slate-200">
             {terminals.map((terminal) => (
               <button
                 type="button"
                 key={terminal.id}
                 onClick={() => connect(terminal.id, false)}
-                className={`w-full rounded-xl border p-3 text-left transition ${
+                className={`w-full border-l-2 px-3 py-3 text-left transition ${
                   selectedId === terminal.id
-                    ? "border-cyan-300 bg-cyan-50"
-                    : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"
+                    ? "border-cyan-500 bg-cyan-50"
+                    : "border-transparent hover:bg-slate-50"
                 }`}
               >
                 <span className="block truncate font-mono text-xs font-semibold text-slate-800">
@@ -418,14 +414,14 @@ export function TerminalView({
               </button>
             ))}
             {terminals.length === 0 && (
-              <p className="m-0 rounded-xl bg-slate-50 p-3 text-sm leading-6 text-slate-500">
+              <p className="m-0 p-3 text-sm leading-6 text-slate-500">
                 {text.empty}
               </p>
             )}
           </div>
         </aside>
 
-        <article className="overflow-hidden rounded-2xl border border-slate-800 bg-[#07111f] shadow-xl">
+        <article className="overflow-hidden rounded-lg border border-slate-800 bg-[#07111f]">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-950 px-4 py-3">
             <span className="inline-flex items-center gap-2 text-xs font-semibold text-slate-300">
               <span
