@@ -2223,14 +2223,14 @@ dependencies = [
 
 [[package]]
 name = "secretbridge-core"
-version = "0.1.0-alpha.22"
+version = "0.1.0-alpha.23"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "secretbridge-server"
-version = "0.1.0-alpha.22"
+version = "0.1.0-alpha.23"
 dependencies = [
  "axum",
  "futures-util",

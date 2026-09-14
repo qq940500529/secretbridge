@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.23 · real persistent terminals
+
+- Replace the production synthetic PTY launcher with platform-aware real shells: PowerShell and CMD on Windows, Bash on Linux, and Zsh on macOS.
+- Add authenticated shell-capability discovery and bounded terminal creation settings for session name, existing absolute working directory, and ordinary process environment variables.
+- Preserve terminal processes across browser detachment and reconnect from monotonic output cursors while retaining the existing input lease, bounded replay, resize, backpressure, revocation, and force-termination behavior.
+- Report session shell, initial working directory, process ID, environment-variable count, lifecycle state, and exit code without exposing process environment values.
+- Rework the Web terminal into a task-oriented create form, session list, live terminal surface, explicit detach, reconnect, and terminate/remove actions.
+- Order final PTY output before process-exit notifications so fast commands do not lose their trailing output.
+- Add cross-platform real-shell integration acceptance for process environment, working directory, browser reconnection, natural exit, long-command termination, plus Windows CMD coverage; retain the synthetic child only for deterministic stress tests.
+
 ### 0.1.0-alpha.22 · core product reset
 
 - Remove the security-validation center, platform-evidence workspace, pilot-readiness snapshots and governed pilot campaigns from the Web UI, HTTP API, domain layer and tests.

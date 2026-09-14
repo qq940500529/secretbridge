@@ -2,25 +2,33 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    env,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicU8, Ordering},
     },
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
-use serde::Serialize;
+use portable_pty::{
+    Child, ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem,
+};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 const MAX_TERMINALS: usize = 8;
 const BACKLOG_LIMIT: usize = 64 * 1024;
 const EVENT_CAPACITY: usize = 256;
+const MAX_NAME_BYTES: usize = 80;
+const MAX_WORKING_DIRECTORY_BYTES: usize = 4096;
+const MAX_ENVIRONMENT_VARIABLES: usize = 32;
+const MAX_ENVIRONMENT_NAME_BYTES: usize = 128;
+const MAX_ENVIRONMENT_VALUE_BYTES: usize = 4096;
 
 const STATUS_RUNNING: u8 = 0;
 const STATUS_EXITED: u8 = 1;
@@ -31,13 +39,25 @@ const STATUS_FAILED: u8 = 3;
 pub struct TerminalManager {
     sessions: Arc<RwLock<HashMap<Uuid, Arc<TerminalSession>>>>,
     creation_lock: Arc<Mutex<()>>,
-    program: PathBuf,
+    launcher: TerminalLauncher,
+}
+
+#[derive(Clone)]
+enum TerminalLauncher {
+    System,
+    Synthetic(PathBuf),
 }
 
 struct TerminalSession {
     id: Uuid,
+    name: String,
+    shell: TerminalShell,
+    working_directory: String,
+    process_id: Option<u32>,
+    environment_variable_count: usize,
     created_at_unix_ms: u64,
     status: Arc<AtomicU8>,
+    exit_code: Arc<Mutex<Option<u32>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
@@ -57,6 +77,17 @@ struct OutputBuffer {
     bytes: VecDeque<u8>,
 }
 
+struct PreparedTerminalLaunch {
+    id: Uuid,
+    name: String,
+    shell: TerminalShell,
+    working_directory: String,
+    environment_variable_count: usize,
+    rows: u16,
+    cols: u16,
+    command: CommandBuilder,
+}
+
 #[derive(Clone, Debug)]
 pub enum TerminalEvent {
     Output { cursor: u64, data: Arc<[u8]> },
@@ -74,12 +105,69 @@ pub enum TerminalStatus {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalShell {
+    #[serde(rename = "powershell")]
+    PowerShell,
+    Cmd,
+    Bash,
+    Zsh,
+    #[doc(hidden)]
+    Synthetic,
+}
+
+impl TerminalShell {
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::PowerShell => "PowerShell",
+            Self::Cmd => "Command Prompt",
+            Self::Bash => "Bash",
+            Self::Zsh => "Zsh",
+            Self::Synthetic => "Synthetic test shell",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateTerminal {
+    pub rows: u16,
+    pub cols: u16,
+    pub shell: Option<TerminalShell>,
+    pub name: Option<String>,
+    pub working_directory: Option<String>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TerminalCapabilities {
+    pub platform: &'static str,
+    pub default_shell: Option<TerminalShell>,
+    pub shells: Vec<TerminalShellCapability>,
+    pub max_sessions: usize,
+    pub max_environment_variables: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TerminalShellCapability {
+    pub shell: TerminalShell,
+    pub display_name: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TerminalSummary {
     pub id: Uuid,
+    pub name: String,
+    pub shell: TerminalShell,
+    pub working_directory: String,
+    pub process_id: Option<u32>,
+    pub environment_variable_count: usize,
     pub created_at_unix_ms: u64,
     pub status: TerminalStatus,
-    pub mode: &'static str,
+    pub exit_code: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,23 +176,55 @@ pub enum TerminalError {
     Closed,
     InputLeaseRequired,
     InvalidInput,
+    InvalidEnvironment,
+    InvalidName,
     InvalidSize,
+    InvalidWorkingDirectory,
     NotFound,
     SpawnFailed,
+    UnsupportedShell,
 }
 
 impl TerminalManager {
     #[must_use]
-    pub fn new(program: PathBuf) -> Self {
+    pub fn system() -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             creation_lock: Arc::new(Mutex::new(())),
-            program,
+            launcher: TerminalLauncher::System,
         }
     }
 
-    pub fn create(&self, rows: u16, cols: u16) -> Result<TerminalSummary, TerminalError> {
-        validate_size(rows, cols)?;
+    #[doc(hidden)]
+    #[must_use]
+    pub fn synthetic(program: PathBuf) -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            creation_lock: Arc::new(Mutex::new(())),
+            launcher: TerminalLauncher::Synthetic(program),
+        }
+    }
+
+    #[must_use]
+    pub fn capabilities(&self) -> TerminalCapabilities {
+        match &self.launcher {
+            TerminalLauncher::System => system_capabilities(),
+            TerminalLauncher::Synthetic(_) => TerminalCapabilities {
+                platform: platform_name(),
+                default_shell: Some(TerminalShell::Synthetic),
+                shells: vec![TerminalShellCapability {
+                    shell: TerminalShell::Synthetic,
+                    display_name: TerminalShell::Synthetic.display_name(),
+                }],
+                max_sessions: MAX_TERMINALS,
+                max_environment_variables: MAX_ENVIRONMENT_VARIABLES,
+            },
+        }
+    }
+
+    pub fn create(&self, request: &CreateTerminal) -> Result<TerminalSummary, TerminalError> {
+        validate_size(request.rows, request.cols)?;
+        validate_environment(&request.environment)?;
         let _creation_guard = self
             .creation_lock
             .lock()
@@ -113,104 +233,69 @@ impl TerminalManager {
             return Err(TerminalError::Capacity);
         }
 
+        let launch = self.prepare_launch(request)?;
+        let session = spawn_terminal(launch)?;
+        let summary = session.summary();
+        self.write_sessions().insert(summary.id, session);
+        Ok(summary)
+    }
+
+    fn prepare_launch(
+        &self,
+        request: &CreateTerminal,
+    ) -> Result<PreparedTerminalLaunch, TerminalError> {
         let id = Uuid::new_v4();
-        let pair = NativePtySystem::default()
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|_| TerminalError::SpawnFailed)?;
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|_| TerminalError::SpawnFailed)?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|_| TerminalError::SpawnFailed)?;
-
-        let mut command = CommandBuilder::new(&self.program);
-        command.arg("--synthetic-terminal-child");
-        command.arg(id.to_string());
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|_| TerminalError::SpawnFailed)?;
-        let killer = child.clone_killer();
-        drop(pair.slave);
-
-        let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
-        let output = Arc::new(Mutex::new(OutputBuffer::new()));
-        let (events, _) = broadcast::channel(EVENT_CAPACITY);
-        let session = Arc::new(TerminalSession {
+        let shell = match (&self.launcher, request.shell) {
+            (TerminalLauncher::Synthetic(_), None | Some(TerminalShell::Synthetic)) => {
+                TerminalShell::Synthetic
+            }
+            (TerminalLauncher::Synthetic(_), Some(_))
+            | (TerminalLauncher::System, Some(TerminalShell::Synthetic)) => {
+                return Err(TerminalError::UnsupportedShell);
+            }
+            (TerminalLauncher::System, Some(shell)) => shell,
+            (TerminalLauncher::System, None) => {
+                default_system_shell().ok_or(TerminalError::UnsupportedShell)?
+            }
+        };
+        let working_directory = resolve_working_directory(request.working_directory.as_deref())?;
+        let name = resolve_name(
+            request.name.as_deref(),
+            shell,
+            self.read_sessions().len().saturating_add(1),
+        )?;
+        let mut command = self.command(shell, id)?;
+        command.cwd(&working_directory);
+        for (key, value) in &request.environment {
+            command.env(key, value);
+        }
+        #[cfg(unix)]
+        if !request.environment.contains_key("TERM") {
+            command.env("TERM", "xterm-256color");
+        }
+        Ok(PreparedTerminalLaunch {
             id,
-            created_at_unix_ms: now_unix_ms(),
-            status: Arc::clone(&status),
-            master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
-            killer: Mutex::new(killer),
-            output: Arc::clone(&output),
-            input_lease: Mutex::new(None),
-            events: events.clone(),
-        });
+            name,
+            shell,
+            working_directory: display_path(&working_directory),
+            environment_variable_count: request.environment.len(),
+            rows: request.rows,
+            cols: request.cols,
+            command,
+        })
+    }
 
-        let reader_status = Arc::clone(&status);
-        let reader_events = events.clone();
-        thread::Builder::new()
-            .name(format!("secretbridge-terminal-reader-{id}"))
-            .spawn(move || {
-                let mut buffer = [0_u8; 4096];
-                loop {
-                    match reader.read(&mut buffer) {
-                        Ok(0) => break,
-                        Ok(count) => {
-                            let chunk: Arc<[u8]> = Arc::from(&buffer[..count]);
-                            let mut output_guard = output
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            let cursor = output_guard.append(&chunk);
-                            // Keep append and publication atomic with respect to attach snapshots.
-                            let _ = reader_events.send(TerminalEvent::Output {
-                                cursor,
-                                data: chunk,
-                            });
-                            drop(output_guard);
-                        }
-                        Err(_) => {
-                            if reader_status.load(Ordering::Acquire) == STATUS_RUNNING {
-                                reader_status.store(STATUS_FAILED, Ordering::Release);
-                                let _ = reader_events.send(TerminalEvent::Failed);
-                            }
-                            break;
-                        }
-                    }
-                }
-            })
-            .map_err(|_| TerminalError::SpawnFailed)?;
-
-        let wait_status = Arc::clone(&status);
-        thread::Builder::new()
-            .name(format!("secretbridge-terminal-wait-{id}"))
-            .spawn(move || {
-                if let Ok(exit) = child.wait() {
-                    let previous = wait_status.load(Ordering::Acquire);
-                    if previous == STATUS_RUNNING {
-                        wait_status.store(STATUS_EXITED, Ordering::Release);
-                        let _ = events.send(TerminalEvent::Exited(exit.exit_code()));
-                    } else if previous == STATUS_TERMINATED {
-                        let _ = events.send(TerminalEvent::Terminated);
-                    }
-                } else {
-                    wait_status.store(STATUS_FAILED, Ordering::Release);
-                    let _ = events.send(TerminalEvent::Failed);
-                }
-            })
-            .map_err(|_| TerminalError::SpawnFailed)?;
-
-        self.write_sessions().insert(id, Arc::clone(&session));
-        Ok(session.summary())
+    fn command(&self, shell: TerminalShell, id: Uuid) -> Result<CommandBuilder, TerminalError> {
+        match &self.launcher {
+            TerminalLauncher::Synthetic(program) if shell == TerminalShell::Synthetic => {
+                let mut command = CommandBuilder::new(program);
+                command.arg("--synthetic-terminal-child");
+                command.arg(id.to_string());
+                Ok(command)
+            }
+            TerminalLauncher::System => system_shell_command(shell),
+            TerminalLauncher::Synthetic(_) => Err(TerminalError::UnsupportedShell),
+        }
     }
 
     #[must_use]
@@ -286,6 +371,137 @@ impl TerminalManager {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn spawn_terminal(launch: PreparedTerminalLaunch) -> Result<Arc<TerminalSession>, TerminalError> {
+    let pair = NativePtySystem::default()
+        .openpty(PtySize {
+            rows: launch.rows,
+            cols: launch.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let child = pair
+        .slave
+        .spawn_command(launch.command)
+        .map_err(|_| TerminalError::SpawnFailed)?;
+    let process_id = child.process_id();
+    let killer = child.clone_killer();
+    drop(pair.slave);
+
+    let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
+    let exit_code = Arc::new(Mutex::new(None));
+    let output = Arc::new(Mutex::new(OutputBuffer::new()));
+    let (events, _) = broadcast::channel(EVENT_CAPACITY);
+    let (output_activity, output_activity_rx) = std::sync::mpsc::channel();
+    let session = Arc::new(TerminalSession {
+        id: launch.id,
+        name: launch.name,
+        shell: launch.shell,
+        working_directory: launch.working_directory,
+        process_id,
+        environment_variable_count: launch.environment_variable_count,
+        created_at_unix_ms: now_unix_ms(),
+        status: Arc::clone(&status),
+        exit_code: Arc::clone(&exit_code),
+        master: Mutex::new(pair.master),
+        writer: Mutex::new(writer),
+        killer: Mutex::new(killer),
+        output: Arc::clone(&output),
+        input_lease: Mutex::new(None),
+        events: events.clone(),
+    });
+    spawn_terminal_reader(launch.id, reader, output, events.clone(), output_activity)?;
+    spawn_terminal_waiter(
+        launch.id,
+        child,
+        status,
+        exit_code,
+        events,
+        output_activity_rx,
+    )?;
+    Ok(session)
+}
+
+fn spawn_terminal_reader(
+    id: Uuid,
+    mut reader: Box<dyn Read + Send>,
+    output: Arc<Mutex<OutputBuffer>>,
+    events: broadcast::Sender<TerminalEvent>,
+    output_activity: std::sync::mpsc::Sender<()>,
+) -> Result<(), TerminalError> {
+    thread::Builder::new()
+        .name(format!("secretbridge-terminal-reader-{id}"))
+        .spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(count) if count > 0 => {
+                        let chunk: Arc<[u8]> = Arc::from(&buffer[..count]);
+                        let mut output = output
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let cursor = output.append(&chunk);
+                        // Keep append and publication atomic with respect to attach snapshots.
+                        let _ = events.send(TerminalEvent::Output {
+                            cursor,
+                            data: chunk,
+                        });
+                        let _ = output_activity.send(());
+                    }
+                    Ok(_) | Err(_) => break,
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|_| TerminalError::SpawnFailed)
+}
+
+fn spawn_terminal_waiter(
+    id: Uuid,
+    mut child: Box<dyn Child + Send + Sync>,
+    status: Arc<AtomicU8>,
+    exit_code: Arc<Mutex<Option<u32>>>,
+    events: broadcast::Sender<TerminalEvent>,
+    output_activity: std::sync::mpsc::Receiver<()>,
+) -> Result<(), TerminalError> {
+    thread::Builder::new()
+        .name(format!("secretbridge-terminal-wait-{id}"))
+        .spawn(move || {
+            let Ok(exit) = child.wait() else {
+                status.store(STATUS_FAILED, Ordering::Release);
+                let _ = events.send(TerminalEvent::Failed);
+                return;
+            };
+            // Drain PTY bytes that became readable as the child exited before publishing its
+            // terminal status. ConPTY readers can remain open, so use a quiet interval, not join.
+            while output_activity
+                .recv_timeout(Duration::from_millis(100))
+                .is_ok()
+            {}
+            let code = exit.exit_code();
+            *exit_code
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(code);
+            let previous = status.load(Ordering::Acquire);
+            if previous == STATUS_RUNNING {
+                status.store(STATUS_EXITED, Ordering::Release);
+                let _ = events.send(TerminalEvent::Exited(code));
+            } else if previous == STATUS_TERMINATED {
+                let _ = events.send(TerminalEvent::Terminated);
+            }
+        })
+        .map(|_| ())
+        .map_err(|_| TerminalError::SpawnFailed)
 }
 
 pub struct TerminalSnapshot {
@@ -373,9 +589,17 @@ impl TerminalSession {
     fn summary(&self) -> TerminalSummary {
         TerminalSummary {
             id: self.id,
+            name: self.name.clone(),
+            shell: self.shell,
+            working_directory: self.working_directory.clone(),
+            process_id: self.process_id,
+            environment_variable_count: self.environment_variable_count,
             created_at_unix_ms: self.created_at_unix_ms,
             status: terminal_status(self.status.load(Ordering::Acquire)),
-            mode: "synthetic_only",
+            exit_code: *self
+                .exit_code
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         }
     }
 
@@ -478,6 +702,229 @@ fn validate_size(rows: u16, cols: u16) -> Result<(), TerminalError> {
         .ok_or(TerminalError::InvalidSize)
 }
 
+fn resolve_name(
+    requested: Option<&str>,
+    shell: TerminalShell,
+    ordinal: usize,
+) -> Result<String, TerminalError> {
+    let Some(requested) = requested else {
+        return Ok(format!("{} {ordinal}", shell.display_name()));
+    };
+    let name = requested.trim();
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
+        return Err(TerminalError::InvalidName);
+    }
+    Ok(name.to_owned())
+}
+
+fn resolve_working_directory(requested: Option<&str>) -> Result<PathBuf, TerminalError> {
+    let path = match requested {
+        Some(value) => {
+            let value = value.trim();
+            if value.is_empty()
+                || value.len() > MAX_WORKING_DIRECTORY_BYTES
+                || value.chars().any(char::is_control)
+            {
+                return Err(TerminalError::InvalidWorkingDirectory);
+            }
+            let path = PathBuf::from(value);
+            if !path.is_absolute() {
+                return Err(TerminalError::InvalidWorkingDirectory);
+            }
+            path
+        }
+        None => env::current_dir().map_err(|_| TerminalError::InvalidWorkingDirectory)?,
+    };
+    let canonical = path
+        .canonicalize()
+        .map_err(|_| TerminalError::InvalidWorkingDirectory)?;
+    canonical
+        .is_dir()
+        .then_some(canonical)
+        .ok_or(TerminalError::InvalidWorkingDirectory)
+}
+
+fn validate_environment(environment: &BTreeMap<String, String>) -> Result<(), TerminalError> {
+    if environment.len() > MAX_ENVIRONMENT_VARIABLES {
+        return Err(TerminalError::InvalidEnvironment);
+    }
+    let mut normalized = BTreeSet::new();
+    for (name, value) in environment {
+        let valid_name = !name.is_empty()
+            && name.len() <= MAX_ENVIRONMENT_NAME_BYTES
+            && name.bytes().enumerate().all(|(index, byte)| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'_' => true,
+                b'0'..=b'9' => index > 0,
+                _ => false,
+            });
+        if !valid_name || value.len() > MAX_ENVIRONMENT_VALUE_BYTES || value.contains('\0') {
+            return Err(TerminalError::InvalidEnvironment);
+        }
+        let comparison_name = if cfg!(windows) {
+            name.to_ascii_uppercase()
+        } else {
+            name.clone()
+        };
+        if !normalized.insert(comparison_name) {
+            return Err(TerminalError::InvalidEnvironment);
+        }
+    }
+    Ok(())
+}
+
+fn system_capabilities() -> TerminalCapabilities {
+    let shells = supported_system_shells()
+        .iter()
+        .copied()
+        .filter(|shell| resolve_system_shell(*shell).is_some())
+        .map(|shell| TerminalShellCapability {
+            shell,
+            display_name: shell.display_name(),
+        })
+        .collect::<Vec<_>>();
+    TerminalCapabilities {
+        platform: platform_name(),
+        default_shell: shells.first().map(|capability| capability.shell),
+        shells,
+        max_sessions: MAX_TERMINALS,
+        max_environment_variables: MAX_ENVIRONMENT_VARIABLES,
+    }
+}
+
+fn default_system_shell() -> Option<TerminalShell> {
+    supported_system_shells()
+        .iter()
+        .copied()
+        .find(|shell| resolve_system_shell(*shell).is_some())
+}
+
+fn system_shell_command(shell: TerminalShell) -> Result<CommandBuilder, TerminalError> {
+    let program = resolve_system_shell(shell).ok_or(TerminalError::UnsupportedShell)?;
+    let mut command = CommandBuilder::new(program);
+    match shell {
+        TerminalShell::PowerShell => {
+            command.arg("-NoLogo");
+        }
+        TerminalShell::Cmd => {
+            command.arg("/Q");
+        }
+        TerminalShell::Bash | TerminalShell::Zsh => {
+            command.arg("-l");
+        }
+        TerminalShell::Synthetic => return Err(TerminalError::UnsupportedShell),
+    }
+    Ok(command)
+}
+
+#[cfg(windows)]
+fn supported_system_shells() -> &'static [TerminalShell] {
+    &[TerminalShell::PowerShell, TerminalShell::Cmd]
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn supported_system_shells() -> &'static [TerminalShell] {
+    &[TerminalShell::Bash]
+}
+
+#[cfg(target_os = "macos")]
+fn supported_system_shells() -> &'static [TerminalShell] {
+    &[TerminalShell::Zsh]
+}
+
+#[cfg(not(any(windows, unix)))]
+fn supported_system_shells() -> &'static [TerminalShell] {
+    &[]
+}
+
+fn resolve_system_shell(shell: TerminalShell) -> Option<PathBuf> {
+    if !supported_system_shells().contains(&shell) {
+        return None;
+    }
+    match shell {
+        TerminalShell::PowerShell => resolve_powershell(),
+        TerminalShell::Cmd => resolve_cmd(),
+        TerminalShell::Bash => find_executable(&["/bin/bash", "/usr/bin/bash", "bash"]),
+        TerminalShell::Zsh => find_executable(&["/bin/zsh", "/usr/bin/zsh", "zsh"]),
+        TerminalShell::Synthetic => None,
+    }
+}
+
+#[cfg(windows)]
+fn resolve_powershell() -> Option<PathBuf> {
+    if let Some(path) = find_executable(&["pwsh.exe", "pwsh"]) {
+        return Some(path);
+    }
+    let system = env::var_os("SystemRoot").map(PathBuf::from).map(|root| {
+        root.join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")
+    });
+    system
+        .filter(|path| path.is_file())
+        .or_else(|| find_executable(&["powershell.exe", "powershell"]))
+}
+
+#[cfg(not(windows))]
+fn resolve_powershell() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(windows)]
+fn resolve_cmd() -> Option<PathBuf> {
+    let system = env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| root.join("System32").join("cmd.exe"));
+    system
+        .filter(|path| path.is_file())
+        .or_else(|| find_executable(&["cmd.exe", "cmd"]))
+}
+
+#[cfg(not(windows))]
+fn resolve_cmd() -> Option<PathBuf> {
+    None
+}
+
+fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().find_map(|candidate| {
+        let path = Path::new(candidate);
+        if path.components().count() > 1 {
+            return path.is_file().then(|| path.to_path_buf());
+        }
+        env::var_os("PATH").and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|directory| directory.join(candidate))
+                .find(|candidate| candidate.is_file())
+        })
+    })
+}
+
+const fn platform_name() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(unix) {
+        "linux"
+    } else {
+        "unsupported"
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    let display = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(path) = display.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{path}");
+        }
+        if let Some(path) = display.strip_prefix(r"\\?\") {
+            return path.to_owned();
+        }
+    }
+    display.into_owned()
+}
+
 struct OutputReplay {
     replay_from: u64,
     next_cursor: u64,
@@ -559,13 +1006,76 @@ fn now_unix_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BACKLOG_LIMIT, OutputBuffer, TerminalError, validate_size};
+    use std::collections::BTreeMap;
+
+    use super::{
+        BACKLOG_LIMIT, MAX_ENVIRONMENT_VARIABLES, OutputBuffer, TerminalError, TerminalShell,
+        resolve_name, resolve_working_directory, system_capabilities, validate_environment,
+        validate_size,
+    };
 
     #[test]
     fn terminal_size_has_safe_bounds() {
         assert_eq!(validate_size(24, 80), Ok(()));
         assert_eq!(validate_size(1, 80), Err(TerminalError::InvalidSize));
         assert_eq!(validate_size(24, 501), Err(TerminalError::InvalidSize));
+    }
+
+    #[test]
+    fn session_name_and_working_directory_are_validated() {
+        assert_eq!(
+            resolve_name(Some("  Build shell  "), TerminalShell::Bash, 1),
+            Ok("Build shell".to_owned())
+        );
+        assert_eq!(
+            resolve_name(Some("\n"), TerminalShell::Bash, 1),
+            Err(TerminalError::InvalidName)
+        );
+        assert!(resolve_working_directory(None).is_ok());
+        assert_eq!(
+            resolve_working_directory(Some("relative/path")),
+            Err(TerminalError::InvalidWorkingDirectory)
+        );
+    }
+
+    #[test]
+    fn ordinary_environment_is_bounded_and_portable() {
+        let valid = BTreeMap::from([
+            ("LANG".to_owned(), "zh_CN.UTF-8".to_owned()),
+            ("BUILD_NUMBER_2".to_owned(), "42".to_owned()),
+        ]);
+        assert_eq!(validate_environment(&valid), Ok(()));
+        assert_eq!(
+            validate_environment(&BTreeMap::from([(
+                "INVALID-NAME".to_owned(),
+                "value".to_owned()
+            )])),
+            Err(TerminalError::InvalidEnvironment)
+        );
+        let too_many = (0..=MAX_ENVIRONMENT_VARIABLES)
+            .map(|index| (format!("VAR_{index}"), String::new()))
+            .collect();
+        assert_eq!(
+            validate_environment(&too_many),
+            Err(TerminalError::InvalidEnvironment)
+        );
+    }
+
+    #[test]
+    fn current_platform_exposes_an_installed_default_shell() {
+        let capabilities = system_capabilities();
+        assert!(!capabilities.shells.is_empty());
+        assert_eq!(
+            capabilities.default_shell,
+            capabilities.shells.first().map(|item| item.shell)
+        );
+        #[cfg(windows)]
+        assert!(
+            capabilities
+                .shells
+                .iter()
+                .any(|item| item.shell == TerminalShell::Cmd)
+        );
     }
 
     #[test]
