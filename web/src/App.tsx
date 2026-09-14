@@ -12,6 +12,7 @@ import {
   Gauge,
   KeyRound,
   Languages,
+  ListChecks,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -68,6 +69,11 @@ const PlatformBoundaryView = lazy(() =>
     default: module.PlatformBoundaryView,
   })),
 );
+const PilotCampaignView = lazy(() =>
+  import("./PilotCampaignView").then((module) => ({
+    default: module.PilotCampaignView,
+  })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -85,6 +91,7 @@ interface Copy {
   securityValidation: string;
   platformBoundary: string;
   pilotReadiness: string;
+  pilotCampaigns: string;
   settings: string;
   overview: string;
   subtitle: string;
@@ -136,6 +143,7 @@ const copy: Record<Language, Copy> = {
     securityValidation: "安全验证",
     platformBoundary: "平台证据",
     pilotReadiness: "试点准入",
+    pilotCampaigns: "试点工作台",
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
@@ -186,6 +194,7 @@ const copy: Record<Language, Copy> = {
     securityValidation: "Security validation",
     platformBoundary: "Platform evidence",
     pilotReadiness: "Pilot readiness",
+    pilotCampaigns: "Pilot workspace",
     settings: "Settings",
     overview: "Secure execution overview",
     subtitle:
@@ -240,6 +249,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "securityValidation", icon: FlaskConical },
   { id: "platformBoundary", icon: ShieldCheck },
   { id: "pilotReadiness", icon: ShieldQuestion },
+  { id: "pilotCampaigns", icon: ListChecks },
   { id: "settings", icon: Settings },
 ];
 
@@ -476,6 +486,13 @@ export function App() {
             ) : activePage === "pilotReadiness" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <PilotReadinessView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
+              </Suspense>
+            ) : activePage === "pilotCampaigns" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <PilotCampaignView
                   language={language}
                   sessionToken={sessionToken}
                 />
