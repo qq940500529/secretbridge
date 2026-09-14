@@ -233,9 +233,7 @@ fn collect_directory_permission_check(
     metadata: Option<&fs::Metadata>,
     checks: &mut Vec<PlatformBoundaryCheck>,
 ) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let private = metadata.is_some_and(|value| value.permissions().mode() & 0o077 == 0);
+    let private = metadata.is_some_and(posix_permissions_private);
     checks.push(check(
         "runtime_directory_permissions",
         "runtime_directory",
@@ -299,10 +297,9 @@ fn collect_endpoint_permission_check(
     connection_metadata: Option<&fs::Metadata>,
     checks: &mut Vec<PlatformBoundaryCheck>,
 ) {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
-    let connection_private =
-        connection_metadata.is_some_and(|value| value.permissions().mode() & 0o077 == 0);
+    let connection_private = connection_metadata.is_some_and(posix_permissions_private);
     checks.push(check(
         "connection_document_permissions",
         "ipc_transport",
@@ -319,9 +316,9 @@ fn collect_endpoint_permission_check(
         },
     ));
     let socket_metadata = fs::symlink_metadata(directory.join("mcp-bridge.sock"));
-    let socket_private = socket_metadata.as_ref().is_ok_and(|value| {
-        value.file_type().is_socket() && value.permissions().mode() & 0o077 == 0
-    });
+    let socket_private = socket_metadata
+        .as_ref()
+        .is_ok_and(|value| value.file_type().is_socket() && posix_permissions_private(value));
     checks.push(check(
         "ipc_endpoint_permissions",
         "ipc_transport",
@@ -359,6 +356,17 @@ fn collect_endpoint_permission_check(
             "Owner metadata is missing or inconsistent"
         },
     ));
+}
+
+#[cfg(unix)]
+#[allow(
+    clippy::verbose_bit_mask,
+    reason = "the evidence check intentionally names the POSIX group/other permission mask"
+)]
+fn posix_permissions_private(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    metadata.permissions().mode() & 0o077 == 0
 }
 
 #[cfg(windows)]
