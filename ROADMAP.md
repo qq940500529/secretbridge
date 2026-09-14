@@ -1,55 +1,28 @@
-# SecretBridge 完整路线图
+# Roadmap
 
-[项目首页](README.zh-CN.md) / [文档中心](docs/README.md) / [成熟态架构与功能说明](docs/成熟态软件架构与功能说明.md)
+[Home](README.md) / Roadmap
 
-本路线图既是开发顺序，也是验收合同。每次开发以一个可演示、可测试、可回退、可形成证据的功能包推进，不以单个页面、接口或重构冒充阶段完成。里程碑表示准入门槛，不承诺日历日期。
+Milestones describe acceptance gates rather than promised dates. **M3 security-pilot preparation is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets, perform one fixed PostgreSQL check and produce repeatable self-validation evidence, but unresolved identity, platform, independent-review and real-target gates still block production claims.
 
 > [!IMPORTANT]
 > 当前版本为 `0.1.0-alpha.21` 工程候选，处于 **M3 安全复核与试点准备**。本机隔离 PostgreSQL 已形成首轮真实 TLS 适配器证据，但不是生产试点或独立认证；M0 中安装后操作系统身份隔离仍未关闭，项目也不等于已经适合生产使用。
 
-## 1. 完成规则
-
-一个版本只有同时满足以下条件才可标记为完成：
-
-1. 用户可从可信 Web 界面完成端到端操作，或该版本明确属于无界面的基础设施包；
-2. Web、HTTP、领域层和持久化使用同一安全规则，不存在绕过主状态机的旁路；
-3. 新增数据具备迁移、容量边界、完整性检查和失败语义；
-4. 新增写操作验证页面会话、精确 Origin、请求结构和并发版本；
-5. 凭据、连接串、原始认证流、业务敏感数据不会进入日志、事件、MCP 或导出报告；
-6. 单元、集成、Web 客户端、构建、格式、静态检查和许可证门禁通过；
-7. Windows、Linux、macOS CI 通过；未实机验证的平台原生能力必须显式标记；
-8. README、路线图、变更日志、使用说明、安全模型和设计文档与实际行为一致；
-9. 已说明回退方式、已知限制和下一版本依赖，不把未来能力写成当前能力。
-
-| 状态 | 含义 |
-|---|---|
-| 完成 | 代码、测试、文档和三平台 CI 已形成闭环证据 |
-| 进行中 | 已进入实现，但仍有本功能包内的验收项未关闭 |
-| 待开始 | 依赖条件明确，可以按本文边界启动 |
-| 受阻 | 缺少外部授权、独立人员、真实环境或平台证据 |
-| 候选 | 长期方向，开发前仍需单独立项和威胁建模 |
-
-## 2. 总体阶段
-
-| 里程碑 | 目标结果 | 当前状态 | 退出门槛 |
-|---|---|---|---|
-| Foundation | 项目治理、许可证、威胁模型、跨平台与 Web UI 决策 | 完成 | 贡献、发布、安全和依赖规则可执行 |
-| M0 · 安全可行性 | 证明本机身份、会话、PTY、IPC 与输出边界 | 进行中 | 三平台安装身份与敌对同用户测试有可复核证据 |
-| M1 · 本地工作流 | 凭据、目标、模板、审批、运行、审计和持久终端 | 完成 | 日常配置与人工审批流程端到端可用 |
-| M2 · 受控操作 | 首个固定适配器、MCP、幂等、取消和安全事件 | 完成 | AI 只能请求固定操作，不能取密或决定审批 |
-| M3 · 安全试点 | 准入评估、真实低权限试点、轮换恢复和独立复核 | 进行中 | 获批环境完成攻击/失败矩阵且无未解决高危问题 |
-| M4 · 可分发产品 | 三平台安装、升级、卸载、签名、SBOM、恢复 | 待开始 | 全新机器和升级路径均通过发行验收 |
-| M5 · 稳定版 | 支持范围、运维承诺和安全声明冻结 | 待开始 | RC 演练完成，文档、兼容性和支持策略齐备 |
-| M6 · 扩展生态 | 受审适配器 SDK、策略包和更多固定业务动作 | 候选 | 不削弱 1.0 边界，每个适配器独立评审 |
-| M7 · 团队版 | 多主体、远程代理、集中治理与企业身份 | 候选 | 重新完成网络化、多租户和供应链威胁建模 |
+| Milestone | Outcome | Status |
+| :--- | :--- | :--- |
+| Foundation | Architecture, threat model, platform/UI targets and repository governance | Available |
+| M0 · Feasibility | Synthetic credential and isolation experiments | In progress |
+| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | Complete |
+| M2 · Controlled operations | Scoped adapter and MCP integration | Complete |
+| M3 · Security pilot | Repeatable evidence, approved low-privilege testing and independent review | In progress |
+| M4 · Distribution | Validated packages, source correspondence and recovery | Planned |
 
 ```mermaid
 flowchart LR
-    F["Foundation<br/>治理基线"] --> M0["M0<br/>证明边界"]
-    M0 --> M1["M1<br/>本地工作流"] --> M2["M2<br/>受控操作"]
-    M2 --> M3["M3<br/>安全试点"] --> M4["M4<br/>可分发产品"]
-    M4 --> M5["M5<br/>1.0 稳定版"] --> M6["M6<br/>适配器生态"]
-    M6 -.重新立项.-> M7["M7<br/>团队与远程治理"]
+    A["Foundation"] --> B["M0<br/>Prove boundaries"]
+    B --> C["M1<br/>Build workflows"]
+    C --> D["M2<br/>Integrate operations"]
+    D --> E["M3<br/>Validate security"]
+    E --> F["M4<br/>Distribute"]
 ```
 
 后续阶段可以在合成模式下提前开发，但不能绕过前置安全门槛启用真实能力，也不能据此改变公开安全声明。
@@ -195,15 +168,13 @@ flowchart LR
 
 每一项均以独立版本、PR 和验收证据交付。外部前提未满足时保持受阻，不降低标准换取完成状态。
 
-### 0.1.0-alpha.19 · 三平台安装身份与 IPC 证据包（进行中，M0/M3）
+### 0.1.0-alpha.19 · 三平台安装身份与 IPC 证据包（待开始，M0/M3）
 
-**已完成工程候选**：固定非秘密证据探针；schema v10 有序快照、容量限制与 SHA-256 重算；鉴权 API 与双语主从界面；Markdown／JSON 导出；Unix 目录、连接文档、socket 权限和对端 UID 事实；Windows 远程客户端拒绝与首实例事实；试点准入纳入最近平台证据完整性。探针不返回用户名、SID／UID、主机名、路径、端点名称或秘密，产品自检不会给自己签发 `verified` 结论。
-
-**仍待完成**：Windows 服务身份、目录／连接文档 ACL、命名管道显式 DACL 与客户端 token 身份；Linux systemd 用户服务及凭据库实机条件；macOS launchd、Keychain 实机条件；三平台敌对同用户、非所属用户、远程管道、符号链接和连接文档替换的全新安装证据。
+**交付**：Windows 服务身份、目录 ACL、命名管道 DACL；Linux systemd 用户服务、目录/socket、UID 与凭据库条件；macOS launchd、Keychain、目录/socket 与对端身份；固定非秘密证据探针；敌对同用户、非所属用户、远程管道、符号链接和连接文档替换测试。
 
 **验收**：三平台全新安装环境分别留证；非授权 OS 主体不能访问 IPC、运行目录或服务凭据；同用户不保证范围公开；只有证据满足规则时才允许改变 `identity_boundary`，不得硬编码升级状态。
 
-### 0.1.0-alpha.20 · 获批 PostgreSQL 低权限试点治理（工程候选完成，外部试点受阻，M3）
+### 0.1.0-alpha.20 · 获批 PostgreSQL 低权限试点（待开始，M3）
 
 **外部前提**：目标负责人授权；专用、短期、非生产、只读账号；允许的网络窗口与证书链；不得使用生产密码代替。
 
@@ -306,4 +277,4 @@ flowchart LR
 
 ---
 
-[成熟态架构与功能说明](docs/成熟态软件架构与功能说明.md) · [开发设计](docs/开发设计.md) · [安全模型与验收](docs/安全模型与验收.md) · [发布治理](docs/开源治理与发布.md)
+[Architecture](docs/开发设计.md) · [Security gates](docs/安全模型与验收.md) · [Changelog](CHANGELOG.md)

@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Security validation produces repeatable self-test evidence; Platform evidence records fixed local identity and IPC facts; Pilot readiness aggregates configuration and external gates; the Pilot workspace governs time-bounded records and a fixed evidence matrix. It does not automatically contact remote targets or verify operator-entered authority. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
+> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. The Security validation page now runs current-instance checks and isolated attack scenarios, persists fixed evidence and exports digest-verifiable reports. Approval decisions remain in the trusted Web console. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -59,7 +59,6 @@ The assistant does not receive the stored secret. Ordinary terminals and credent
 | :--- | :--- |
 | Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
 | Run and interpret security self-validation | [Security validation and evidence](docs/安全验证中心.md) — Chinese |
-| Collect and interpret platform identity and IPC evidence | [Platform identity and IPC evidence](docs/平台身份与IPC证据.md) — Chinese |
 | Assess technical and external pilot gates | [Pilot readiness center](docs/试点准入中心.md) — Chinese |
 | Govern a time-bounded pilot and its evidence matrix | [Low-privilege pilot workspace](docs/低权限试点工作台.md) — Chinese |
 | Reproduce the native PostgreSQL TLS adapter test | [PostgreSQL live validation](docs/PostgreSQL实机验证.md) — Chinese |

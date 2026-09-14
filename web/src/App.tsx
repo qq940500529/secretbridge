@@ -12,7 +12,6 @@ import {
   Gauge,
   KeyRound,
   Languages,
-  ListChecks,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -59,21 +58,6 @@ const SecurityValidationView = lazy(() =>
     default: module.SecurityValidationView,
   })),
 );
-const PilotReadinessView = lazy(() =>
-  import("./PilotReadinessView").then((module) => ({
-    default: module.PilotReadinessView,
-  })),
-);
-const PlatformBoundaryView = lazy(() =>
-  import("./PlatformBoundaryView").then((module) => ({
-    default: module.PlatformBoundaryView,
-  })),
-);
-const PilotCampaignView = lazy(() =>
-  import("./PilotCampaignView").then((module) => ({
-    default: module.PilotCampaignView,
-  })),
-);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -89,9 +73,6 @@ interface Copy {
   terminal: string;
   audit: string;
   securityValidation: string;
-  platformBoundary: string;
-  pilotReadiness: string;
-  pilotCampaigns: string;
   settings: string;
   overview: string;
   subtitle: string;
@@ -141,9 +122,6 @@ const copy: Record<Language, Copy> = {
     terminal: "安全终端",
     audit: "审计记录",
     securityValidation: "安全验证",
-    platformBoundary: "平台证据",
-    pilotReadiness: "试点准入",
-    pilotCampaigns: "试点工作台",
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
@@ -192,9 +170,6 @@ const copy: Record<Language, Copy> = {
     terminal: "Secure terminal",
     audit: "Audit log",
     securityValidation: "Security validation",
-    platformBoundary: "Platform evidence",
-    pilotReadiness: "Pilot readiness",
-    pilotCampaigns: "Pilot workspace",
     settings: "Settings",
     overview: "Secure execution overview",
     subtitle:
@@ -247,9 +222,6 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
   { id: "securityValidation", icon: FlaskConical },
-  { id: "platformBoundary", icon: ShieldCheck },
-  { id: "pilotReadiness", icon: ShieldQuestion },
-  { id: "pilotCampaigns", icon: ListChecks },
   { id: "settings", icon: Settings },
 ];
 
@@ -472,27 +444,6 @@ export function App() {
             ) : activePage === "securityValidation" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <SecurityValidationView
-                  language={language}
-                  sessionToken={sessionToken}
-                />
-              </Suspense>
-            ) : activePage === "platformBoundary" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <PlatformBoundaryView
-                  language={language}
-                  sessionToken={sessionToken}
-                />
-              </Suspense>
-            ) : activePage === "pilotReadiness" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <PilotReadinessView
-                  language={language}
-                  sessionToken={sessionToken}
-                />
-              </Suspense>
-            ) : activePage === "pilotCampaigns" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <PilotCampaignView
                   language={language}
                   sessionToken={sessionToken}
                 />

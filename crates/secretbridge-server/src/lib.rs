@@ -5,8 +5,6 @@
 
 mod catalog;
 mod mcp;
-mod pilot;
-mod platform_evidence;
 mod postgres;
 mod secret_store;
 mod terminal;
@@ -53,12 +51,9 @@ use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
     CreateSyntheticRun, CreateTarget, CredentialKind, CredentialReference, DecideApproval,
-    PilotReadinessSnapshot, PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState,
-    SecurityValidationRun, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
-    UpdateTarget,
+    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SecurityValidationRun,
+    SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
-use pilot::{CreatePilotCampaign, PilotCampaign, TransitionPilotCampaign, UpdatePilotScenario};
-use platform_evidence::{PlatformBoundarySnapshot, PlatformEvidenceProbe};
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
 use terminal::{
@@ -83,7 +78,6 @@ pub struct AppState {
     credential_mutations: Arc<Mutex<()>>,
     configuration_gate: Arc<RwLock<()>>,
     postgres_executor: Arc<dyn PostgresExecutor>,
-    platform_evidence: PlatformEvidenceProbe,
     run_cancellations: RunCancellations,
     secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
@@ -121,7 +115,6 @@ impl AppState {
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
             default_postgres_executor(),
-            PlatformEvidenceProbe::ephemeral(),
         )
     }
 
@@ -148,12 +141,6 @@ impl AppState {
             ConfigurationStorage::Sqlite,
             persistent_secret_store(),
             default_postgres_executor(),
-            PlatformEvidenceProbe::persistent(
-                database_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf(),
-            ),
         ))
     }
 
@@ -170,7 +157,6 @@ impl AppState {
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
             default_postgres_executor(),
-            PlatformEvidenceProbe::ephemeral(),
         )
     }
 
@@ -181,7 +167,6 @@ impl AppState {
         configuration_storage: ConfigurationStorage,
         secret_store: Arc<dyn SecretStore>,
         postgres_executor: Arc<dyn PostgresExecutor>,
-        platform_evidence: PlatformEvidenceProbe,
     ) -> (Self, String) {
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
@@ -195,7 +180,6 @@ impl AppState {
             credential_mutations: Arc::new(Mutex::new(())),
             configuration_gate: Arc::new(RwLock::new(())),
             postgres_executor,
-            platform_evidence,
             run_cancellations: RunCancellations::default(),
             secret_store,
             terminals: TerminalManager::new(program),
@@ -388,47 +372,6 @@ struct SecurityValidationReportResponse {
     disclosure: &'static str,
 }
 
-#[derive(Serialize)]
-struct PilotReadinessListResponse {
-    items: Vec<PilotReadinessSnapshot>,
-    evidence_policy: &'static str,
-}
-
-#[derive(Serialize)]
-struct PilotReadinessReportResponse {
-    snapshot: PilotReadinessSnapshot,
-    digest_verified: bool,
-    markdown: String,
-    disclosure: &'static str,
-}
-
-#[derive(Serialize)]
-struct PlatformBoundaryListResponse {
-    items: Vec<PlatformBoundarySnapshot>,
-    evidence_policy: &'static str,
-}
-
-#[derive(Serialize)]
-struct PlatformBoundaryReportResponse {
-    snapshot: PlatformBoundarySnapshot,
-    digest_verified: bool,
-    markdown: String,
-    disclosure: &'static str,
-}
-
-#[derive(Serialize)]
-struct PilotCampaignListResponse {
-    items: Vec<PilotCampaign>,
-    execution_policy: &'static str,
-}
-
-#[derive(Serialize)]
-struct PilotCampaignReportResponse {
-    campaign: PilotCampaign,
-    markdown: String,
-    disclosure: &'static str,
-}
-
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -489,7 +432,6 @@ enum ApiError {
     CatalogCapacity,
     Internal,
     InvalidApprovalTransition,
-    InvalidPilotTransition,
     InvalidRunTransition,
     IdempotencyConflict,
     InvalidOrigin,
@@ -539,11 +481,6 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT,
                 "invalid_approval_transition",
                 "The approval cannot make that state transition.",
-            ),
-            Self::InvalidPilotTransition => (
-                StatusCode::CONFLICT,
-                "invalid_pilot_transition",
-                "The pilot campaign cannot make that state transition.",
             ),
             Self::InvalidRunTransition => (
                 StatusCode::CONFLICT,
@@ -606,10 +543,6 @@ pub fn router_with_web(state: AppState, web_root: impl AsRef<Path>) -> Router {
     )
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "the explicit route registry keeps the authenticated HTTP surface reviewable in one place"
-)]
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/status", get(status))
@@ -670,53 +603,6 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/security-validations/{id}/report",
             get(get_security_validation_report),
-        )
-        .route(
-            "/api/v1/pilot-readiness",
-            get(list_pilot_readiness).post(create_pilot_readiness),
-        )
-        .route("/api/v1/pilot-readiness/{id}", get(get_pilot_readiness))
-        .route(
-            "/api/v1/pilot-readiness/{id}/report",
-            get(get_pilot_readiness_report),
-        )
-        .route(
-            "/api/v1/platform-boundary",
-            get(list_platform_boundary).post(create_platform_boundary),
-        )
-        .route("/api/v1/platform-boundary/{id}", get(get_platform_boundary))
-        .route(
-            "/api/v1/platform-boundary/{id}/report",
-            get(get_platform_boundary_report),
-        )
-        .route(
-            "/api/v1/pilot-campaigns",
-            get(list_pilot_campaigns).post(create_pilot_campaign),
-        )
-        .route("/api/v1/pilot-campaigns/{id}", get(get_pilot_campaign))
-        .route(
-            "/api/v1/pilot-campaigns/{id}/report",
-            get(get_pilot_campaign_report),
-        )
-        .route(
-            "/api/v1/pilot-campaigns/{id}/activate",
-            post(activate_pilot_campaign),
-        )
-        .route(
-            "/api/v1/pilot-campaigns/{id}/begin-closure",
-            post(begin_pilot_closure),
-        )
-        .route(
-            "/api/v1/pilot-campaigns/{id}/close",
-            post(close_pilot_campaign),
-        )
-        .route(
-            "/api/v1/pilot-campaigns/{id}/revoke",
-            post(revoke_pilot_campaign),
-        )
-        .route(
-            "/api/v1/pilot-campaigns/{id}/scenarios/{code}",
-            put(update_pilot_scenario),
         )
         .route(
             "/api/v1/terminals",
@@ -1658,431 +1544,6 @@ fn render_security_validation_markdown(
     report
 }
 
-async fn list_pilot_readiness(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<PilotReadinessListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_pilot_readiness_snapshots())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(PilotReadinessListResponse {
-        items,
-        evidence_policy: "server_generated_non_secret_readiness_evidence",
-    }))
-}
-
-async fn create_pilot_readiness(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, Json<PilotReadinessSnapshot>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    if !body.is_empty() {
-        return Err(ApiError::BadRequest);
-    }
-    let _configuration = state.configuration_gate.read().await;
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || catalog.execute_pilot_readiness_snapshot())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(snapshot)))
-}
-
-async fn get_pilot_readiness(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PilotReadinessSnapshot>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || catalog.get_pilot_readiness_snapshot(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(snapshot))
-}
-
-async fn get_pilot_readiness_report(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PilotReadinessReportResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || catalog.get_pilot_readiness_snapshot(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    let digest_verified = snapshot.digest_verified;
-    let markdown = render_pilot_readiness_markdown(&snapshot, digest_verified);
-    Ok(Json(PilotReadinessReportResponse {
-        snapshot,
-        digest_verified,
-        markdown,
-        disclosure: "readiness_snapshot_not_pilot_authorization_or_certification",
-    }))
-}
-
-fn render_pilot_readiness_markdown(
-    snapshot: &PilotReadinessSnapshot,
-    digest_verified: bool,
-) -> String {
-    let latest_validation = snapshot
-        .latest_validation_id
-        .map_or_else(|| "none".to_owned(), |value| value.to_string());
-    let mut report = format!(
-        "# SecretBridge Pilot Readiness Report\n\n\
-         - Snapshot: `{}`\n\
-         - Profile: `{}`\n\
-         - Application: `{}`\n\
-         - Platform: `{}`\n\
-         - Result: `{:?}`\n\
-         - Created (Unix ms): `{}`\n\
-         - Latest validation: `{latest_validation}`\n\
-         - Candidate test targets: `{}`\n\
-         - Technically eligible targets: `{}`\n\
-         - Evidence SHA-256: `{}`\n\
-         - Digest verified: `{digest_verified}`\n\n\
-         ## Readiness checks\n\n",
-        snapshot.id,
-        snapshot.profile_version,
-        snapshot.application_version,
-        snapshot.platform,
-        snapshot.status,
-        snapshot.created_at_unix_ms,
-        snapshot.candidate_test_targets,
-        snapshot.eligible_test_targets,
-        snapshot.evidence_digest_sha256,
-    );
-    for check in &snapshot.checks {
-        let _ = write!(
-            report,
-            "- **{:?}** `{}` — {}\n  - Evidence: {}\n",
-            check.status, check.code, check.summary, check.evidence
-        );
-    }
-    report.push_str(
-        "\n## Scope disclosure\n\n\
-         This snapshot is generated from local non-secret metadata and existing self-validation evidence. It is not target-owner authorization, proof of remote least-privilege grants, operating-system identity certification or an independent security review. A technically eligible target must not be treated as production-ready.\n",
-    );
-    report
-}
-
-async fn list_platform_boundary(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<PlatformBoundaryListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_platform_boundary_snapshots())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(PlatformBoundaryListResponse {
-        items,
-        evidence_policy: "fixed_non_secret_platform_facts_only",
-    }))
-}
-
-async fn create_platform_boundary(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, Json<PlatformBoundarySnapshot>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    if !body.is_empty() {
-        return Err(ApiError::BadRequest);
-    }
-    let checks = state.platform_evidence.collect();
-    let runtime_context = if state.configuration_storage == ConfigurationStorage::Sqlite {
-        "persistent"
-    } else {
-        "ephemeral"
-    };
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || {
-        catalog.execute_platform_boundary_snapshot(runtime_context, checks)
-    })
-    .await
-    .map_err(|_| ApiError::Internal)?
-    .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(snapshot)))
-}
-
-async fn get_platform_boundary(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PlatformBoundarySnapshot>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || catalog.get_platform_boundary_snapshot(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(snapshot))
-}
-
-async fn get_platform_boundary_report(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PlatformBoundaryReportResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let snapshot = task::spawn_blocking(move || catalog.get_platform_boundary_snapshot(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    let digest_verified = snapshot.digest_verified;
-    let markdown = render_platform_boundary_markdown(&snapshot, digest_verified);
-    Ok(Json(PlatformBoundaryReportResponse {
-        snapshot,
-        digest_verified,
-        markdown,
-        disclosure: "self_probe_not_installed_identity_certification",
-    }))
-}
-
-fn render_platform_boundary_markdown(
-    snapshot: &PlatformBoundarySnapshot,
-    digest_verified: bool,
-) -> String {
-    let mut report = format!(
-        "# SecretBridge Platform Boundary Evidence\n\n\
-         - Snapshot: `{}`\n\
-         - Profile: `{}`\n\
-         - Application: `{}`\n\
-         - Platform: `{}`\n\
-         - Runtime context: `{}`\n\
-         - Result: `{:?}`\n\
-         - Identity boundary: `{}`\n\
-         - Created (Unix ms): `{}`\n\
-         - Evidence SHA-256: `{}`\n\
-         - Digest verified: `{digest_verified}`\n\n\
-         ## Checks\n\n",
-        snapshot.id,
-        snapshot.profile_version,
-        snapshot.application_version,
-        snapshot.platform,
-        snapshot.runtime_context,
-        snapshot.status,
-        snapshot.identity_boundary,
-        snapshot.created_at_unix_ms,
-        snapshot.evidence_digest_sha256,
-    );
-    for check in &snapshot.checks {
-        let _ = write!(
-            report,
-            "- **{:?}** `{}` — {}\n  - Evidence: {}\n",
-            check.status, check.code, check.summary, check.evidence
-        );
-    }
-    report.push_str(
-        "\n## Scope disclosure\n\n\
-         This artifact contains fixed, non-secret facts collected by the running product. It does not disclose usernames, identifiers, endpoint names or paths. It is not independent proof of a fresh installation, service identity, DACL or hostile-subject denial. The public identity boundary remains `unverified_same_user` until those external gates are completed.\n",
-    );
-    report
-}
-
-async fn list_pilot_campaigns(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<PilotCampaignListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_pilot_campaigns())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(PilotCampaignListResponse {
-        items,
-        execution_policy: "governance_records_only_no_automatic_remote_execution",
-    }))
-}
-
-async fn create_pilot_campaign(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<CreatePilotCampaign>,
-) -> Result<(StatusCode, Json<PilotCampaign>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let _configuration = state.configuration_gate.read().await;
-    let catalog = state.catalog.clone();
-    let campaign = task::spawn_blocking(move || catalog.create_pilot_campaign(&request))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(campaign)))
-}
-
-async fn get_pilot_campaign(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let campaign = task::spawn_blocking(move || catalog.get_pilot_campaign(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(campaign))
-}
-
-async fn get_pilot_campaign_report(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<PilotCampaignReportResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let campaign = task::spawn_blocking(move || catalog.get_pilot_campaign(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    let markdown = render_pilot_campaign_markdown(&campaign);
-    Ok(Json(PilotCampaignReportResponse {
-        campaign,
-        markdown,
-        disclosure: "governance_record_not_target_authority_or_execution_proof",
-    }))
-}
-
-async fn activate_pilot_campaign(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<TransitionPilotCampaign>,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    mutate_pilot_campaign(state, headers, move |catalog| {
-        catalog.activate_pilot_campaign(id, &request)
-    })
-    .await
-}
-
-async fn begin_pilot_closure(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<TransitionPilotCampaign>,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    mutate_pilot_campaign(state, headers, move |catalog| {
-        catalog.begin_pilot_closure(id, &request)
-    })
-    .await
-}
-
-async fn close_pilot_campaign(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<TransitionPilotCampaign>,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    mutate_pilot_campaign(state, headers, move |catalog| {
-        catalog.close_pilot_campaign(id, &request)
-    })
-    .await
-}
-
-async fn revoke_pilot_campaign(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<TransitionPilotCampaign>,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    mutate_pilot_campaign(state, headers, move |catalog| {
-        catalog.revoke_pilot_campaign(id, &request)
-    })
-    .await
-}
-
-async fn update_pilot_scenario(
-    State(state): State<AppState>,
-    AxumPath((id, code)): AxumPath<(Uuid, String)>,
-    headers: HeaderMap,
-    Json(request): Json<UpdatePilotScenario>,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    mutate_pilot_campaign(state, headers, move |catalog| {
-        catalog.update_pilot_scenario(id, &code, &request)
-    })
-    .await
-}
-
-async fn mutate_pilot_campaign(
-    state: AppState,
-    headers: HeaderMap,
-    mutation: impl FnOnce(Catalog) -> Result<PilotCampaign, CatalogError> + Send + 'static,
-) -> Result<Json<PilotCampaign>, ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let _configuration = state.configuration_gate.read().await;
-    let catalog = state.catalog.clone();
-    let campaign = task::spawn_blocking(move || mutation(catalog))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(campaign))
-}
-
-fn render_pilot_campaign_markdown(campaign: &PilotCampaign) -> String {
-    let mut report = format!(
-        "# SecretBridge Low-Privilege Pilot Record\n\n\
-         - Campaign: `{}`\n\
-         - Name: `{}`\n\
-         - Profile: `{}`\n\
-         - State: `{:?}`\n\
-         - Target snapshot: `{}` version `{}`\n\
-         - Action template snapshot: `{}` version `{}`\n\
-         - Readiness evidence: `{}`\n\
-         - Platform evidence: `{}`\n\
-         - Authorization reference: `{}`\n\
-         - Least-privilege review reference: `{}`\n\
-         - Expires (Unix ms): `{}`\n\n\
-         ## Required scenario matrix\n\n",
-        campaign.id,
-        markdown_inline(&campaign.name),
-        campaign.profile_version,
-        campaign.state,
-        campaign.target_id,
-        campaign.target_version,
-        campaign.action_template_id,
-        campaign.action_template_version,
-        campaign.readiness_snapshot_id,
-        campaign.platform_snapshot_id,
-        campaign.authorization_reference,
-        campaign.least_privilege_reference,
-        campaign.expires_at_unix_ms,
-    );
-    for scenario in &campaign.scenarios {
-        let _ = write!(
-            report,
-            "- **{:?}** `{}` — {}\n  - Evidence reference: `{}`\n  - Reviewer reference: `{}`\n",
-            scenario.result,
-            scenario.code,
-            scenario.expected_behavior,
-            scenario.evidence_reference.as_deref().unwrap_or("none"),
-            scenario.reviewer_reference.as_deref().unwrap_or("none"),
-        );
-    }
-    report.push_str(
-        "\n## Scope disclosure\n\n\
-         This is a local governance record. References are operator-entered identifiers, not verified target-owner authority, least-privilege proof or execution evidence. SecretBridge does not automatically connect to a remote target from this workflow. A campaign can close only after every fixed scenario is recorded as passed and the linked temporary credential is cleared.\n",
-    );
-    report
-}
-
-fn markdown_inline(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('`', "\\`")
-}
-
 async fn list_terminals(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2494,7 +1955,6 @@ fn map_catalog_error(error: CatalogError) -> ApiError {
         CatalogError::CredentialReferenceNotFound | CatalogError::NotFound => ApiError::NotFound,
         CatalogError::Invalid => ApiError::BadRequest,
         CatalogError::InvalidApprovalTransition => ApiError::InvalidApprovalTransition,
-        CatalogError::InvalidPilotTransition => ApiError::InvalidPilotTransition,
         CatalogError::InvalidRunTransition => ApiError::InvalidRunTransition,
         CatalogError::IdempotencyConflict => ApiError::IdempotencyConflict,
         CatalogError::PolicyDenied => ApiError::PolicyDenied,
@@ -3487,341 +2947,6 @@ mod tests {
         let markdown = report["markdown"].as_str().expect("Markdown report");
         assert!(markdown.contains("identity boundary remains a manual gate"));
         assert!(!markdown.to_ascii_lowercase().contains("password="));
-    }
-
-    #[tokio::test]
-    async fn pilot_readiness_api_is_authenticated_bounded_and_exportable() {
-        let (app, bootstrap) = test_app();
-        let unauthenticated = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/pilot-readiness")
-                    .body(Body::empty())
-                    .expect("valid request"),
-            )
-            .await
-            .expect("router response");
-        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
-        let token = pair_test_session(&app, &bootstrap).await;
-        let missing_origin = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/pilot-readiness",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
-        let payload_attempt = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                "/api/v1/pilot-readiness",
-                &token,
-                ORIGIN,
-                r#"{"target":"caller-selected"}"#,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(payload_attempt.status(), StatusCode::BAD_REQUEST);
-
-        let created = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/pilot-readiness",
-                &token,
-                Some(ORIGIN),
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(created.status(), StatusCode::CREATED);
-        let snapshot = response_json(created).await;
-        assert_eq!(snapshot["status"], "blocked");
-        assert_eq!(snapshot["checks"].as_array().map(Vec::len), Some(11));
-        assert_eq!(snapshot["digest_verified"], true);
-        let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
-
-        let history = app
-            .clone()
-            .oneshot(authenticated_request(
-                "GET",
-                "/api/v1/pilot-readiness",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let history = response_json(history).await;
-        assert_eq!(
-            history["evidence_policy"],
-            "server_generated_non_secret_readiness_evidence"
-        );
-        assert_eq!(history["items"].as_array().map(Vec::len), Some(1));
-
-        let report = app
-            .oneshot(authenticated_request(
-                "GET",
-                &format!("/api/v1/pilot-readiness/{snapshot_id}/report"),
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let report = response_json(report).await;
-        assert_eq!(report["digest_verified"], true);
-        assert_eq!(
-            report["disclosure"],
-            "readiness_snapshot_not_pilot_authorization_or_certification"
-        );
-        let markdown = report["markdown"].as_str().expect("Markdown report");
-        assert!(markdown.contains("Pilot Readiness Report"));
-        assert!(!markdown.to_ascii_lowercase().contains("password="));
-        assert!(!markdown.contains("pilot.test.example"));
-    }
-
-    #[tokio::test]
-    async fn platform_boundary_api_is_authenticated_bounded_and_exportable() {
-        let (app, bootstrap) = test_app();
-        let unauthenticated = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/platform-boundary")
-                    .body(Body::empty())
-                    .expect("valid request"),
-            )
-            .await
-            .expect("router response");
-        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
-        let token = pair_test_session(&app, &bootstrap).await;
-        let missing_origin = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/platform-boundary",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
-        let payload_attempt = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                "/api/v1/platform-boundary",
-                &token,
-                ORIGIN,
-                r#"{"path":"caller-selected"}"#,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(payload_attempt.status(), StatusCode::BAD_REQUEST);
-
-        let created = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/platform-boundary",
-                &token,
-                Some(ORIGIN),
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(created.status(), StatusCode::CREATED);
-        let snapshot = response_json(created).await;
-        assert_eq!(snapshot["status"], "attention");
-        assert_eq!(snapshot["identity_boundary"], "unverified_same_user");
-        assert_eq!(snapshot["runtime_context"], "ephemeral");
-        assert_eq!(snapshot["digest_verified"], true);
-        let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
-
-        let history = app
-            .clone()
-            .oneshot(authenticated_request(
-                "GET",
-                "/api/v1/platform-boundary",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let history = response_json(history).await;
-        assert_eq!(
-            history["evidence_policy"],
-            "fixed_non_secret_platform_facts_only"
-        );
-        assert_eq!(history["items"].as_array().map(Vec::len), Some(1));
-
-        let report = app
-            .oneshot(authenticated_request(
-                "GET",
-                &format!("/api/v1/platform-boundary/{snapshot_id}/report"),
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let report = response_json(report).await;
-        assert_eq!(report["digest_verified"], true);
-        assert_eq!(
-            report["disclosure"],
-            "self_probe_not_installed_identity_certification"
-        );
-        let markdown = report["markdown"].as_str().expect("Markdown report");
-        assert!(markdown.contains("Platform Boundary Evidence"));
-        assert!(markdown.contains("unverified_same_user"));
-        assert!(!markdown.to_ascii_lowercase().contains("password="));
-    }
-
-    #[tokio::test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the end-to-end API test proves every pilot prerequisite and secrecy boundary"
-    )]
-    async fn pilot_campaign_api_binds_evidence_and_never_returns_the_secret() {
-        let (app, bootstrap) = test_app();
-        let token = pair_test_session(&app, &bootstrap).await;
-        let (_, secret) = create_test_approved_postgres_approval(&app, &token).await;
-        let missing_origin = app
-            .clone()
-            .oneshot(authenticated_request_with_body(
-                "POST",
-                "/api/v1/pilot-campaigns",
-                &token,
-                None,
-                r#"{"name":"missing origin","action_template_id":"00000000-0000-0000-0000-000000000001","readiness_snapshot_id":"00000000-0000-0000-0000-000000000002","platform_snapshot_id":"00000000-0000-0000-0000-000000000003","authorization_reference":"AUTH-001","least_privilege_reference":"REVIEW-001","expires_in_seconds":3600}"#,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
-
-        for endpoint in ["/api/v1/security-validations", "/api/v1/platform-boundary"] {
-            let response = app
-                .clone()
-                .oneshot(authenticated_request(
-                    "POST",
-                    endpoint,
-                    &token,
-                    Some(ORIGIN),
-                ))
-                .await
-                .expect("create prerequisite");
-            assert_eq!(response.status(), StatusCode::CREATED);
-        }
-        let readiness = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/pilot-readiness",
-                &token,
-                Some(ORIGIN),
-            ))
-            .await
-            .expect("create readiness");
-        let readiness = response_json(readiness).await;
-        assert_eq!(readiness["eligible_test_targets"], 1);
-        let platform = app
-            .clone()
-            .oneshot(authenticated_request(
-                "GET",
-                "/api/v1/platform-boundary",
-                &token,
-                None,
-            ))
-            .await
-            .expect("list platform evidence");
-        let platform = response_json(platform).await;
-        let templates = app
-            .clone()
-            .oneshot(authenticated_request(
-                "GET",
-                "/api/v1/action-templates",
-                &token,
-                None,
-            ))
-            .await
-            .expect("list templates");
-        let templates = response_json(templates).await;
-        let create_body = serde_json::json!({
-            "name": "Authorized `pilot`",
-            "action_template_id": templates["items"][0]["id"],
-            "readiness_snapshot_id": readiness["id"],
-            "platform_snapshot_id": platform["items"][0]["id"],
-            "authorization_reference": "AUTH-2026-001",
-            "least_privilege_reference": "REVIEW-2026-001",
-            "expires_in_seconds": 3600
-        })
-        .to_string();
-        let created = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                "/api/v1/pilot-campaigns",
-                &token,
-                ORIGIN,
-                &create_body,
-            ))
-            .await
-            .expect("register pilot");
-        assert_eq!(created.status(), StatusCode::CREATED);
-        let campaign = response_json(created).await;
-        assert_eq!(campaign["state"], "registered");
-        assert_eq!(campaign["scenarios"].as_array().map(Vec::len), Some(11));
-        let campaign_id = campaign["id"].as_str().expect("campaign id");
-        let activated = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                &format!("/api/v1/pilot-campaigns/{campaign_id}/activate"),
-                &token,
-                ORIGIN,
-                &serde_json::json!({"expected_version": campaign["version"]}).to_string(),
-            ))
-            .await
-            .expect("activate pilot");
-        let activated = response_json(activated).await;
-        assert_eq!(activated["state"], "active");
-        let updated = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "PUT",
-                &format!("/api/v1/pilot-campaigns/{campaign_id}/scenarios/connection_success"),
-                &token,
-                ORIGIN,
-                r#"{"result":"passed","evidence_reference":"EVIDENCE-001","reviewer_reference":"REVIEWER-001","expected_version":1}"#,
-            ))
-            .await
-            .expect("record evidence");
-        assert_eq!(updated.status(), StatusCode::OK);
-
-        let report = app
-            .oneshot(authenticated_request(
-                "GET",
-                &format!("/api/v1/pilot-campaigns/{campaign_id}/report"),
-                &token,
-                None,
-            ))
-            .await
-            .expect("pilot report");
-        let report = response_json(report).await;
-        assert_eq!(
-            report["disclosure"],
-            "governance_record_not_target_authority_or_execution_proof"
-        );
-        let serialized = report.to_string();
-        assert!(!serialized.contains(secret));
-        assert!(!serialized.contains("db.example.invalid"));
-        assert!(
-            report["markdown"]
-                .as_str()
-                .expect("markdown")
-                .contains("Authorized \\`pilot\\`")
-        );
     }
 
     #[tokio::test]

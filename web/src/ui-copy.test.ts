@@ -15,8 +15,6 @@ const renderedViews = [
   "CatalogView.tsx",
   "OperationsView.tsx",
   "PilotReadinessView.tsx",
-  "PilotCampaignView.tsx",
-  "PlatformBoundaryView.tsx",
   "SecurityValidationView.tsx",
   "TerminalView.tsx",
 ];

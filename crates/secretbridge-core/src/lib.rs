@@ -81,7 +81,7 @@ impl StatusResponse {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
-            release_stage: "m3_pilot_readiness",
+            release_stage: "m3_security_validation",
             mode: RuntimeMode::ControlledOperations,
             identity_boundary: IdentityBoundary::UnverifiedSameUser,
             configuration_storage,
@@ -121,7 +121,7 @@ mod tests {
     fn controlled_operations_reports_the_unverified_identity_boundary() {
         let status = StatusResponse::controlled_operations(true, ConfigurationStorage::Sqlite);
         assert_eq!(status.mode, RuntimeMode::ControlledOperations);
-        assert_eq!(status.release_stage, "m3_pilot_readiness");
+        assert_eq!(status.release_stage, "m3_security_validation");
         assert_eq!(
             status.identity_boundary,
             IdentityBoundary::UnverifiedSameUser
