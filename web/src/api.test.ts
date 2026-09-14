@@ -11,14 +11,19 @@ import {
   createSecurityValidation,
   createPilotReadiness,
   createPlatformBoundary,
+  createPilotCampaign,
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
   getSecurityValidationReport,
   getPilotReadinessReport,
   getPlatformBoundaryReport,
+  getPilotCampaignReport,
   listPilotReadiness,
   listPlatformBoundary,
+  listPilotCampaigns,
+  transitionPilotCampaign,
+  updatePilotScenario,
   setCredentialSecret,
   clearCredentialSecret,
   updateCredentialReference,
@@ -416,6 +421,62 @@ describe("configuration API client", () => {
     expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/platform-boundary");
     expect(fetch.mock.calls[2]?.[0]).toBe(
       "/api/v1/platform-boundary/platform-id/report",
+    );
+  });
+
+  it("registers, transitions and records evidence for governed pilots", async () => {
+    const campaign = { id: "campaign-id", state: "registered", version: 1 };
+    const fetch = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify(campaign), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+    vi.stubGlobal("fetch", fetch);
+
+    await createPilotCampaign("synthetic-session-token", {
+      name: "Authorized pilot",
+      action_template_id: "template-id",
+      readiness_snapshot_id: "readiness-id",
+      platform_snapshot_id: "platform-id",
+      authorization_reference: "AUTH-001",
+      least_privilege_reference: "REVIEW-001",
+      expires_in_seconds: 3600,
+    });
+    await listPilotCampaigns("synthetic-session-token");
+    await transitionPilotCampaign(
+      "synthetic-session-token",
+      "campaign-id",
+      "activate",
+      1,
+    );
+    await updatePilotScenario(
+      "synthetic-session-token",
+      "campaign-id",
+      "connection_success",
+      "passed",
+      "EVIDENCE-001",
+      "REVIEWER-001",
+      1,
+    );
+    await getPilotCampaignReport("synthetic-session-token", "campaign-id");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/pilot-campaigns");
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toEqual(
+      expect.objectContaining({ authorization_reference: "AUTH-001" }),
+    );
+    expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/pilot-campaigns");
+    expect(fetch.mock.calls[2]?.[0]).toBe(
+      "/api/v1/pilot-campaigns/campaign-id/activate",
+    );
+    expect(JSON.parse(String(fetch.mock.calls[3]?.[1]?.body))).toEqual({
+      result: "passed",
+      evidence_reference: "EVIDENCE-001",
+      reviewer_reference: "REVIEWER-001",
+      expected_version: 1,
+    });
+    expect(fetch.mock.calls[4]?.[0]).toBe(
+      "/api/v1/pilot-campaigns/campaign-id/report",
     );
   });
 });

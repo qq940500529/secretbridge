@@ -399,6 +399,71 @@ export interface PlatformBoundaryReportResponse {
   disclosure: "self_probe_not_installed_identity_certification";
 }
 
+export type PilotCampaignState =
+  | "registered"
+  | "active"
+  | "closing"
+  | "closed"
+  | "revoked"
+  | "expired";
+export type PilotScenarioResult =
+  | "not_run"
+  | "passed"
+  | "failed"
+  | "not_applicable";
+
+export interface PilotScenarioEvidence {
+  code: string;
+  ordinal: number;
+  result: PilotScenarioResult;
+  expected_behavior: string;
+  evidence_reference: string | null;
+  reviewer_reference: string | null;
+  updated_at_unix_ms: number;
+  version: number;
+}
+
+export interface PilotCampaign {
+  id: string;
+  profile_version: string;
+  name: string;
+  state: PilotCampaignState;
+  target_id: string;
+  target_version: number;
+  action_template_id: string;
+  action_template_version: number;
+  readiness_snapshot_id: string;
+  platform_snapshot_id: string;
+  authorization_reference: string;
+  least_privilege_reference: string;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  expires_at_unix_ms: number;
+  version: number;
+  scenarios: PilotScenarioEvidence[];
+}
+
+export interface CreatePilotCampaign {
+  name: string;
+  action_template_id: string;
+  readiness_snapshot_id: string;
+  platform_snapshot_id: string;
+  authorization_reference: string;
+  least_privilege_reference: string;
+  expires_in_seconds: number;
+}
+
+export interface PilotCampaignListResponse {
+  items: PilotCampaign[];
+  execution_policy: "governance_records_only_no_automatic_remote_execution";
+}
+
+export interface PilotCampaignReportResponse {
+  campaign: PilotCampaign;
+  markdown: string;
+  disclosure: "governance_record_not_target_authority_or_execution_proof";
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -893,6 +958,88 @@ export async function getPlatformBoundaryReport(
 ): Promise<PlatformBoundaryReportResponse> {
   return readJson<PlatformBoundaryReportResponse>(
     await fetch(`/api/v1/platform-boundary/${id}/report`, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listPilotCampaigns(
+  sessionToken: string,
+): Promise<PilotCampaignListResponse> {
+  return readJson<PilotCampaignListResponse>(
+    await fetch("/api/v1/pilot-campaigns", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createPilotCampaign(
+  sessionToken: string,
+  request: CreatePilotCampaign,
+): Promise<PilotCampaign> {
+  return readJson<PilotCampaign>(
+    await fetch("/api/v1/pilot-campaigns", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
+}
+
+export async function transitionPilotCampaign(
+  sessionToken: string,
+  id: string,
+  action: "activate" | "begin-closure" | "close" | "revoke",
+  expectedVersion: number,
+): Promise<PilotCampaign> {
+  return readJson<PilotCampaign>(
+    await fetch(`/api/v1/pilot-campaigns/${id}/${action}`, {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({ expected_version: expectedVersion }),
+    }),
+  );
+}
+
+export async function updatePilotScenario(
+  sessionToken: string,
+  campaignId: string,
+  code: string,
+  result: PilotScenarioResult,
+  evidenceReference: string | null,
+  reviewerReference: string | null,
+  expectedVersion: number,
+): Promise<PilotCampaign> {
+  return readJson<PilotCampaign>(
+    await fetch(`/api/v1/pilot-campaigns/${campaignId}/scenarios/${code}`, {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({
+        result,
+        evidence_reference: evidenceReference,
+        reviewer_reference: reviewerReference,
+        expected_version: expectedVersion,
+      }),
+    }),
+  );
+}
+
+export async function getPilotCampaignReport(
+  sessionToken: string,
+  id: string,
+): Promise<PilotCampaignReportResponse> {
+  return readJson<PilotCampaignReportResponse>(
+    await fetch(`/api/v1/pilot-campaigns/${id}/report`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Security validation produces repeatable self-test evidence; Platform evidence records fixed local identity and IPC facts; Pilot readiness aggregates configuration, validation and explicit external gates without treating technical eligibility as authorization. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
+> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Security validation produces repeatable self-test evidence; Platform evidence records fixed local identity and IPC facts; Pilot readiness aggregates configuration and external gates; the Pilot workspace governs time-bounded records and a fixed evidence matrix. It does not automatically contact remote targets or verify operator-entered authority. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -33,7 +33,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. SQLite schema v10 stores digest-verifiable security-validation, platform-boundary and pilot-readiness evidence. Reports expose aggregate counts and fixed facts, never operating-system identities, paths, target addresses or secrets, and remain explicit that self-generated evidence is not authorization or independent certification. See the [complete roadmap](ROADMAP.md) for remaining work.
+One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. SQLite schema v11 stores digest-verifiable security/platform/readiness evidence plus bounded pilot campaigns and versioned scenario evidence. Reports avoid operating-system identities, paths, target addresses and secrets, and remain explicit that self-generated evidence and external references are not authorization or independent certification. See the [complete roadmap](ROADMAP.md) for remaining work.
 
 ## How it works
 
@@ -61,6 +61,7 @@ The assistant does not receive the stored secret. Ordinary terminals and credent
 | Run and interpret security self-validation | [Security validation and evidence](docs/安全验证中心.md) — Chinese |
 | Collect and interpret platform identity and IPC evidence | [Platform identity and IPC evidence](docs/平台身份与IPC证据.md) — Chinese |
 | Assess technical and external pilot gates | [Pilot readiness center](docs/试点准入中心.md) — Chinese |
+| Govern a time-bounded pilot and its evidence matrix | [Low-privilege pilot workspace](docs/低权限试点工作台.md) — Chinese |
 | Understand the complete future product | [Mature architecture and feature specification](docs/成熟态软件架构与功能说明.md) — Chinese |
 | Find the right technical document | [Documentation hub](docs/README.md) |
 | Contribute code, design or tests | [Contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) |

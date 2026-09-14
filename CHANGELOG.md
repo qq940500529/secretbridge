@@ -6,6 +6,17 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.20 · governed low-privilege pilot workspace
+
+- Add time-bounded PostgreSQL pilot campaign records that bind an exact test target/template version, readiness snapshot, platform snapshot, target-owner authorization reference and least-privilege review reference.
+- Enforce the `registered → active → closing → closed` lifecycle with revocation and automatic expiry; activation fails closed on target, template or evidence drift.
+- Create an immutable 11-scenario verification matrix for success, authentication rejection, timeout, DNS, TLS, network interruption, credential rotation, authorization revocation, service restart and credential cleanup.
+- Require versioned evidence and reviewer references for recorded results. Closure requires every scenario to pass and the linked temporary credential to be cleared.
+- Persist bounded campaigns and scenario evidence in SQLite schema version 11, preserve existing platform evidence through migration, and prevent referenced targets or templates from being deleted.
+- Add authenticated Web APIs and a bilingual master-detail pilot workspace with collapsible registration, row-based evidence editing, lifecycle actions and Markdown/JSON export.
+- Keep the workflow governance-only: it does not automatically contact remote targets, does not verify operator-entered external authority and is intentionally absent from the MCP tool surface.
+- Add catalog lifecycle/drift/migration tests, HTTP secrecy and boundary tests, Web API tests, operator documentation and UI-copy regression coverage.
+
 ### 0.1.0-alpha.19 · platform identity and IPC evidence candidate
 
 - Add a fixed, non-secret platform probe for runtime-directory, connection-document, native IPC, credential-store selection and installed-identity evidence without returning usernames, operating-system identifiers, hostnames, paths, endpoint names or secrets.

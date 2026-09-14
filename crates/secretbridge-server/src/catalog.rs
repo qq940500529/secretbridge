@@ -15,12 +15,17 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::pilot::{
+    CreatePilotCampaign, MAX_PILOT_TTL_SECONDS, MIN_PILOT_TTL_SECONDS, PILOT_PROFILE_VERSION,
+    PILOT_SCENARIOS, PilotCampaign, PilotCampaignState, PilotScenarioEvidence, PilotScenarioResult,
+    TransitionPilotCampaign, UpdatePilotScenario,
+};
 use crate::platform_evidence::{
     PLATFORM_BOUNDARY_PROFILE_VERSION, PlatformBoundaryCheck, PlatformBoundaryEvidence,
     PlatformBoundarySnapshot, PlatformBoundaryStatus, PlatformCheckStatus,
 };
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 const SECURITY_VALIDATION_SUITE_VERSION: &str = "security-validation-v1";
 const PILOT_READINESS_PROFILE_VERSION: &str = "pilot-readiness-v1";
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
@@ -33,6 +38,7 @@ const MAX_RUNS: i64 = 1_024;
 const MAX_SECURITY_VALIDATION_RUNS: i64 = 128;
 const MAX_PILOT_READINESS_SNAPSHOTS: i64 = 128;
 const MAX_PLATFORM_BOUNDARY_SNAPSHOTS: i64 = 128;
+const MAX_PILOT_CAMPAIGNS: i64 = 128;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
@@ -724,6 +730,7 @@ pub enum CatalogError {
     CredentialReferenceNotFound,
     Invalid,
     InvalidApprovalTransition,
+    InvalidPilotTransition,
     InvalidRunTransition,
     IdempotencyConflict,
     NotFound,
@@ -957,7 +964,41 @@ impl Catalog {
                     PRIMARY KEY (snapshot_id, ordinal),
                     UNIQUE (snapshot_id, code)
                  );
-                 PRAGMA user_version = 10;
+                 CREATE TABLE pilot_campaigns (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+                    name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+                    state TEXT NOT NULL CHECK (state IN ('registered', 'active', 'closing', 'closed', 'revoked', 'expired')),
+                    target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+                    target_version INTEGER NOT NULL CHECK (target_version >= 1),
+                    action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
+                    action_template_version INTEGER NOT NULL CHECK (action_template_version >= 1),
+                    readiness_snapshot_id TEXT NOT NULL REFERENCES pilot_readiness_snapshots(id) ON DELETE RESTRICT,
+                    platform_snapshot_id TEXT NOT NULL REFERENCES platform_boundary_snapshots(id) ON DELETE RESTRICT,
+                    authorization_reference TEXT NOT NULL CHECK (length(authorization_reference) BETWEEN 1 AND 96),
+                    least_privilege_reference TEXT NOT NULL CHECK (length(least_privilege_reference) BETWEEN 1 AND 96),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    updated_at_unix_ms INTEGER NOT NULL,
+                    expires_at_unix_ms INTEGER NOT NULL,
+                    version INTEGER NOT NULL CHECK (version >= 1)
+                 );
+                 CREATE INDEX pilot_campaigns_created_idx
+                    ON pilot_campaigns(created_at_unix_ms DESC, id);
+                 CREATE INDEX pilot_campaigns_state_idx ON pilot_campaigns(state);
+                 CREATE TABLE pilot_scenario_evidence (
+                    campaign_id TEXT NOT NULL REFERENCES pilot_campaigns(id) ON DELETE CASCADE,
+                    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 32),
+                    code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+                    result TEXT NOT NULL CHECK (result IN ('not_run', 'passed', 'failed', 'not_applicable')),
+                    expected_behavior TEXT NOT NULL CHECK (length(expected_behavior) BETWEEN 1 AND 240),
+                    evidence_reference TEXT CHECK (evidence_reference IS NULL OR length(evidence_reference) BETWEEN 1 AND 96),
+                    reviewer_reference TEXT CHECK (reviewer_reference IS NULL OR length(reviewer_reference) BETWEEN 1 AND 96),
+                    updated_at_unix_ms INTEGER NOT NULL,
+                    version INTEGER NOT NULL CHECK (version >= 1),
+                    PRIMARY KEY (campaign_id, ordinal),
+                    UNIQUE (campaign_id, code)
+                 );
+                 PRAGMA user_version = 11;
                  COMMIT;",
             )?;
         }
@@ -1073,6 +1114,9 @@ impl Catalog {
         }
         if (1..=9).contains(&version) {
             migrate_platform_boundary_schema(&connection)?;
+        }
+        if (1..=10).contains(&version) {
+            migrate_pilot_campaign_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -1453,7 +1497,9 @@ impl Catalog {
         let connection = self.lock();
         let references = connection
             .query_row(
-                "SELECT COUNT(*) FROM approvals WHERE action_template_id = ?1",
+                "SELECT
+                    (SELECT COUNT(*) FROM approvals WHERE action_template_id = ?1) +
+                    (SELECT COUNT(*) FROM pilot_campaigns WHERE action_template_id = ?1)",
                 [id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
@@ -2569,6 +2615,314 @@ impl Catalog {
         platform_boundary_with_checks(&connection, snapshot)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "pilot registration keeps prerequisite checks and atomic matrix creation auditable"
+    )]
+    pub fn create_pilot_campaign(
+        &self,
+        request: &CreatePilotCampaign,
+    ) -> Result<PilotCampaign, CatalogError> {
+        if !(MIN_PILOT_TTL_SECONDS..=MAX_PILOT_TTL_SECONDS).contains(&request.expires_in_seconds) {
+            return Err(CatalogError::Invalid);
+        }
+        let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
+        let authorization_reference =
+            normalize_evidence_reference(&request.authorization_reference)?;
+        let least_privilege_reference =
+            normalize_evidence_reference(&request.least_privilege_reference)?;
+        let mut connection = self.lock();
+        ensure_capacity(&connection, "pilot_campaigns", MAX_PILOT_CAMPAIGNS)?;
+        let template = action_template_by_id(&connection, request.action_template_id)?
+            .ok_or(CatalogError::NotFound)?;
+        let target =
+            target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
+        ensure_pilot_target_and_template(&connection, &target, &template)?;
+        let readiness = readiness_snapshot_by_id(&connection, request.readiness_snapshot_id)?;
+        if !readiness.digest_verified
+            || readiness.eligible_test_targets == 0
+            || readiness
+                .checks
+                .iter()
+                .any(|check| check.status == SecurityValidationStatus::Failed)
+        {
+            return Err(CatalogError::PolicyDenied);
+        }
+        let platform = platform_snapshot_by_id(&connection, request.platform_snapshot_id)?;
+        if !platform.digest_verified || platform.status == PlatformBoundaryStatus::Blocked {
+            return Err(CatalogError::PolicyDenied);
+        }
+        let now = now_unix_ms_i64()?;
+        let ttl_ms = i64::try_from(request.expires_in_seconds)
+            .map_err(|_| CatalogError::Invalid)?
+            .checked_mul(1_000)
+            .ok_or(CatalogError::Invalid)?;
+        let expires_at = now.checked_add(ttl_ms).ok_or(CatalogError::Invalid)?;
+        let id = Uuid::new_v4();
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO pilot_campaigns
+                    (id, profile_version, name, state, target_id, target_version,
+                     action_template_id, action_template_version, readiness_snapshot_id,
+                     platform_snapshot_id, authorization_reference,
+                     least_privilege_reference, created_at_unix_ms, updated_at_unix_ms,
+                     expires_at_unix_ms, version)
+                 VALUES (?1, ?2, ?3, 'registered', ?4, ?5, ?6, ?7, ?8, ?9,
+                         ?10, ?11, ?12, ?12, ?13, 1)",
+                params![
+                    id.to_string(),
+                    PILOT_PROFILE_VERSION,
+                    name,
+                    target.id.to_string(),
+                    i64::try_from(target.version).map_err(|_| CatalogError::Storage)?,
+                    template.id.to_string(),
+                    i64::try_from(template.version).map_err(|_| CatalogError::Storage)?,
+                    request.readiness_snapshot_id.to_string(),
+                    request.platform_snapshot_id.to_string(),
+                    authorization_reference,
+                    least_privilege_reference,
+                    now,
+                    expires_at,
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        for (index, (code, expected_behavior)) in PILOT_SCENARIOS.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO pilot_scenario_evidence
+                        (campaign_id, ordinal, code, result, expected_behavior,
+                         evidence_reference, reviewer_reference, updated_at_unix_ms, version)
+                     VALUES (?1, ?2, ?3, 'not_run', ?4, NULL, NULL, ?5, 1)",
+                    params![
+                        id.to_string(),
+                        i64::try_from(index + 1).map_err(|_| CatalogError::Storage)?,
+                        code,
+                        expected_behavior,
+                        now,
+                    ],
+                )
+                .map_err(|_| CatalogError::Storage)?;
+        }
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn list_pilot_campaigns(&self) -> Result<Vec<PilotCampaign>, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, profile_version, name, state, target_id, target_version,
+                        action_template_id, action_template_version, readiness_snapshot_id,
+                        platform_snapshot_id, authorization_reference,
+                        least_privilege_reference, created_at_unix_ms, updated_at_unix_ms,
+                        expires_at_unix_ms, version
+                   FROM pilot_campaigns ORDER BY created_at_unix_ms DESC, id DESC",
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        statement
+            .query_map([], pilot_campaign_header_from_row)
+            .map_err(|_| CatalogError::Storage)?
+            .map(|campaign| {
+                campaign
+                    .map_err(|_| CatalogError::Storage)
+                    .and_then(|campaign| pilot_campaign_with_scenarios(&connection, campaign))
+            })
+            .collect()
+    }
+
+    pub fn get_pilot_campaign(&self, id: Uuid) -> Result<PilotCampaign, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::NotFound)
+    }
+
+    pub fn activate_pilot_campaign(
+        &self,
+        id: Uuid,
+        request: &TransitionPilotCampaign,
+    ) -> Result<PilotCampaign, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let campaign = pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        if campaign.state != PilotCampaignState::Registered {
+            return Err(CatalogError::InvalidPilotTransition);
+        }
+        ensure_pilot_campaign_version(&campaign, request.expected_version)?;
+        ensure_campaign_prerequisites(&connection, &campaign)?;
+        transition_pilot_campaign(&connection, &campaign, PilotCampaignState::Active)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn begin_pilot_closure(
+        &self,
+        id: Uuid,
+        request: &TransitionPilotCampaign,
+    ) -> Result<PilotCampaign, CatalogError> {
+        self.transition_pilot_campaign_state(
+            id,
+            request,
+            PilotCampaignState::Active,
+            PilotCampaignState::Closing,
+        )
+    }
+
+    pub fn revoke_pilot_campaign(
+        &self,
+        id: Uuid,
+        request: &TransitionPilotCampaign,
+    ) -> Result<PilotCampaign, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let campaign = pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        ensure_pilot_campaign_version(&campaign, request.expected_version)?;
+        if !matches!(
+            campaign.state,
+            PilotCampaignState::Registered
+                | PilotCampaignState::Active
+                | PilotCampaignState::Closing
+        ) {
+            return Err(CatalogError::InvalidPilotTransition);
+        }
+        transition_pilot_campaign(&connection, &campaign, PilotCampaignState::Revoked)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn close_pilot_campaign(
+        &self,
+        id: Uuid,
+        request: &TransitionPilotCampaign,
+    ) -> Result<PilotCampaign, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let campaign = pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        ensure_pilot_campaign_version(&campaign, request.expected_version)?;
+        if campaign.state != PilotCampaignState::Closing {
+            return Err(CatalogError::InvalidPilotTransition);
+        }
+        let incomplete = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pilot_scenario_evidence
+                  WHERE campaign_id = ?1 AND result != 'passed'",
+                [id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        if incomplete != 0 || !pilot_credential_is_cleared(&connection, &campaign)? {
+            return Err(CatalogError::PolicyDenied);
+        }
+        transition_pilot_campaign(&connection, &campaign, PilotCampaignState::Closed)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn update_pilot_scenario(
+        &self,
+        campaign_id: Uuid,
+        code: &str,
+        request: &UpdatePilotScenario,
+    ) -> Result<PilotCampaign, CatalogError> {
+        let code = normalize_scenario_code(code)?;
+        let (evidence_reference, reviewer_reference) = match request.result {
+            PilotScenarioResult::NotRun => {
+                if request.evidence_reference.is_some() || request.reviewer_reference.is_some() {
+                    return Err(CatalogError::Invalid);
+                }
+                (None, None)
+            }
+            PilotScenarioResult::Passed
+            | PilotScenarioResult::Failed
+            | PilotScenarioResult::NotApplicable => (
+                Some(normalize_evidence_reference(
+                    request
+                        .evidence_reference
+                        .as_deref()
+                        .ok_or(CatalogError::Invalid)?,
+                )?),
+                Some(normalize_evidence_reference(
+                    request
+                        .reviewer_reference
+                        .as_deref()
+                        .ok_or(CatalogError::Invalid)?,
+                )?),
+            ),
+        };
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let campaign =
+            pilot_campaign_by_id(&connection, campaign_id)?.ok_or(CatalogError::NotFound)?;
+        if !matches!(
+            campaign.state,
+            PilotCampaignState::Active | PilotCampaignState::Closing
+        ) {
+            return Err(CatalogError::InvalidPilotTransition);
+        }
+        let expected_version =
+            i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?;
+        let now = now_unix_ms_i64()?;
+        let changed = connection
+            .execute(
+                "UPDATE pilot_scenario_evidence
+                    SET result = ?1, evidence_reference = ?2, reviewer_reference = ?3,
+                        updated_at_unix_ms = ?4, version = version + 1
+                  WHERE campaign_id = ?5 AND code = ?6 AND version = ?7",
+                params![
+                    request.result.as_storage(),
+                    evidence_reference,
+                    reviewer_reference,
+                    now,
+                    campaign_id.to_string(),
+                    code,
+                    expected_version,
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        if changed == 0 {
+            let exists = connection
+                .query_row(
+                    "SELECT 1 FROM pilot_scenario_evidence WHERE campaign_id = ?1 AND code = ?2",
+                    params![campaign_id.to_string(), code],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|_| CatalogError::Storage)?
+                .is_some();
+            return if exists {
+                Err(CatalogError::VersionConflict)
+            } else {
+                Err(CatalogError::NotFound)
+            };
+        }
+        connection
+            .execute(
+                "UPDATE pilot_campaigns
+                    SET updated_at_unix_ms = ?1, version = version + 1 WHERE id = ?2",
+                params![now, campaign_id.to_string()],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        pilot_campaign_by_id(&connection, campaign_id)?.ok_or(CatalogError::Storage)
+    }
+
+    fn transition_pilot_campaign_state(
+        &self,
+        id: Uuid,
+        request: &TransitionPilotCampaign,
+        expected_state: PilotCampaignState,
+        next_state: PilotCampaignState,
+    ) -> Result<PilotCampaign, CatalogError> {
+        let connection = self.lock();
+        expire_pilot_campaigns(&connection, now_unix_ms_i64()?)?;
+        let campaign = pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
+        ensure_pilot_campaign_version(&campaign, request.expected_version)?;
+        if campaign.state != expected_state {
+            return Err(CatalogError::InvalidPilotTransition);
+        }
+        transition_pilot_campaign(&connection, &campaign, next_state)?;
+        pilot_campaign_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
     fn instance_security_validation_checks(&self) -> Vec<SecurityValidationCheck> {
         let connection = self.lock();
         let integrity_ok = connection
@@ -2645,7 +2999,8 @@ impl Catalog {
             .query_row(
                 "SELECT
                     (SELECT COUNT(*) FROM approvals WHERE target_id = ?1) +
-                    (SELECT COUNT(*) FROM action_templates WHERE target_id = ?1)",
+                    (SELECT COUNT(*) FROM action_templates WHERE target_id = ?1) +
+                    (SELECT COUNT(*) FROM pilot_campaigns WHERE target_id = ?1)",
                 [id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
@@ -3046,6 +3401,249 @@ fn platform_boundary_with_checks(
     Ok(snapshot)
 }
 
+fn readiness_snapshot_by_id(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<PilotReadinessSnapshot, CatalogError> {
+    let snapshot = connection
+        .query_row(
+            "SELECT id, profile_version, status, application_version, platform,
+                    created_at_unix_ms, latest_validation_id, candidate_test_targets,
+                    eligible_test_targets, evidence_digest_sha256
+               FROM pilot_readiness_snapshots WHERE id = ?1",
+            [id.to_string()],
+            pilot_readiness_header_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)?
+        .ok_or(CatalogError::NotFound)?;
+    pilot_readiness_with_checks(connection, snapshot)
+}
+
+fn platform_snapshot_by_id(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<PlatformBoundarySnapshot, CatalogError> {
+    let snapshot = connection
+        .query_row(
+            "SELECT id, profile_version, status, application_version, platform,
+                    runtime_context, identity_boundary, created_at_unix_ms,
+                    evidence_digest_sha256
+               FROM platform_boundary_snapshots WHERE id = ?1",
+            [id.to_string()],
+            platform_boundary_header_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)?
+        .ok_or(CatalogError::NotFound)?;
+    platform_boundary_with_checks(connection, snapshot)
+}
+
+fn pilot_campaign_header_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PilotCampaign> {
+    Ok(PilotCampaign {
+        id: uuid_from_row(row, 0)?,
+        profile_version: row.get(1)?,
+        name: row.get(2)?,
+        state: PilotCampaignState::from_storage(&row.get::<_, String>(3)?)?,
+        target_id: uuid_from_row(row, 4)?,
+        target_version: u64_from_row(row, 5)?,
+        action_template_id: uuid_from_row(row, 6)?,
+        action_template_version: u64_from_row(row, 7)?,
+        readiness_snapshot_id: uuid_from_row(row, 8)?,
+        platform_snapshot_id: uuid_from_row(row, 9)?,
+        authorization_reference: row.get(10)?,
+        least_privilege_reference: row.get(11)?,
+        created_at_unix_ms: u64_from_row(row, 12)?,
+        updated_at_unix_ms: u64_from_row(row, 13)?,
+        expires_at_unix_ms: u64_from_row(row, 14)?,
+        version: u64_from_row(row, 15)?,
+        scenarios: Vec::new(),
+    })
+}
+
+fn pilot_campaign_with_scenarios(
+    connection: &Connection,
+    mut campaign: PilotCampaign,
+) -> Result<PilotCampaign, CatalogError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT code, ordinal, result, expected_behavior, evidence_reference,
+                    reviewer_reference, updated_at_unix_ms, version
+               FROM pilot_scenario_evidence
+              WHERE campaign_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    campaign.scenarios = statement
+        .query_map([campaign.id.to_string()], |row| {
+            Ok(PilotScenarioEvidence {
+                code: row.get(0)?,
+                ordinal: u64_from_row(row, 1)?,
+                result: PilotScenarioResult::from_storage(&row.get::<_, String>(2)?)?,
+                expected_behavior: row.get(3)?,
+                evidence_reference: row.get(4)?,
+                reviewer_reference: row.get(5)?,
+                updated_at_unix_ms: u64_from_row(row, 6)?,
+                version: u64_from_row(row, 7)?,
+            })
+        })
+        .map_err(|_| CatalogError::Storage)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| CatalogError::Storage)?;
+    Ok(campaign)
+}
+
+fn pilot_campaign_by_id(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<Option<PilotCampaign>, CatalogError> {
+    connection
+        .query_row(
+            "SELECT id, profile_version, name, state, target_id, target_version,
+                    action_template_id, action_template_version, readiness_snapshot_id,
+                    platform_snapshot_id, authorization_reference,
+                    least_privilege_reference, created_at_unix_ms, updated_at_unix_ms,
+                    expires_at_unix_ms, version
+               FROM pilot_campaigns WHERE id = ?1",
+            [id.to_string()],
+            pilot_campaign_header_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)?
+        .map(|campaign| pilot_campaign_with_scenarios(connection, campaign))
+        .transpose()
+}
+
+fn ensure_pilot_target_and_template(
+    connection: &Connection,
+    target: &Target,
+    template: &ActionTemplate,
+) -> Result<(), CatalogError> {
+    let credential = target
+        .credential_reference_id
+        .map(|id| credential_by_id(connection, id))
+        .transpose()?
+        .flatten();
+    let eligible = target.kind == TargetKind::Database
+        && matches!(target.environment, TargetEnvironment::Test)
+        && target.postgres.is_some()
+        && template.enabled
+        && template.target_id == target.id
+        && template.operation == ApprovalOperation::PostgresConnectionCheck
+        && template.result_scope == ApprovalResultScope::StatusOnly
+        && credential.is_some_and(|value| {
+            value.kind == CredentialKind::Password && value.secret_state == SecretState::Available
+        });
+    eligible.then_some(()).ok_or(CatalogError::PolicyDenied)
+}
+
+fn ensure_campaign_prerequisites(
+    connection: &Connection,
+    campaign: &PilotCampaign,
+) -> Result<(), CatalogError> {
+    let template = action_template_by_id(connection, campaign.action_template_id)?
+        .ok_or(CatalogError::PolicyDenied)?;
+    let target = target_by_id(connection, campaign.target_id)?.ok_or(CatalogError::PolicyDenied)?;
+    if template.version != campaign.action_template_version
+        || target.version != campaign.target_version
+    {
+        return Err(CatalogError::PolicyDenied);
+    }
+    ensure_pilot_target_and_template(connection, &target, &template)?;
+    let readiness = readiness_snapshot_by_id(connection, campaign.readiness_snapshot_id)?;
+    let platform = platform_snapshot_by_id(connection, campaign.platform_snapshot_id)?;
+    if !readiness.digest_verified
+        || readiness.eligible_test_targets == 0
+        || readiness
+            .checks
+            .iter()
+            .any(|check| check.status == SecurityValidationStatus::Failed)
+        || !platform.digest_verified
+        || platform.status == PlatformBoundaryStatus::Blocked
+    {
+        return Err(CatalogError::PolicyDenied);
+    }
+    Ok(())
+}
+
+fn pilot_credential_is_cleared(
+    connection: &Connection,
+    campaign: &PilotCampaign,
+) -> Result<bool, CatalogError> {
+    let target = target_by_id(connection, campaign.target_id)?.ok_or(CatalogError::PolicyDenied)?;
+    let Some(credential_id) = target.credential_reference_id else {
+        return Ok(false);
+    };
+    Ok(credential_by_id(connection, credential_id)?
+        .is_some_and(|credential| credential.secret_state == SecretState::NotConfigured))
+}
+
+fn transition_pilot_campaign(
+    connection: &Connection,
+    campaign: &PilotCampaign,
+    next_state: PilotCampaignState,
+) -> Result<(), CatalogError> {
+    let changed = connection
+        .execute(
+            "UPDATE pilot_campaigns
+                SET state = ?1, updated_at_unix_ms = ?2, version = version + 1
+              WHERE id = ?3 AND state = ?4 AND version = ?5",
+            params![
+                next_state.as_storage(),
+                now_unix_ms_i64()?,
+                campaign.id.to_string(),
+                campaign.state.as_storage(),
+                i64::try_from(campaign.version).map_err(|_| CatalogError::Invalid)?,
+            ],
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    (changed == 1)
+        .then_some(())
+        .ok_or(CatalogError::VersionConflict)
+}
+
+fn ensure_pilot_campaign_version(
+    campaign: &PilotCampaign,
+    expected_version: u64,
+) -> Result<(), CatalogError> {
+    if campaign.version != expected_version {
+        return Err(CatalogError::VersionConflict);
+    }
+    Ok(())
+}
+
+fn expire_pilot_campaigns(connection: &Connection, now: i64) -> Result<(), CatalogError> {
+    connection
+        .execute(
+            "UPDATE pilot_campaigns
+                SET state = 'expired', updated_at_unix_ms = ?1, version = version + 1
+              WHERE state IN ('registered', 'active', 'closing') AND expires_at_unix_ms <= ?1",
+            [now],
+        )
+        .map(|_| ())
+        .map_err(|_| CatalogError::Storage)
+}
+
+fn normalize_evidence_reference(value: &str) -> Result<String, CatalogError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 96
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.:/#".contains(character))
+    {
+        return Err(CatalogError::Invalid);
+    }
+    Ok(value.to_owned())
+}
+
+fn normalize_scenario_code(value: &str) -> Result<&str, CatalogError> {
+    PILOT_SCENARIOS
+        .iter()
+        .any(|(code, _)| *code == value)
+        .then_some(value)
+        .ok_or(CatalogError::Invalid)
+}
+
 fn security_validation_run_header_from_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<SecurityValidationRun> {
@@ -3407,6 +4005,48 @@ fn migrate_platform_boundary_schema(connection: &Connection) -> rusqlite::Result
             UNIQUE (snapshot_id, code)
          );
          PRAGMA user_version = 10;
+         COMMIT;",
+    )
+}
+
+fn migrate_pilot_campaign_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE IF NOT EXISTS pilot_campaigns (
+            id TEXT PRIMARY KEY NOT NULL,
+            profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+            name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+            state TEXT NOT NULL CHECK (state IN ('registered', 'active', 'closing', 'closed', 'revoked', 'expired')),
+            target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
+            target_version INTEGER NOT NULL CHECK (target_version >= 1),
+            action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
+            action_template_version INTEGER NOT NULL CHECK (action_template_version >= 1),
+            readiness_snapshot_id TEXT NOT NULL REFERENCES pilot_readiness_snapshots(id) ON DELETE RESTRICT,
+            platform_snapshot_id TEXT NOT NULL REFERENCES platform_boundary_snapshots(id) ON DELETE RESTRICT,
+            authorization_reference TEXT NOT NULL CHECK (length(authorization_reference) BETWEEN 1 AND 96),
+            least_privilege_reference TEXT NOT NULL CHECK (length(least_privilege_reference) BETWEEN 1 AND 96),
+            created_at_unix_ms INTEGER NOT NULL,
+            updated_at_unix_ms INTEGER NOT NULL,
+            expires_at_unix_ms INTEGER NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1)
+         );
+         CREATE INDEX IF NOT EXISTS pilot_campaigns_created_idx
+            ON pilot_campaigns(created_at_unix_ms DESC, id);
+         CREATE INDEX IF NOT EXISTS pilot_campaigns_state_idx ON pilot_campaigns(state);
+         CREATE TABLE IF NOT EXISTS pilot_scenario_evidence (
+            campaign_id TEXT NOT NULL REFERENCES pilot_campaigns(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 32),
+            code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+            result TEXT NOT NULL CHECK (result IN ('not_run', 'passed', 'failed', 'not_applicable')),
+            expected_behavior TEXT NOT NULL CHECK (length(expected_behavior) BETWEEN 1 AND 240),
+            evidence_reference TEXT CHECK (evidence_reference IS NULL OR length(evidence_reference) BETWEEN 1 AND 96),
+            reviewer_reference TEXT CHECK (reviewer_reference IS NULL OR length(reviewer_reference) BETWEEN 1 AND 96),
+            updated_at_unix_ms INTEGER NOT NULL,
+            version INTEGER NOT NULL CHECK (version >= 1),
+            PRIMARY KEY (campaign_id, ordinal),
+            UNIQUE (campaign_id, code)
+         );
+         PRAGMA user_version = 11;
          COMMIT;",
     )
 }
@@ -3856,6 +4496,7 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
         "security_validation_runs" => "SELECT COUNT(*) FROM security_validation_runs",
         "pilot_readiness_snapshots" => "SELECT COUNT(*) FROM pilot_readiness_snapshots",
         "platform_boundary_snapshots" => "SELECT COUNT(*) FROM platform_boundary_snapshots",
+        "pilot_campaigns" => "SELECT COUNT(*) FROM pilot_campaigns",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -3980,6 +4621,10 @@ mod tests {
 
     use uuid::Uuid;
 
+    use crate::pilot::{
+        CreatePilotCampaign, PILOT_SCENARIOS, PilotCampaignState, PilotScenarioResult,
+        TransitionPilotCampaign, UpdatePilotScenario,
+    };
     use crate::platform_evidence::{
         PlatformBoundaryCheck, PlatformBoundaryStatus, PlatformCheckStatus,
     };
@@ -4581,7 +5226,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
     }
 
     #[test]
@@ -4641,7 +5286,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
     }
 
@@ -4675,7 +5320,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
     }
 
@@ -4713,7 +5358,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
     }
 
@@ -4749,7 +5394,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
     }
 
@@ -4792,7 +5437,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
     }
 
@@ -4843,8 +5488,277 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            10
+            11
         );
+    }
+
+    #[test]
+    fn version_ten_database_adds_pilot_campaigns_without_losing_platform_evidence() {
+        let database = TemporaryDatabase::new();
+        let platform_id = {
+            let catalog = Catalog::open(&database.path).expect("create current catalog");
+            catalog
+                .execute_platform_boundary_snapshot(
+                    "persistent",
+                    vec![PlatformBoundaryCheck {
+                        code: "migration_fact".to_owned(),
+                        category: "external_evidence".to_owned(),
+                        status: PlatformCheckStatus::Warning,
+                        summary: "Migration test evidence".to_owned(),
+                        evidence: "No sensitive material".to_owned(),
+                    }],
+                )
+                .expect("platform evidence")
+                .id
+        };
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "DROP TABLE pilot_scenario_evidence;
+                     DROP TABLE pilot_campaigns;
+                     PRAGMA user_version = 10;",
+                )
+                .expect("restore version ten layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v10 catalog");
+        assert_eq!(
+            catalog
+                .list_platform_boundary_snapshots()
+                .expect("preserved platform evidence")[0]
+                .id,
+            platform_id
+        );
+        let (_, _, campaign) = create_pilot_fixture(&catalog);
+        assert_eq!(campaign.state, PilotCampaignState::Registered);
+        assert_eq!(campaign.scenarios.len(), PILOT_SCENARIOS.len());
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            11
+        );
+    }
+
+    #[test]
+    fn pilot_campaign_requires_evidence_and_closes_only_after_full_cleanup() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let (credential, _, campaign) = create_pilot_fixture(&catalog);
+        assert_eq!(campaign.state, PilotCampaignState::Registered);
+        assert_eq!(campaign.scenarios.len(), PILOT_SCENARIOS.len());
+        assert!(
+            campaign
+                .scenarios
+                .iter()
+                .all(|scenario| scenario.result == PilotScenarioResult::NotRun)
+        );
+
+        let mut campaign = catalog
+            .activate_pilot_campaign(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            )
+            .expect("activate pilot");
+        assert_eq!(campaign.state, PilotCampaignState::Active);
+
+        let first = campaign.scenarios[0].clone();
+        campaign = catalog
+            .update_pilot_scenario(
+                campaign.id,
+                &first.code,
+                &UpdatePilotScenario {
+                    result: PilotScenarioResult::Passed,
+                    evidence_reference: Some("EVIDENCE-001".to_owned()),
+                    reviewer_reference: Some("REVIEWER-001".to_owned()),
+                    expected_version: first.version,
+                },
+            )
+            .expect("record first scenario");
+        assert!(matches!(
+            catalog.update_pilot_scenario(
+                campaign.id,
+                &first.code,
+                &UpdatePilotScenario {
+                    result: PilotScenarioResult::Passed,
+                    evidence_reference: Some("EVIDENCE-STALE".to_owned()),
+                    reviewer_reference: Some("REVIEWER-001".to_owned()),
+                    expected_version: first.version,
+                },
+            ),
+            Err(CatalogError::VersionConflict)
+        ));
+
+        campaign = catalog
+            .begin_pilot_closure(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            )
+            .expect("begin closure");
+        assert!(matches!(
+            catalog.close_pilot_campaign(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            ),
+            Err(CatalogError::PolicyDenied)
+        ));
+
+        for scenario in campaign.scenarios.clone() {
+            if scenario.result == PilotScenarioResult::Passed {
+                continue;
+            }
+            campaign = catalog
+                .update_pilot_scenario(
+                    campaign.id,
+                    &scenario.code,
+                    &UpdatePilotScenario {
+                        result: PilotScenarioResult::Passed,
+                        evidence_reference: Some(format!("EVIDENCE-{}", scenario.ordinal)),
+                        reviewer_reference: Some("REVIEWER-001".to_owned()),
+                        expected_version: scenario.version,
+                    },
+                )
+                .expect("record scenario evidence");
+        }
+        assert!(matches!(
+            catalog.close_pilot_campaign(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            ),
+            Err(CatalogError::PolicyDenied)
+        ));
+        catalog
+            .set_credential_secret_state(credential.id, credential.version, false)
+            .expect("clear temporary credential");
+        let closed = catalog
+            .close_pilot_campaign(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            )
+            .expect("close pilot");
+        assert_eq!(closed.state, PilotCampaignState::Closed);
+    }
+
+    #[test]
+    fn pilot_campaign_fails_closed_on_target_drift_and_invalid_evidence() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let (_, target, campaign) = create_pilot_fixture(&catalog);
+        assert!(matches!(
+            catalog.update_pilot_scenario(
+                campaign.id,
+                "connection_success",
+                &UpdatePilotScenario {
+                    result: PilotScenarioResult::Passed,
+                    evidence_reference: Some("EVIDENCE 001".to_owned()),
+                    reviewer_reference: Some("REVIEWER-001".to_owned()),
+                    expected_version: 1,
+                },
+            ),
+            Err(CatalogError::Invalid)
+        ));
+        catalog
+            .update_target(
+                target.id,
+                &UpdateTarget {
+                    name: target.name.clone(),
+                    kind: target.kind,
+                    environment: target.environment,
+                    description: Some("Changed after registration".to_owned()),
+                    credential_reference_id: target.credential_reference_id,
+                    postgres: target.postgres.clone(),
+                    expected_version: target.version,
+                },
+            )
+            .expect("drift target");
+        assert!(matches!(
+            catalog.activate_pilot_campaign(
+                campaign.id,
+                &TransitionPilotCampaign {
+                    expected_version: campaign.version,
+                },
+            ),
+            Err(CatalogError::PolicyDenied)
+        ));
+    }
+
+    #[test]
+    fn pilot_campaign_expires_automatically_and_rejects_production_targets() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let (_, _, campaign) = create_pilot_fixture(&catalog);
+        catalog
+            .lock()
+            .execute(
+                "UPDATE pilot_campaigns SET expires_at_unix_ms = 0 WHERE id = ?1",
+                [campaign.id.to_string()],
+            )
+            .expect("expire fixture");
+        let expired = catalog
+            .get_pilot_campaign(campaign.id)
+            .expect("load expired campaign");
+        assert_eq!(expired.state, PilotCampaignState::Expired);
+        assert!(matches!(
+            catalog.activate_pilot_campaign(
+                expired.id,
+                &TransitionPilotCampaign {
+                    expected_version: expired.version,
+                },
+            ),
+            Err(CatalogError::InvalidPilotTransition)
+        ));
+
+        let credential = create_credential(&catalog);
+        let credential = catalog
+            .set_credential_secret_state(credential.id, credential.version, true)
+            .expect("configure credential");
+        let target = catalog
+            .create_target(&CreateTarget {
+                name: "Production database".to_owned(),
+                kind: TargetKind::Database,
+                environment: TargetEnvironment::Production,
+                description: None,
+                credential_reference_id: Some(credential.id),
+                postgres: Some(PostgresTargetConfig {
+                    host: "production.example".to_owned(),
+                    port: 5432,
+                    database: "production".to_owned(),
+                    username: "reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            })
+            .expect("production target metadata");
+        let template = catalog
+            .create_action_template(&CreateActionTemplate {
+                target_id: target.id,
+                name: "Production connection check".to_owned(),
+                operation: ApprovalOperation::PostgresConnectionCheck,
+                result_scope: ApprovalResultScope::StatusOnly,
+                description: None,
+                timeout_seconds: 15,
+            })
+            .expect("production template");
+        assert!(matches!(
+            catalog.create_pilot_campaign(&CreatePilotCampaign {
+                name: "Forbidden production pilot".to_owned(),
+                action_template_id: template.id,
+                readiness_snapshot_id: campaign.readiness_snapshot_id,
+                platform_snapshot_id: campaign.platform_snapshot_id,
+                authorization_reference: "AUTH-2026-002".to_owned(),
+                least_privilege_reference: "REVIEW-2026-002".to_owned(),
+                expires_in_seconds: 3_600,
+            }),
+            Err(CatalogError::PolicyDenied)
+        ));
     }
 
     #[test]
@@ -5160,6 +6074,75 @@ mod tests {
                 purpose: None,
             })
             .expect("synthetic reference")
+    }
+
+    fn create_pilot_fixture(
+        catalog: &Catalog,
+    ) -> (
+        super::CredentialReference,
+        super::Target,
+        crate::pilot::PilotCampaign,
+    ) {
+        catalog
+            .execute_security_validation()
+            .expect("security validation");
+        let platform = catalog
+            .execute_platform_boundary_snapshot(
+                "persistent",
+                vec![PlatformBoundaryCheck {
+                    code: "pilot_fixture_fact".to_owned(),
+                    category: "external_evidence".to_owned(),
+                    status: PlatformCheckStatus::Passed,
+                    summary: "Synthetic platform fact".to_owned(),
+                    evidence: "No sensitive material".to_owned(),
+                }],
+            )
+            .expect("platform evidence");
+        let credential = create_credential(catalog);
+        let credential = catalog
+            .set_credential_secret_state(credential.id, credential.version, true)
+            .expect("configured secret metadata");
+        let target = catalog
+            .create_target(&CreateTarget {
+                name: "Dedicated pilot database".to_owned(),
+                kind: TargetKind::Database,
+                environment: TargetEnvironment::Test,
+                description: None,
+                credential_reference_id: Some(credential.id),
+                postgres: Some(PostgresTargetConfig {
+                    host: "pilot.test.example".to_owned(),
+                    port: 5432,
+                    database: "pilot".to_owned(),
+                    username: "pilot_reader".to_owned(),
+                    tls_mode: PostgresTlsMode::VerifyFull,
+                }),
+            })
+            .expect("pilot target");
+        let template = catalog
+            .create_action_template(&CreateActionTemplate {
+                target_id: target.id,
+                name: "Pilot connection check".to_owned(),
+                operation: ApprovalOperation::PostgresConnectionCheck,
+                result_scope: ApprovalResultScope::StatusOnly,
+                description: None,
+                timeout_seconds: 15,
+            })
+            .expect("pilot template");
+        let readiness = catalog
+            .execute_pilot_readiness_snapshot()
+            .expect("pilot readiness snapshot");
+        let campaign = catalog
+            .create_pilot_campaign(&CreatePilotCampaign {
+                name: "Authorized PostgreSQL pilot".to_owned(),
+                action_template_id: template.id,
+                readiness_snapshot_id: readiness.id,
+                platform_snapshot_id: platform.id,
+                authorization_reference: "AUTH-2026-001".to_owned(),
+                least_privilege_reference: "REVIEW-2026-001".to_owned(),
+                expires_in_seconds: 3_600,
+            })
+            .expect("register pilot campaign");
+        (credential, target, campaign)
     }
 
     fn create_target(catalog: &Catalog, credential_id: Uuid) -> super::Target {
