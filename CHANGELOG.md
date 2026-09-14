@@ -6,6 +6,17 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.19 · platform identity and IPC evidence candidate
+
+- Add a fixed, non-secret platform probe for runtime-directory, connection-document, native IPC, credential-store selection and installed-identity evidence without returning usernames, operating-system identifiers, hostnames, paths, endpoint names or secrets.
+- Verify real directory/file/socket types and private POSIX permission masks on Linux and macOS, and record the existing Unix peer-credential enforcement as a fixed implementation fact.
+- Record Windows first-pipe-instance and remote-client rejection controls while keeping directory/file DACL inspection, explicit named-pipe DACL and pipe-client token checks visibly open instead of treating token authentication as identity isolation.
+- Persist up to 128 ordered platform-boundary snapshots in SQLite schema version 10 and recompute a canonical SHA-256 digest whenever evidence is read.
+- Add authenticated list, create, detail and report APIs. Collection requires exact Origin and an empty body, so callers cannot select paths, omit checks or provide their own conclusion.
+- Add a bilingual master-detail Platform evidence workspace with row-based checks and Markdown/JSON export, and incorporate the latest digest-verifiable platform snapshot into pilot-readiness evaluation.
+- Keep every product-generated snapshot at `attention` or `blocked` and retain `identity_boundary=unverified_same_user`; independent fresh-install and hostile-subject evidence remains required to finish this package.
+- Add catalog tamper detection, schema migration coverage, HTTP-boundary tests, Web-client tests and a platform acceptance guide. The engineering candidate is complete; three-platform installed acceptance remains open.
+
 ### 0.1.0-alpha.18 · enterprise workflow UI
 
 - Remove milestone labels, roadmap promotion and implementation-phase copy from the runtime UI so operators see business purpose, state and next action instead of development metadata.
