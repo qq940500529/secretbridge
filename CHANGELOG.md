@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.21 · PostgreSQL TLS remediation and live adapter evidence
+
+- Add an opt-in process-level `SECRETBRIDGE_POSTGRES_CA_CERT` trust bundle for private PostgreSQL CAs while retaining certificate-chain and hostname verification.
+- Fail closed on relative, missing, empty, symbolic-link, non-file and over-64-KiB CA inputs; configuration failures remain an enumerated result and do not expose parser or filesystem errors.
+- Add an opt-in ignored integration test that exercises the production native adapter against an explicitly provisioned TLS PostgreSQL instance.
+- Verify a local isolated PostgreSQL 18.6 instance with TLS 1.3 and a restricted test role across success, stale-password rejection after rotation, untrusted CA, hostname mismatch and unavailable-port scenarios.
+- Document private-CA operation, the repeatable live-test contract, evidence boundaries and complete cleanup requirements. The evidence is local Windows engineering validation, not a production pilot, cross-platform certification or independent security review.
+
 ### 0.1.0-alpha.20 · governed low-privilege pilot workspace
 
 - Add time-bounded PostgreSQL pilot campaign records that bind an exact test target/template version, readiness snapshot, platform snapshot, target-owner authorization reference and least-privilege review reference.
