@@ -17,7 +17,6 @@ import {
   ServerCog,
   Settings,
   ShieldCheck,
-  ShieldQuestion,
   SquareTerminal,
   Workflow,
   type LucideIcon,
@@ -86,8 +85,6 @@ interface Copy {
   syntheticOnly: string;
   credentialConfiguration: string;
   controlledOperations: string;
-  identityBoundary: string;
-  unverifiedSameUser: string;
   configurationStorage: string;
   memoryOnly: string;
   localDatabase: string;
@@ -112,19 +109,19 @@ const copy: Record<Language, Copy> = {
     approvals: "审批中心",
     operations: "运行任务",
     policies: "执行策略",
-    terminal: "安全终端",
+    terminal: "终端",
     audit: "审计记录",
     settings: "系统设置",
-    overview: "安全执行总览",
+    overview: "任务与连接总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    syntheticTitle: "PostgreSQL 受控检查已接入",
+    syntheticTitle: "PostgreSQL 连接检查可用",
     syntheticBody:
       "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
     service: "本地服务",
     online: "在线",
     offline: "未连接",
     checking: "检查中",
-    paired: "已安全配对",
+    paired: "已配对",
     unpaired: "等待启动配对",
     pairing: "正在配对",
     authError: "配对失败",
@@ -135,16 +132,14 @@ const copy: Record<Language, Copy> = {
     syntheticOnly: "仅合成运行",
     credentialConfiguration: "凭据配置",
     controlledOperations: "受控操作",
-    identityBoundary: "身份边界",
-    unverifiedSameUser: "同用户兼容模式（未验证隔离）",
     configurationStorage: "配置存储",
     memoryOnly: "仅内存（重启清空）",
     localDatabase: "本机 SQLite 数据库",
-    realCredentials: "真实凭据",
+    realCredentials: "凭据代用",
     disabled: "未启用",
     enabled: "已启用",
     futureModule: "模块骨架已就绪",
-    futureBody: "此功能将在完成安全模型与威胁建模复核后逐步开放。",
+    futureBody: "此功能将在后续核心功能包中提供。",
     collapse: "收起导航",
     expand: "展开导航",
     skipContent: "跳到主要内容",
@@ -159,20 +154,20 @@ const copy: Record<Language, Copy> = {
     approvals: "Approvals",
     operations: "Runs",
     policies: "Policies",
-    terminal: "Secure terminal",
+    terminal: "Terminal",
     audit: "Audit log",
     settings: "Settings",
-    overview: "Secure execution overview",
+    overview: "Tasks and connections",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    syntheticTitle: "Controlled PostgreSQL check is connected",
+    syntheticTitle: "PostgreSQL connection check is available",
     syntheticBody:
       "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
     service: "Local service",
     online: "Online",
     offline: "Disconnected",
     checking: "Checking",
-    paired: "Securely paired",
+    paired: "Paired",
     unpaired: "Awaiting startup pairing",
     pairing: "Pairing",
     authError: "Pairing failed",
@@ -183,17 +178,14 @@ const copy: Record<Language, Copy> = {
     syntheticOnly: "Synthetic only",
     credentialConfiguration: "Credential configuration",
     controlledOperations: "Controlled operations",
-    identityBoundary: "Identity boundary",
-    unverifiedSameUser: "Same-user compatibility (not isolated)",
     configurationStorage: "Configuration storage",
     memoryOnly: "Memory-only (cleared on restart)",
     localDatabase: "Local SQLite database",
-    realCredentials: "Real credentials",
+    realCredentials: "Credential use",
     disabled: "Disabled",
     enabled: "Enabled",
     futureModule: "Module shell ready",
-    futureBody:
-      "This capability will open progressively after the security model and threat model are reviewed.",
+    futureBody: "This capability will be delivered in a future core feature package.",
     collapse: "Collapse navigation",
     expand: "Expand navigation",
     skipContent: "Skip to main content",
@@ -528,14 +520,6 @@ function Dashboard({
           <StatusDatum
             label={text.runtimeMode}
             value={status?.mode === "controlled_operations" ? text.controlledOperations : status?.mode === "credential_configuration" ? text.credentialConfiguration : status?.mode === "synthetic_only" ? text.syntheticOnly : "—"}
-          />
-          <StatusDatum
-            label={text.identityBoundary}
-            value={
-              status?.identity_boundary === "unverified_same_user"
-                ? text.unverifiedSameUser
-                : "—"
-            }
           />
           <StatusDatum
             label={text.configurationStorage}

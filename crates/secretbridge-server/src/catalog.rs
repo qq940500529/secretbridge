@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 12;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -747,7 +747,7 @@ impl Catalog {
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 PRAGMA user_version = 7;
+                 PRAGMA user_version = 12;
                  COMMIT;",
             )?;
         }
@@ -854,6 +854,9 @@ impl Catalog {
         }
         if (1..=6).contains(&version) {
             migrate_controlled_postgres_schema(&connection)?;
+        }
+        if (1..=11).contains(&version) {
+            migrate_remove_obsolete_governance(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -2006,6 +2009,22 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
     Ok(())
 }
 
+fn migrate_remove_obsolete_governance(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         DROP TABLE IF EXISTS pilot_scenario_evidence;
+         DROP TABLE IF EXISTS pilot_campaigns;
+         DROP TABLE IF EXISTS pilot_readiness_checks;
+         DROP TABLE IF EXISTS pilot_readiness_snapshots;
+         DROP TABLE IF EXISTS platform_boundary_checks;
+         DROP TABLE IF EXISTS platform_boundary_snapshots;
+         DROP TABLE IF EXISTS security_validation_checks;
+         DROP TABLE IF EXISTS security_validation_runs;
+         PRAGMA user_version = 12;
+         COMMIT;",
+    )
+}
+
 fn column_exists(
     connection: &Connection,
     table: &'static str,
@@ -2947,7 +2966,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 7);
+        assert_eq!(version, 12);
     }
 
     #[test]
@@ -3007,7 +3026,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            7
+            12
         );
     }
 
@@ -3041,7 +3060,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            7
+            12
         );
     }
 
@@ -3079,7 +3098,66 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            7
+            12
+        );
+    }
+
+    #[test]
+    fn version_eleven_database_removes_obsolete_governance_tables() {
+        let database = TemporaryDatabase::new();
+        drop(Catalog::open(&database.path).expect("create current catalog"));
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "CREATE TABLE security_validation_runs (id TEXT PRIMARY KEY);
+                     CREATE TABLE security_validation_checks (id TEXT PRIMARY KEY);
+                     CREATE TABLE pilot_readiness_snapshots (id TEXT PRIMARY KEY);
+                     CREATE TABLE pilot_readiness_checks (id TEXT PRIMARY KEY);
+                     CREATE TABLE platform_boundary_snapshots (id TEXT PRIMARY KEY);
+                     CREATE TABLE platform_boundary_checks (id TEXT PRIMARY KEY);
+                     CREATE TABLE pilot_campaigns (id TEXT PRIMARY KEY);
+                     CREATE TABLE pilot_scenario_evidence (id TEXT PRIMARY KEY);
+                     PRAGMA user_version = 11;",
+                )
+                .expect("restore obsolete governance layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v11 catalog");
+        for table in [
+            "security_validation_runs",
+            "security_validation_checks",
+            "pilot_readiness_snapshots",
+            "pilot_readiness_checks",
+            "platform_boundary_snapshots",
+            "platform_boundary_checks",
+            "pilot_campaigns",
+            "pilot_scenario_evidence",
+        ] {
+            let present = catalog
+                .lock()
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [table],
+                    |row| row.get::<_, bool>(0),
+                )
+                .expect("inspect migrated schema");
+            assert!(!present, "obsolete table {table} must be removed");
+        }
+        let credential = create_credential(&catalog);
+        assert_eq!(
+            catalog
+                .get_credential_reference(credential.id)
+                .expect("core catalog remains usable")
+                .id,
+            credential.id
+        );
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            12
         );
     }
 

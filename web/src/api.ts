@@ -4,9 +4,7 @@
 export interface ServiceStatus {
   product: string;
   api_version: string;
-  release_stage: string;
   mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
-  identity_boundary: "unverified_same_user";
   configuration_storage: ConfigurationStorage;
   paired: boolean;
   real_credentials_enabled: boolean;

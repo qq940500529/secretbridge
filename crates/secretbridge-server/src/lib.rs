@@ -1911,7 +1911,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_exposes_controlled_operations_and_unverified_identity() {
+    async fn status_exposes_current_runtime_capabilities() {
         let (app, _) = test_app();
         let response = app
             .oneshot(
@@ -1931,7 +1931,6 @@ mod tests {
             .to_bytes();
         let status: serde_json::Value = serde_json::from_slice(&bytes).expect("status JSON");
         assert_eq!(status["mode"], "controlled_operations");
-        assert_eq!(status["identity_boundary"], "unverified_same_user");
         assert_eq!(status["configuration_storage"], "memory_only");
         assert_eq!(status["real_credentials_enabled"], true);
     }
