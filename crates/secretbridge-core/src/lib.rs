@@ -18,12 +18,6 @@ pub enum RuntimeMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum IdentityBoundary {
-    UnverifiedSameUser,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum ConfigurationStorage {
     MemoryOnly,
     Sqlite,
@@ -33,9 +27,7 @@ pub enum ConfigurationStorage {
 pub struct StatusResponse {
     pub product: &'static str,
     pub api_version: &'static str,
-    pub release_stage: &'static str,
     pub mode: RuntimeMode,
-    pub identity_boundary: IdentityBoundary,
     pub configuration_storage: ConfigurationStorage,
     pub paired: bool,
     pub real_credentials_enabled: bool,
@@ -47,9 +39,7 @@ impl StatusResponse {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
-            release_stage: "m1_development",
             mode: RuntimeMode::SyntheticOnly,
-            identity_boundary: IdentityBoundary::UnverifiedSameUser,
             configuration_storage,
             paired,
             real_credentials_enabled: false,
@@ -64,9 +54,7 @@ impl StatusResponse {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
-            release_stage: "m1_development",
             mode: RuntimeMode::CredentialConfiguration,
-            identity_boundary: IdentityBoundary::UnverifiedSameUser,
             configuration_storage,
             paired,
             real_credentials_enabled: true,
@@ -81,9 +69,7 @@ impl StatusResponse {
         Self {
             product: PRODUCT_NAME,
             api_version: API_VERSION,
-            release_stage: "m3_pilot_readiness",
             mode: RuntimeMode::ControlledOperations,
-            identity_boundary: IdentityBoundary::UnverifiedSameUser,
             configuration_storage,
             paired,
             real_credentials_enabled: true,
@@ -93,16 +79,12 @@ impl StatusResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigurationStorage, IdentityBoundary, RuntimeMode, StatusResponse};
+    use super::{ConfigurationStorage, RuntimeMode, StatusResponse};
 
     #[test]
     fn synthetic_status_never_claims_real_credentials() {
         let status = StatusResponse::synthetic_only(true, ConfigurationStorage::MemoryOnly);
         assert_eq!(status.mode, RuntimeMode::SyntheticOnly);
-        assert_eq!(
-            status.identity_boundary,
-            IdentityBoundary::UnverifiedSameUser
-        );
         assert_eq!(
             status.configuration_storage,
             ConfigurationStorage::MemoryOnly
@@ -118,14 +100,9 @@ mod tests {
     }
 
     #[test]
-    fn controlled_operations_reports_the_unverified_identity_boundary() {
+    fn controlled_operations_reports_real_credential_capability() {
         let status = StatusResponse::controlled_operations(true, ConfigurationStorage::Sqlite);
         assert_eq!(status.mode, RuntimeMode::ControlledOperations);
-        assert_eq!(status.release_stage, "m3_pilot_readiness");
-        assert_eq!(
-            status.identity_boundary,
-            IdentityBoundary::UnverifiedSameUser
-        );
         assert!(status.real_credentials_enabled);
     }
 }

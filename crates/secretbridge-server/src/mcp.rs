@@ -1171,7 +1171,6 @@ fn catalog_error(error: CatalogError) -> ErrorData {
         CatalogError::CredentialReferenceNotFound => "credential_reference_not_found",
         CatalogError::Invalid => "invalid_request",
         CatalogError::InvalidApprovalTransition => "invalid_approval_transition",
-        CatalogError::InvalidPilotTransition => "invalid_pilot_transition",
         CatalogError::InvalidRunTransition => "invalid_run_transition",
         CatalogError::IdempotencyConflict => "idempotency_conflict",
         CatalogError::NotFound => return ErrorData::resource_not_found("not_found", None),

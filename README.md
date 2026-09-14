@@ -8,7 +8,6 @@
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
-[![Project stage: M3 preparation](https://img.shields.io/badge/project%20stage-M3%20security%20validation-147D92)](ROADMAP.md)
 
 [![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
 [![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
@@ -19,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Security validation produces repeatable self-test evidence; Platform evidence records fixed local identity and IPC facts; Pilot readiness aggregates configuration and external gates; the Pilot workspace governs time-bounded records and a fixed evidence matrix. It does not automatically contact remote targets or verify operator-entered authority. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
+> This is a local prototype under active feature development. The Web console stores passwords and API tokens in the operating-system credential store. The MCP stdio service can request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. Real system terminals, general credential injection and more connectors are the next priorities.
 
 ## Why SecretBridge?
 
@@ -33,7 +32,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata and PostgreSQL target details are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. Secret mutations require a paired session, exact Origin and optimistic version, while responses expose only `available` or `not_configured`. The PostgreSQL adapter runs a fixed `SELECT 1` inside a read-only serializable transaction with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. The MCP surface contains eight fixed tools and omits approval decisions, secret access, SQL, shell input, connection strings and target addresses. SQLite schema v11 stores digest-verifiable security/platform/readiness evidence plus bounded pilot campaigns and versioned scenario evidence. Reports avoid operating-system identities, paths, target addresses and secrets, and remain explicit that self-generated evidence and external references are not authorization or independent certification. See the [complete roadmap](ROADMAP.md) for remaining work.
+One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP exposes fixed tools without approval decisions, secret access, SQL, credential-injected commands or connection strings. Schema v12 removes the premature security-evidence and pilot-governance product layers so development can focus on real terminals and credential-assisted execution. See the [feature-first roadmap](ROADMAP.md).
 
 ## How it works
 
@@ -50,18 +49,14 @@ flowchart LR
 
 The assistant does not receive the stored secret. Ordinary terminals and credential-bearing operations use separate execution paths; a credentialed session is not an unrestricted shell.
 
-> [!WARNING]
-> Masking is not isolation. An assistant with unrestricted access under the credential owner's OS account may bypass application controls. A secure deployment requires a tested identity/process boundary and narrowly scoped adapters. Read the [security model](docs/安全模型与验收.md) before evaluating real-world use.
+> [!NOTE]
+> SecretBridge limits the normal tools exposed to an assistant. Software that already has unrestricted code execution under the same operating-system account may still bypass the application and access that account's resources. See the [security model](docs/安全模型与验收.md).
 
 ## Choose a starting point
 
 | Your goal | Start here |
 | :--- | :--- |
 | Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
-| Run and interpret security self-validation | [Security validation and evidence](docs/安全验证中心.md) — Chinese |
-| Collect and interpret platform identity and IPC evidence | [Platform identity and IPC evidence](docs/平台身份与IPC证据.md) — Chinese |
-| Assess technical and external pilot gates | [Pilot readiness center](docs/试点准入中心.md) — Chinese |
-| Govern a time-bounded pilot and its evidence matrix | [Low-privilege pilot workspace](docs/低权限试点工作台.md) — Chinese |
 | Reproduce the native PostgreSQL TLS adapter test | [PostgreSQL live validation](docs/PostgreSQL实机验证.md) — Chinese |
 | Understand the complete future product | [Mature architecture and feature specification](docs/成熟态软件架构与功能说明.md) — Chinese |
 | Find the right technical document | [Documentation hub](docs/README.md) |
@@ -81,7 +76,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it; navigation and refresh do not persist the session. **Credentials** writes passwords and API tokens directly to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password, and only offers `verify_full` TLS. **Policies**, **Approvals**, **Runs** and **Audit** drive the fixed PostgreSQL status check or an offline synthetic check; neither accepts caller-provided SQL or operation parameters. The **Secure terminal** page runs only SecretBridge's built-in synthetic process—never PowerShell, `cmd`, `sh`, or a user command—and has no access to stored secrets. The project does not use—and does not plan to introduce—a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it. **Credentials** writes passwords and API tokens to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password. **Policies**, **Approvals**, **Runs** and **Audit** drive a fixed PostgreSQL status check or offline synthetic check; neither accepts caller-provided SQL. **Secure terminal** still runs a built-in synthetic process; real PowerShell, CMD, Bash and Zsh sessions are the next feature package. The project uses a browser UI and does not plan to introduce a desktop shell.
 
 Start the long-lived broker once with no arguments, then configure the same executable as an MCP stdio bridge with the single argument `--mcp-stdio`. The bridge reserves stdout for JSON-RPC, sends diagnostics to stderr and connects to the broker through a token-authenticated Windows named pipe or Unix domain socket. Closing an MCP client stops only its bridge process; the Web console, run state and terminal sessions remain owned by the broker. See the [user guide](docs/使用指南.md#mcp-stdio) for startup order, the tool list and the current same-user security limitation.
 
@@ -97,7 +92,7 @@ Other OS versions and architectures require separate validation. Actual support 
 
 ## Contribute
 
-The project is in M3 security-pilot preparation while M0 identity verification remains open. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is under active feature development, prioritizing real terminals, immediate AI control, credential injection, reusable tasks and common connectors. Contributions to cross-platform implementation, UI, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.22 · core product reset
+
+- Remove the security-validation center, platform-evidence workspace, pilot-readiness snapshots and governed pilot campaigns from the Web UI, HTTP API, domain layer and tests.
+- Advance SQLite to schema version 12 and remove the eight obsolete governance/evidence tables during upgrade while preserving credentials, targets, templates, approvals, runs and audit events.
+- Remove development-stage and same-user-boundary metadata from the runtime status API and operator dashboard; the limitation remains documented without dominating the product workflow.
+- Retain the security controls that directly protect credential-assisted execution: loopback binding, pairing/session/Origin checks, write-only secret APIs, OS credential storage, approval/version/idempotency controls, local IPC and verified PostgreSQL TLS.
+- Replace the roadmap and architecture documents with a feature-first plan centered on real persistent terminals, immediate AI control, credential injection with streaming redaction, reusable tasks and common connectors.
+- Simplify the documentation hub, implementation design and security model so release hardening remains a development responsibility rather than a user-facing product module.
+
 ### 0.1.0-alpha.21 · PostgreSQL TLS remediation and live adapter evidence
 
 - Add an opt-in process-level `SECRETBRIDGE_POSTGRES_CA_CERT` trust bundle for private PostgreSQL CAs while retaining certificate-chain and hostname verification.
