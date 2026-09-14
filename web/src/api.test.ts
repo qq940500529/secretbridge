@@ -10,12 +10,15 @@ import {
   createSyntheticRun,
   createSecurityValidation,
   createPilotReadiness,
+  createPlatformBoundary,
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
   getSecurityValidationReport,
   getPilotReadinessReport,
+  getPlatformBoundaryReport,
   listPilotReadiness,
+  listPlatformBoundary,
   setCredentialSecret,
   clearCredentialSecret,
   updateCredentialReference,
@@ -370,6 +373,49 @@ describe("configuration API client", () => {
     expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/pilot-readiness");
     expect(fetch.mock.calls[2]?.[0]).toBe(
       "/api/v1/pilot-readiness/readiness-id/report",
+    );
+  });
+
+  it("creates, lists and exports platform evidence without caller input", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "platform-id", status: "attention" }), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ items: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            snapshot: { id: "platform-id" },
+            digest_verified: true,
+            markdown: "# Platform evidence",
+            disclosure: "self_probe_not_installed_identity_certification",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await createPlatformBoundary("synthetic-session-token");
+    await listPlatformBoundary("synthetic-session-token");
+    await getPlatformBoundaryReport("synthetic-session-token", "platform-id");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/platform-boundary");
+    expect(fetch.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ method: "POST", credentials: "omit" }),
+    );
+    expect(fetch.mock.calls[0]?.[1]).not.toHaveProperty("body");
+    expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/platform-boundary");
+    expect(fetch.mock.calls[2]?.[0]).toBe(
+      "/api/v1/platform-boundary/platform-id/report",
     );
   });
 });

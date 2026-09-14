@@ -5,6 +5,7 @@
 
 mod catalog;
 mod mcp;
+mod platform_evidence;
 mod postgres;
 mod secret_store;
 mod terminal;
@@ -55,6 +56,7 @@ use catalog::{
     SecurityValidationRun, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
     UpdateTarget,
 };
+use platform_evidence::{PlatformBoundarySnapshot, PlatformEvidenceProbe};
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
 use terminal::{
@@ -79,6 +81,7 @@ pub struct AppState {
     credential_mutations: Arc<Mutex<()>>,
     configuration_gate: Arc<RwLock<()>>,
     postgres_executor: Arc<dyn PostgresExecutor>,
+    platform_evidence: PlatformEvidenceProbe,
     run_cancellations: RunCancellations,
     secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
@@ -116,6 +119,7 @@ impl AppState {
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
             default_postgres_executor(),
+            PlatformEvidenceProbe::ephemeral(),
         )
     }
 
@@ -142,6 +146,12 @@ impl AppState {
             ConfigurationStorage::Sqlite,
             persistent_secret_store(),
             default_postgres_executor(),
+            PlatformEvidenceProbe::persistent(
+                database_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf(),
+            ),
         ))
     }
 
@@ -158,6 +168,7 @@ impl AppState {
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
             default_postgres_executor(),
+            PlatformEvidenceProbe::ephemeral(),
         )
     }
 
@@ -168,6 +179,7 @@ impl AppState {
         configuration_storage: ConfigurationStorage,
         secret_store: Arc<dyn SecretStore>,
         postgres_executor: Arc<dyn PostgresExecutor>,
+        platform_evidence: PlatformEvidenceProbe,
     ) -> (Self, String) {
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
@@ -181,6 +193,7 @@ impl AppState {
             credential_mutations: Arc::new(Mutex::new(())),
             configuration_gate: Arc::new(RwLock::new(())),
             postgres_executor,
+            platform_evidence,
             run_cancellations: RunCancellations::default(),
             secret_store,
             terminals: TerminalManager::new(program),
@@ -382,6 +395,20 @@ struct PilotReadinessListResponse {
 #[derive(Serialize)]
 struct PilotReadinessReportResponse {
     snapshot: PilotReadinessSnapshot,
+    digest_verified: bool,
+    markdown: String,
+    disclosure: &'static str,
+}
+
+#[derive(Serialize)]
+struct PlatformBoundaryListResponse {
+    items: Vec<PlatformBoundarySnapshot>,
+    evidence_policy: &'static str,
+}
+
+#[derive(Serialize)]
+struct PlatformBoundaryReportResponse {
+    snapshot: PlatformBoundarySnapshot,
     digest_verified: bool,
     markdown: String,
     disclosure: &'static str,
@@ -627,6 +654,15 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/pilot-readiness/{id}/report",
             get(get_pilot_readiness_report),
+        )
+        .route(
+            "/api/v1/platform-boundary",
+            get(list_platform_boundary).post(create_platform_boundary),
+        )
+        .route("/api/v1/platform-boundary/{id}", get(get_platform_boundary))
+        .route(
+            "/api/v1/platform-boundary/{id}/report",
+            get(get_platform_boundary_report),
         )
         .route(
             "/api/v1/terminals",
@@ -1679,6 +1715,124 @@ fn render_pilot_readiness_markdown(
     report.push_str(
         "\n## Scope disclosure\n\n\
          This snapshot is generated from local non-secret metadata and existing self-validation evidence. It is not target-owner authorization, proof of remote least-privilege grants, operating-system identity certification or an independent security review. A technically eligible target must not be treated as production-ready.\n",
+    );
+    report
+}
+
+async fn list_platform_boundary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<PlatformBoundaryListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let items = task::spawn_blocking(move || catalog.list_platform_boundary_snapshots())
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(PlatformBoundaryListResponse {
+        items,
+        evidence_policy: "fixed_non_secret_platform_facts_only",
+    }))
+}
+
+async fn create_platform_boundary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(StatusCode, Json<PlatformBoundarySnapshot>), ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    if !body.is_empty() {
+        return Err(ApiError::BadRequest);
+    }
+    let checks = state.platform_evidence.collect();
+    let runtime_context = if state.configuration_storage == ConfigurationStorage::Sqlite {
+        "persistent"
+    } else {
+        "ephemeral"
+    };
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || {
+        catalog.execute_platform_boundary_snapshot(runtime_context, checks)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
+    Ok((StatusCode::CREATED, Json(snapshot)))
+}
+
+async fn get_platform_boundary(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PlatformBoundarySnapshot>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || catalog.get_platform_boundary_snapshot(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    Ok(Json(snapshot))
+}
+
+async fn get_platform_boundary_report(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PlatformBoundaryReportResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let snapshot = task::spawn_blocking(move || catalog.get_platform_boundary_snapshot(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    let digest_verified = snapshot.digest_verified;
+    let markdown = render_platform_boundary_markdown(&snapshot, digest_verified);
+    Ok(Json(PlatformBoundaryReportResponse {
+        snapshot,
+        digest_verified,
+        markdown,
+        disclosure: "self_probe_not_installed_identity_certification",
+    }))
+}
+
+fn render_platform_boundary_markdown(
+    snapshot: &PlatformBoundarySnapshot,
+    digest_verified: bool,
+) -> String {
+    let mut report = format!(
+        "# SecretBridge Platform Boundary Evidence\n\n\
+         - Snapshot: `{}`\n\
+         - Profile: `{}`\n\
+         - Application: `{}`\n\
+         - Platform: `{}`\n\
+         - Runtime context: `{}`\n\
+         - Result: `{:?}`\n\
+         - Identity boundary: `{}`\n\
+         - Created (Unix ms): `{}`\n\
+         - Evidence SHA-256: `{}`\n\
+         - Digest verified: `{digest_verified}`\n\n\
+         ## Checks\n\n",
+        snapshot.id,
+        snapshot.profile_version,
+        snapshot.application_version,
+        snapshot.platform,
+        snapshot.runtime_context,
+        snapshot.status,
+        snapshot.identity_boundary,
+        snapshot.created_at_unix_ms,
+        snapshot.evidence_digest_sha256,
+    );
+    for check in &snapshot.checks {
+        let _ = write!(
+            report,
+            "- **{:?}** `{}` — {}\n  - Evidence: {}\n",
+            check.status, check.code, check.summary, check.evidence
+        );
+    }
+    report.push_str(
+        "\n## Scope disclosure\n\n\
+         This artifact contains fixed, non-secret facts collected by the running product. It does not disclose usernames, identifiers, endpoint names or paths. It is not independent proof of a fresh installation, service identity, DACL or hostile-subject denial. The public identity boundary remains `unverified_same_user` until those external gates are completed.\n",
     );
     report
 }
@@ -3140,7 +3294,7 @@ mod tests {
         assert_eq!(created.status(), StatusCode::CREATED);
         let snapshot = response_json(created).await;
         assert_eq!(snapshot["status"], "blocked");
-        assert_eq!(snapshot["checks"].as_array().map(Vec::len), Some(10));
+        assert_eq!(snapshot["checks"].as_array().map(Vec::len), Some(11));
         assert_eq!(snapshot["digest_verified"], true);
         let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
 
@@ -3180,6 +3334,101 @@ mod tests {
         assert!(markdown.contains("Pilot Readiness Report"));
         assert!(!markdown.to_ascii_lowercase().contains("password="));
         assert!(!markdown.contains("pilot.test.example"));
+    }
+
+    #[tokio::test]
+    async fn platform_boundary_api_is_authenticated_bounded_and_exportable() {
+        let (app, bootstrap) = test_app();
+        let unauthenticated = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/platform-boundary")
+                    .body(Body::empty())
+                    .expect("valid request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+        let token = pair_test_session(&app, &bootstrap).await;
+        let missing_origin = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/v1/platform-boundary",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
+        let payload_attempt = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/api/v1/platform-boundary",
+                &token,
+                ORIGIN,
+                r#"{"path":"caller-selected"}"#,
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(payload_attempt.status(), StatusCode::BAD_REQUEST);
+
+        let created = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/v1/platform-boundary",
+                &token,
+                Some(ORIGIN),
+            ))
+            .await
+            .expect("router response");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let snapshot = response_json(created).await;
+        assert_eq!(snapshot["status"], "attention");
+        assert_eq!(snapshot["identity_boundary"], "unverified_same_user");
+        assert_eq!(snapshot["runtime_context"], "ephemeral");
+        assert_eq!(snapshot["digest_verified"], true);
+        let snapshot_id = snapshot["id"].as_str().expect("snapshot id");
+
+        let history = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/platform-boundary",
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let history = response_json(history).await;
+        assert_eq!(
+            history["evidence_policy"],
+            "fixed_non_secret_platform_facts_only"
+        );
+        assert_eq!(history["items"].as_array().map(Vec::len), Some(1));
+
+        let report = app
+            .oneshot(authenticated_request(
+                "GET",
+                &format!("/api/v1/platform-boundary/{snapshot_id}/report"),
+                &token,
+                None,
+            ))
+            .await
+            .expect("router response");
+        let report = response_json(report).await;
+        assert_eq!(report["digest_verified"], true);
+        assert_eq!(
+            report["disclosure"],
+            "self_probe_not_installed_identity_certification"
+        );
+        let markdown = report["markdown"].as_str().expect("Markdown report");
+        assert!(markdown.contains("Platform Boundary Evidence"));
+        assert!(markdown.contains("unverified_same_user"));
+        assert!(!markdown.to_ascii_lowercase().contains("password="));
     }
 
     #[tokio::test]

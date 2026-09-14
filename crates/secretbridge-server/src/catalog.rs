@@ -15,7 +15,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 9;
+use crate::platform_evidence::{
+    PLATFORM_BOUNDARY_PROFILE_VERSION, PlatformBoundaryCheck, PlatformBoundaryEvidence,
+    PlatformBoundarySnapshot, PlatformBoundaryStatus, PlatformCheckStatus,
+};
+
+const SCHEMA_VERSION: i64 = 10;
 const SECURITY_VALIDATION_SUITE_VERSION: &str = "security-validation-v1";
 const PILOT_READINESS_PROFILE_VERSION: &str = "pilot-readiness-v1";
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
@@ -27,6 +32,7 @@ const MAX_ACTION_TEMPLATES: i64 = 256;
 const MAX_RUNS: i64 = 1_024;
 const MAX_SECURITY_VALIDATION_RUNS: i64 = 128;
 const MAX_PILOT_READINESS_SNAPSHOTS: i64 = 128;
+const MAX_PLATFORM_BOUNDARY_SNAPSHOTS: i64 = 128;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
@@ -927,7 +933,31 @@ impl Catalog {
                     PRIMARY KEY (snapshot_id, ordinal),
                     UNIQUE (snapshot_id, code)
                  );
-                 PRAGMA user_version = 9;
+                 CREATE TABLE platform_boundary_snapshots (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+                    status TEXT NOT NULL CHECK (status IN ('verified', 'attention', 'blocked')),
+                    application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
+                    platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
+                    runtime_context TEXT NOT NULL CHECK (runtime_context IN ('persistent', 'ephemeral')),
+                    identity_boundary TEXT NOT NULL CHECK (identity_boundary = 'unverified_same_user'),
+                    created_at_unix_ms INTEGER NOT NULL,
+                    evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
+                 );
+                 CREATE INDEX platform_boundary_snapshots_created_idx
+                    ON platform_boundary_snapshots(created_at_unix_ms DESC, id);
+                 CREATE TABLE platform_boundary_checks (
+                    snapshot_id TEXT NOT NULL REFERENCES platform_boundary_snapshots(id) ON DELETE CASCADE,
+                    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
+                    code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+                    category TEXT NOT NULL CHECK (category IN ('runtime_directory', 'ipc_transport', 'credential_store', 'installation', 'external_evidence')),
+                    status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed', 'not_applicable')),
+                    summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
+                    evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
+                    PRIMARY KEY (snapshot_id, ordinal),
+                    UNIQUE (snapshot_id, code)
+                 );
+                 PRAGMA user_version = 10;
                  COMMIT;",
             )?;
         }
@@ -1040,6 +1070,9 @@ impl Catalog {
         }
         if (1..=8).contains(&version) {
             migrate_pilot_readiness_schema(&connection)?;
+        }
+        if (1..=9).contains(&version) {
+            migrate_platform_boundary_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -2141,6 +2174,20 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)?
             .map(|run| security_validation_with_checks(&connection, run))
             .transpose()?;
+        let latest_platform_boundary = connection
+            .query_row(
+                "SELECT id, profile_version, status, application_version, platform,
+                        runtime_context, identity_boundary, created_at_unix_ms,
+                        evidence_digest_sha256
+                   FROM platform_boundary_snapshots
+                  ORDER BY created_at_unix_ms DESC, id DESC LIMIT 1",
+                [],
+                platform_boundary_header_from_row,
+            )
+            .optional()
+            .map_err(|_| CatalogError::Storage)?
+            .map(|snapshot| platform_boundary_with_checks(&connection, snapshot))
+            .transpose()?;
 
         let mut checks = vec![
             readiness_check(
@@ -2213,6 +2260,30 @@ impl Catalog {
                 false,
                 "A complete security-validation result is included",
                 "No security-validation result is available".to_owned(),
+            ));
+        }
+        if let Some(platform_boundary) = &latest_platform_boundary {
+            checks.push(readiness_check(
+                "latest_platform_evidence_digest",
+                "evidence",
+                platform_boundary.digest_verified,
+                "The latest platform-boundary evidence digest is intact",
+                if platform_boundary.digest_verified {
+                    format!(
+                        "Platform evidence {} was recomputed successfully; identity remains {}",
+                        platform_boundary.id, platform_boundary.identity_boundary
+                    )
+                } else {
+                    "Latest platform-boundary evidence did not match its stored digest".to_owned()
+                },
+            ));
+        } else {
+            checks.push(readiness_check(
+                "latest_platform_evidence_digest",
+                "evidence",
+                false,
+                "A digest-verified platform-boundary snapshot is available",
+                "No platform-boundary evidence has been created".to_owned(),
             ));
         }
         checks.extend([
@@ -2363,6 +2434,139 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)?
             .ok_or(CatalogError::NotFound)?;
         pilot_readiness_with_checks(&connection, snapshot)
+    }
+
+    pub fn execute_platform_boundary_snapshot(
+        &self,
+        runtime_context: &'static str,
+        checks: Vec<PlatformBoundaryCheck>,
+    ) -> Result<PlatformBoundarySnapshot, CatalogError> {
+        if !matches!(runtime_context, "persistent" | "ephemeral") || checks.is_empty() {
+            return Err(CatalogError::Invalid);
+        }
+        let created_at = now_unix_ms_i64()?;
+        let status = if checks
+            .iter()
+            .any(|check| check.status == PlatformCheckStatus::Failed)
+        {
+            PlatformBoundaryStatus::Blocked
+        } else if checks
+            .iter()
+            .any(|check| check.status == PlatformCheckStatus::Warning)
+        {
+            PlatformBoundaryStatus::Attention
+        } else {
+            // Product-generated probes cannot independently attest the installed identity.
+            PlatformBoundaryStatus::Attention
+        };
+        let mut snapshot = PlatformBoundarySnapshot {
+            id: Uuid::new_v4(),
+            profile_version: PLATFORM_BOUNDARY_PROFILE_VERSION.to_owned(),
+            status,
+            application_version: env!("CARGO_PKG_VERSION").to_owned(),
+            platform: std::env::consts::OS.to_owned(),
+            runtime_context: runtime_context.to_owned(),
+            identity_boundary: "unverified_same_user".to_owned(),
+            created_at_unix_ms: created_at.try_into().map_err(|_| CatalogError::Storage)?,
+            evidence_digest_sha256: String::new(),
+            digest_verified: false,
+            checks,
+        };
+        snapshot.evidence_digest_sha256 = platform_boundary_digest(&snapshot)?;
+        snapshot.digest_verified = true;
+
+        let mut connection = self.lock();
+        ensure_capacity(
+            &connection,
+            "platform_boundary_snapshots",
+            MAX_PLATFORM_BOUNDARY_SNAPSHOTS,
+        )?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
+            .execute(
+                "INSERT INTO platform_boundary_snapshots
+                    (id, profile_version, status, application_version, platform,
+                     runtime_context, identity_boundary, created_at_unix_ms,
+                     evidence_digest_sha256)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    snapshot.id.to_string(),
+                    snapshot.profile_version,
+                    snapshot.status.as_storage(),
+                    snapshot.application_version,
+                    snapshot.platform,
+                    snapshot.runtime_context,
+                    snapshot.identity_boundary,
+                    created_at,
+                    snapshot.evidence_digest_sha256,
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        for (index, check) in snapshot.checks.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO platform_boundary_checks
+                        (snapshot_id, ordinal, code, category, status, summary, evidence)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        snapshot.id.to_string(),
+                        i64::try_from(index + 1).map_err(|_| CatalogError::Storage)?,
+                        check.code,
+                        check.category,
+                        check.status.as_storage(),
+                        check.summary,
+                        check.evidence,
+                    ],
+                )
+                .map_err(|_| CatalogError::Storage)?;
+        }
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        Ok(snapshot)
+    }
+
+    pub fn list_platform_boundary_snapshots(
+        &self,
+    ) -> Result<Vec<PlatformBoundarySnapshot>, CatalogError> {
+        let connection = self.lock();
+        let mut statement = connection
+            .prepare(
+                "SELECT id, profile_version, status, application_version, platform,
+                        runtime_context, identity_boundary, created_at_unix_ms,
+                        evidence_digest_sha256
+                   FROM platform_boundary_snapshots
+                  ORDER BY created_at_unix_ms DESC, id DESC",
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        let rows = statement
+            .query_map([], platform_boundary_header_from_row)
+            .map_err(|_| CatalogError::Storage)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|_| CatalogError::Storage)?;
+        rows.into_iter()
+            .map(|snapshot| platform_boundary_with_checks(&connection, snapshot))
+            .collect()
+    }
+
+    pub fn get_platform_boundary_snapshot(
+        &self,
+        id: Uuid,
+    ) -> Result<PlatformBoundarySnapshot, CatalogError> {
+        let connection = self.lock();
+        let snapshot = connection
+            .query_row(
+                "SELECT id, profile_version, status, application_version, platform,
+                        runtime_context, identity_boundary, created_at_unix_ms,
+                        evidence_digest_sha256
+                   FROM platform_boundary_snapshots WHERE id = ?1",
+                [id.to_string()],
+                platform_boundary_header_from_row,
+            )
+            .optional()
+            .map_err(|_| CatalogError::Storage)?
+            .ok_or(CatalogError::NotFound)?;
+        platform_boundary_with_checks(&connection, snapshot)
     }
 
     fn instance_security_validation_checks(&self) -> Vec<SecurityValidationCheck> {
@@ -2780,6 +2984,68 @@ fn pilot_readiness_with_checks(
     Ok(snapshot)
 }
 
+fn platform_boundary_digest(snapshot: &PlatformBoundarySnapshot) -> Result<String, CatalogError> {
+    let payload = PlatformBoundaryEvidence {
+        id: snapshot.id,
+        profile_version: &snapshot.profile_version,
+        status: snapshot.status,
+        application_version: &snapshot.application_version,
+        platform: &snapshot.platform,
+        runtime_context: &snapshot.runtime_context,
+        identity_boundary: &snapshot.identity_boundary,
+        created_at_unix_ms: snapshot.created_at_unix_ms,
+        checks: &snapshot.checks,
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|_| CatalogError::Storage)?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+fn platform_boundary_header_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<PlatformBoundarySnapshot> {
+    Ok(PlatformBoundarySnapshot {
+        id: uuid_from_row(row, 0)?,
+        profile_version: row.get(1)?,
+        status: PlatformBoundaryStatus::from_storage(&row.get::<_, String>(2)?)?,
+        application_version: row.get(3)?,
+        platform: row.get(4)?,
+        runtime_context: row.get(5)?,
+        identity_boundary: row.get(6)?,
+        created_at_unix_ms: u64_from_row(row, 7)?,
+        evidence_digest_sha256: row.get(8)?,
+        digest_verified: false,
+        checks: Vec::new(),
+    })
+}
+
+fn platform_boundary_with_checks(
+    connection: &Connection,
+    mut snapshot: PlatformBoundarySnapshot,
+) -> Result<PlatformBoundarySnapshot, CatalogError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT code, category, status, summary, evidence
+               FROM platform_boundary_checks WHERE snapshot_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    snapshot.checks = statement
+        .query_map([snapshot.id.to_string()], |row| {
+            Ok(PlatformBoundaryCheck {
+                code: row.get(0)?,
+                category: row.get(1)?,
+                status: PlatformCheckStatus::from_storage(&row.get::<_, String>(2)?)?,
+                summary: row.get(3)?,
+                evidence: row.get(4)?,
+            })
+        })
+        .map_err(|_| CatalogError::Storage)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|_| CatalogError::Storage)?;
+    snapshot.digest_verified = platform_boundary_digest(&snapshot)
+        .is_ok_and(|digest| digest == snapshot.evidence_digest_sha256);
+    Ok(snapshot)
+}
+
 fn security_validation_run_header_from_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<SecurityValidationRun> {
@@ -3109,6 +3375,38 @@ fn migrate_pilot_readiness_schema(connection: &Connection) -> rusqlite::Result<(
             UNIQUE (snapshot_id, code)
          );
          PRAGMA user_version = 9;
+         COMMIT;",
+    )
+}
+
+fn migrate_platform_boundary_schema(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         CREATE TABLE IF NOT EXISTS platform_boundary_snapshots (
+            id TEXT PRIMARY KEY NOT NULL,
+            profile_version TEXT NOT NULL CHECK (length(profile_version) BETWEEN 1 AND 80),
+            status TEXT NOT NULL CHECK (status IN ('verified', 'attention', 'blocked')),
+            application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
+            platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
+            runtime_context TEXT NOT NULL CHECK (runtime_context IN ('persistent', 'ephemeral')),
+            identity_boundary TEXT NOT NULL CHECK (identity_boundary = 'unverified_same_user'),
+            created_at_unix_ms INTEGER NOT NULL,
+            evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
+         );
+         CREATE INDEX IF NOT EXISTS platform_boundary_snapshots_created_idx
+            ON platform_boundary_snapshots(created_at_unix_ms DESC, id);
+         CREATE TABLE IF NOT EXISTS platform_boundary_checks (
+            snapshot_id TEXT NOT NULL REFERENCES platform_boundary_snapshots(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
+            code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
+            category TEXT NOT NULL CHECK (category IN ('runtime_directory', 'ipc_transport', 'credential_store', 'installation', 'external_evidence')),
+            status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed', 'not_applicable')),
+            summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
+            evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
+            PRIMARY KEY (snapshot_id, ordinal),
+            UNIQUE (snapshot_id, code)
+         );
+         PRAGMA user_version = 10;
          COMMIT;",
     )
 }
@@ -3557,6 +3855,7 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
         "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
         "security_validation_runs" => "SELECT COUNT(*) FROM security_validation_runs",
         "pilot_readiness_snapshots" => "SELECT COUNT(*) FROM pilot_readiness_snapshots",
+        "platform_boundary_snapshots" => "SELECT COUNT(*) FROM platform_boundary_snapshots",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -3681,6 +3980,10 @@ mod tests {
 
     use uuid::Uuid;
 
+    use crate::platform_evidence::{
+        PlatformBoundaryCheck, PlatformBoundaryStatus, PlatformCheckStatus,
+    };
+
     use super::{
         ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
         CatalogError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
@@ -3757,7 +4060,7 @@ mod tests {
         assert_eq!(snapshot.status, PilotReadinessStatus::Blocked);
         assert_eq!(snapshot.candidate_test_targets, 0);
         assert_eq!(snapshot.eligible_test_targets, 0);
-        assert_eq!(snapshot.checks.len(), 10);
+        assert_eq!(snapshot.checks.len(), 11);
         assert!(snapshot.digest_verified);
         assert!(
             snapshot
@@ -3785,6 +4088,18 @@ mod tests {
         let validation = catalog
             .execute_security_validation()
             .expect("security validation");
+        catalog
+            .execute_platform_boundary_snapshot(
+                "ephemeral",
+                vec![PlatformBoundaryCheck {
+                    code: "synthetic_platform_fact".to_owned(),
+                    category: "external_evidence".to_owned(),
+                    status: PlatformCheckStatus::Passed,
+                    summary: "Synthetic test fact".to_owned(),
+                    evidence: "Fixed test-only evidence".to_owned(),
+                }],
+            )
+            .expect("platform evidence");
         let credential = create_credential(&catalog);
         catalog
             .set_credential_secret_state(credential.id, credential.version, true)
@@ -3859,6 +4174,45 @@ mod tests {
         let stored = catalog
             .get_pilot_readiness_snapshot(snapshot.id)
             .expect("stored readiness snapshot");
+        assert!(!stored.digest_verified);
+    }
+
+    #[test]
+    fn platform_boundary_snapshot_persists_and_detects_tampering() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let snapshot = catalog
+            .execute_platform_boundary_snapshot(
+                "ephemeral",
+                vec![PlatformBoundaryCheck {
+                    code: "fixed_test_fact".to_owned(),
+                    category: "external_evidence".to_owned(),
+                    status: PlatformCheckStatus::Warning,
+                    summary: "External evidence remains required".to_owned(),
+                    evidence: "No identity or secret data is included".to_owned(),
+                }],
+            )
+            .expect("platform snapshot");
+        assert_eq!(snapshot.status, PlatformBoundaryStatus::Attention);
+        assert!(snapshot.digest_verified);
+        assert_eq!(
+            catalog
+                .list_platform_boundary_snapshots()
+                .expect("platform history")
+                .len(),
+            1
+        );
+
+        catalog
+            .lock()
+            .execute(
+                "UPDATE platform_boundary_checks SET evidence = 'tampered'
+                  WHERE snapshot_id = ?1 AND ordinal = 1",
+                [snapshot.id.to_string()],
+            )
+            .expect("tamper platform evidence");
+        let stored = catalog
+            .get_platform_boundary_snapshot(snapshot.id)
+            .expect("stored platform snapshot");
         assert!(!stored.digest_verified);
     }
 
@@ -4227,7 +4581,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
     }
 
     #[test]
@@ -4287,7 +4641,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            9
+            10
         );
     }
 
@@ -4321,7 +4675,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            9
+            10
         );
     }
 
@@ -4359,7 +4713,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            9
+            10
         );
     }
 
@@ -4395,7 +4749,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            9
+            10
         );
     }
 
@@ -4438,7 +4792,58 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            9
+            10
+        );
+    }
+
+    #[test]
+    fn version_nine_database_adds_platform_evidence_without_losing_readiness() {
+        let database = TemporaryDatabase::new();
+        let readiness_id = {
+            let catalog = Catalog::open(&database.path).expect("create current catalog");
+            catalog
+                .execute_pilot_readiness_snapshot()
+                .expect("pilot readiness")
+                .id
+        };
+        {
+            let connection = rusqlite::Connection::open(&database.path).expect("open database");
+            connection
+                .execute_batch(
+                    "DROP TABLE platform_boundary_checks;
+                     DROP TABLE platform_boundary_snapshots;
+                     PRAGMA user_version = 9;",
+                )
+                .expect("restore version nine layout");
+        }
+
+        let catalog = Catalog::open(&database.path).expect("migrate v9 catalog");
+        assert_eq!(
+            catalog
+                .list_pilot_readiness_snapshots()
+                .expect("preserved readiness")[0]
+                .id,
+            readiness_id
+        );
+        let platform = catalog
+            .execute_platform_boundary_snapshot(
+                "persistent",
+                vec![PlatformBoundaryCheck {
+                    code: "migration_fact".to_owned(),
+                    category: "external_evidence".to_owned(),
+                    status: PlatformCheckStatus::Warning,
+                    summary: "Migration test evidence".to_owned(),
+                    evidence: "No sensitive material".to_owned(),
+                }],
+            )
+            .expect("platform evidence after migration");
+        assert!(platform.digest_verified);
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .expect("schema version"),
+            10
         );
     }
 

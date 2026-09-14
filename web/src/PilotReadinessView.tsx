@@ -37,6 +37,7 @@ const zhChecks: Record<string, [string, string, string]> = {
   controlled_template_available: ["受控模板", "已启用仅返回状态的固定 PostgreSQL 检查", "技术条件就绪的测试目标"],
   latest_validation_digest: ["证据完整性", "最近安全自检的证据指纹完整", "最近证据已重新计算并核对"],
   latest_validation_result: ["安全自检结论", "最近一次完整安全自检已纳入准入判断", "安全自检结果"],
+  latest_platform_evidence_digest: ["平台证据完整性", "最近平台身份与 IPC 证据的指纹完整", "最近平台证据已重新计算并核对"],
   identity_boundary_evidence: ["身份边界", "安装后的操作系统身份控制仍需平台证据", "当前运行时仍声明同用户隔离未验证"],
   pilot_authorization_record: ["试点授权", "目标负责人须批准限时、非生产试点", "本机自检不能代替目标负责人的授权记录"],
   least_privilege_review: ["最小权限", "数据库授权集须由独立人员确认", "凭据可用不等于远端账号权限已经合规"],

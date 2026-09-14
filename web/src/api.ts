@@ -357,6 +357,48 @@ export interface PilotReadinessReportResponse {
   disclosure: "readiness_snapshot_not_pilot_authorization_or_certification";
 }
 
+export type PlatformBoundaryStatus = "verified" | "attention" | "blocked";
+export type PlatformCheckStatus = "passed" | "warning" | "failed" | "not_applicable";
+
+export interface PlatformBoundaryCheck {
+  code: string;
+  category:
+    | "runtime_directory"
+    | "ipc_transport"
+    | "credential_store"
+    | "installation"
+    | "external_evidence";
+  status: PlatformCheckStatus;
+  summary: string;
+  evidence: string;
+}
+
+export interface PlatformBoundarySnapshot {
+  id: string;
+  profile_version: string;
+  status: PlatformBoundaryStatus;
+  application_version: string;
+  platform: string;
+  runtime_context: "persistent" | "ephemeral";
+  identity_boundary: "unverified_same_user";
+  created_at_unix_ms: number;
+  evidence_digest_sha256: string;
+  digest_verified: boolean;
+  checks: PlatformBoundaryCheck[];
+}
+
+export interface PlatformBoundaryListResponse {
+  items: PlatformBoundarySnapshot[];
+  evidence_policy: "fixed_non_secret_platform_facts_only";
+}
+
+export interface PlatformBoundaryReportResponse {
+  snapshot: PlatformBoundarySnapshot;
+  digest_verified: boolean;
+  markdown: string;
+  disclosure: "self_probe_not_installed_identity_certification";
+}
+
 interface TerminalListResponse {
   terminals: TerminalSummary[];
 }
@@ -813,6 +855,44 @@ export async function getPilotReadinessReport(
 ): Promise<PilotReadinessReportResponse> {
   return readJson<PilotReadinessReportResponse>(
     await fetch(`/api/v1/pilot-readiness/${id}/report`, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function listPlatformBoundary(
+  sessionToken: string,
+): Promise<PlatformBoundaryListResponse> {
+  return readJson<PlatformBoundaryListResponse>(
+    await fetch("/api/v1/platform-boundary", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function createPlatformBoundary(
+  sessionToken: string,
+): Promise<PlatformBoundarySnapshot> {
+  return readJson<PlatformBoundarySnapshot>(
+    await fetch("/api/v1/platform-boundary", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function getPlatformBoundaryReport(
+  sessionToken: string,
+  id: string,
+): Promise<PlatformBoundaryReportResponse> {
+  return readJson<PlatformBoundaryReportResponse>(
+    await fetch(`/api/v1/platform-boundary/${id}/report`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

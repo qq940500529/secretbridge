@@ -63,6 +63,11 @@ const PilotReadinessView = lazy(() =>
     default: module.PilotReadinessView,
   })),
 );
+const PlatformBoundaryView = lazy(() =>
+  import("./PlatformBoundaryView").then((module) => ({
+    default: module.PlatformBoundaryView,
+  })),
+);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -78,6 +83,7 @@ interface Copy {
   terminal: string;
   audit: string;
   securityValidation: string;
+  platformBoundary: string;
   pilotReadiness: string;
   settings: string;
   overview: string;
@@ -128,6 +134,7 @@ const copy: Record<Language, Copy> = {
     terminal: "安全终端",
     audit: "审计记录",
     securityValidation: "安全验证",
+    platformBoundary: "平台证据",
     pilotReadiness: "试点准入",
     settings: "系统设置",
     overview: "安全执行总览",
@@ -177,6 +184,7 @@ const copy: Record<Language, Copy> = {
     terminal: "Secure terminal",
     audit: "Audit log",
     securityValidation: "Security validation",
+    platformBoundary: "Platform evidence",
     pilotReadiness: "Pilot readiness",
     settings: "Settings",
     overview: "Secure execution overview",
@@ -230,6 +238,7 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
   { id: "securityValidation", icon: FlaskConical },
+  { id: "platformBoundary", icon: ShieldCheck },
   { id: "pilotReadiness", icon: ShieldQuestion },
   { id: "settings", icon: Settings },
 ];
@@ -453,6 +462,13 @@ export function App() {
             ) : activePage === "securityValidation" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <SecurityValidationView
+                  language={language}
+                  sessionToken={sessionToken}
+                />
+              </Suspense>
+            ) : activePage === "platformBoundary" && sessionToken ? (
+              <Suspense fallback={<TerminalLoading text={text} />}>
+                <PlatformBoundaryView
                   language={language}
                   sessionToken={sessionToken}
                 />
