@@ -2,7 +2,7 @@
 
 [Home](README.md) / Roadmap
 
-Milestones describe acceptance gates rather than promised dates. **M3 security-pilot preparation is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets, perform one fixed PostgreSQL check and produce repeatable self-validation evidence, but unresolved identity, platform, independent-review and real-target gates still block production claims.
+Milestones describe acceptance gates rather than promised dates. **M2 controlled-operation development is now in progress alongside the remaining M0 platform validation.** The development build can store real secrets and perform one fixed PostgreSQL check, but unresolved identity, platform and real-target gates still block production claims.
 
 > [!IMPORTANT]
 > 当前版本为 `0.1.0-alpha.21` 工程候选，处于 **M3 安全复核与试点准备**。本机隔离 PostgreSQL 已形成首轮真实 TLS 适配器证据，但不是生产试点或独立认证；M0 中安装后操作系统身份隔离仍未关闭，项目也不等于已经适合生产使用。
@@ -11,9 +11,9 @@ Milestones describe acceptance gates rather than promised dates. **M3 security-p
 | :--- | :--- | :--- |
 | Foundation | Architecture, threat model, platform/UI targets and repository governance | Available |
 | M0 · Feasibility | Synthetic credential and isolation experiments | In progress |
-| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | Complete |
-| M2 · Controlled operations | Scoped adapter and MCP integration | Complete |
-| M3 · Security pilot | Repeatable evidence, approved low-privilege testing and independent review | In progress |
+| M1 · Local Web workflow | UI, approvals, session supervision and reconnection | In progress |
+| M2 · Controlled operations | Scoped adapter and MCP integration | In progress |
+| M3 · Security pilot | Approved low-privilege testing and independent review | Planned |
 | M4 · Distribution | Validated packages, source correspondence and recovery | Planned |
 
 ```mermaid

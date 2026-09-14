@@ -8,7 +8,6 @@ import {
   CircleAlert,
   ClipboardCheck,
   FileClock,
-  FlaskConical,
   Gauge,
   KeyRound,
   Languages,
@@ -53,11 +52,6 @@ const OperationsView = lazy(() =>
 const AuditView = lazy(() =>
   import("./AuditView").then((module) => ({ default: module.AuditView })),
 );
-const SecurityValidationView = lazy(() =>
-  import("./SecurityValidationView").then((module) => ({
-    default: module.SecurityValidationView,
-  })),
-);
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
@@ -72,7 +66,6 @@ interface Copy {
   policies: string;
   terminal: string;
   audit: string;
-  securityValidation: string;
   settings: string;
   overview: string;
   subtitle: string;
@@ -121,7 +114,6 @@ const copy: Record<Language, Copy> = {
     policies: "执行策略",
     terminal: "安全终端",
     audit: "审计记录",
-    securityValidation: "安全验证",
     settings: "系统设置",
     overview: "安全执行总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
@@ -169,7 +161,6 @@ const copy: Record<Language, Copy> = {
     policies: "Policies",
     terminal: "Secure terminal",
     audit: "Audit log",
-    securityValidation: "Security validation",
     settings: "Settings",
     overview: "Secure execution overview",
     subtitle:
@@ -221,7 +212,6 @@ const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
   { id: "policies", icon: Workflow },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
-  { id: "securityValidation", icon: FlaskConical },
   { id: "settings", icon: Settings },
 ];
 
@@ -440,13 +430,6 @@ export function App() {
             ) : activePage === "audit" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <AuditView language={language} sessionToken={sessionToken} />
-              </Suspense>
-            ) : activePage === "securityValidation" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <SecurityValidationView
-                  language={language}
-                  sessionToken={sessionToken}
-                />
               </Suspense>
             ) : (
               <ComingSoon text={text} page={text[activePage]} />

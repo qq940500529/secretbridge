@@ -8,7 +8,7 @@
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
-[![Project stage: M3 preparation](https://img.shields.io/badge/project%20stage-M3%20security%20validation-147D92)](ROADMAP.md)
+[![Project stage: M2 development](https://img.shields.io/badge/project%20stage-M2%20controlled%20operations-147D92)](ROADMAP.md)
 
 [![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
 [![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
@@ -19,7 +19,7 @@
 </div>
 
 > [!IMPORTANT]
-> **M3 security-pilot preparation with M0 identity gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. The Security validation page now runs current-instance checks and isolated attack scenarios, persists fixed evidence and exports digest-verifiable reports. Approval decisions remain in the trusted Web console. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
+> **M2 controlled-operation development with M0 security gates still open.** The local Web console can store passwords and API tokens in the operating-system credential store. A local MCP stdio server can request approval, start an approved single-use run, inspect bounded status/events and cancel an active run. Approval decisions remain in the trusted Web console. Secrets have no read/export tool or API, and arbitrary SQL or credentialed shell access remains unavailable.
 
 ## Why SecretBridge?
 
@@ -96,7 +96,7 @@ Other OS versions and architectures require separate validation. Actual support 
 
 ## Contribute
 
-The project is in M3 security-pilot preparation while M0 identity verification remains open. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is in M2 development while M0 security verification remains open. Contributions to security review, platform integration, accessibility, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

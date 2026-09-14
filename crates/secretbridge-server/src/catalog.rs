@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 8;
-const SECURITY_VALIDATION_SUITE_VERSION: &str = "security-validation-v1";
+const SCHEMA_VERSION: i64 = 7;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -24,7 +23,6 @@ const MAX_TARGETS: i64 = 128;
 const MAX_APPROVALS: i64 = 512;
 const MAX_ACTION_TEMPLATES: i64 = 256;
 const MAX_RUNS: i64 = 1_024;
-const MAX_SECURITY_VALIDATION_RUNS: i64 = 128;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
@@ -580,68 +578,6 @@ pub struct SafeEvent {
     pub created_at_unix_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SecurityValidationStatus {
-    Passed,
-    Warning,
-    Failed,
-}
-
-impl SecurityValidationStatus {
-    const fn as_storage(self) -> &'static str {
-        match self {
-            Self::Passed => "passed",
-            Self::Warning => "warning",
-            Self::Failed => "failed",
-        }
-    }
-
-    fn from_storage(value: &str) -> rusqlite::Result<Self> {
-        match value {
-            "passed" => Ok(Self::Passed),
-            "warning" => Ok(Self::Warning),
-            "failed" => Ok(Self::Failed),
-            _ => Err(rusqlite::Error::InvalidQuery),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SecurityValidationCheck {
-    pub code: String,
-    pub category: String,
-    pub status: SecurityValidationStatus,
-    pub summary: String,
-    pub evidence: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct SecurityValidationRun {
-    pub id: Uuid,
-    pub suite_version: String,
-    pub status: SecurityValidationStatus,
-    pub application_version: String,
-    pub platform: String,
-    pub started_at_unix_ms: u64,
-    pub finished_at_unix_ms: u64,
-    pub evidence_digest_sha256: String,
-    pub digest_verified: bool,
-    pub checks: Vec<SecurityValidationCheck>,
-}
-
-#[derive(Serialize)]
-struct SecurityValidationEvidence<'a> {
-    id: Uuid,
-    suite_version: &'a str,
-    status: SecurityValidationStatus,
-    application_version: &'a str,
-    platform: &'a str,
-    started_at_unix_ms: u64,
-    finished_at_unix_ms: u64,
-    checks: &'a [SecurityValidationCheck],
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogError {
     ApprovalConsumed,
@@ -811,30 +747,7 @@ impl Catalog {
                  );
                  CREATE INDEX safe_events_run_idx ON safe_events(run_id, sequence);
                  CREATE INDEX safe_events_created_idx ON safe_events(created_at_unix_ms, id);
-                 CREATE TABLE security_validation_runs (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    suite_version TEXT NOT NULL CHECK (length(suite_version) BETWEEN 1 AND 80),
-                    status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
-                    application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
-                    platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
-                    started_at_unix_ms INTEGER NOT NULL,
-                    finished_at_unix_ms INTEGER NOT NULL,
-                    evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
-                 );
-                 CREATE INDEX security_validation_runs_finished_idx
-                    ON security_validation_runs(finished_at_unix_ms DESC, id);
-                 CREATE TABLE security_validation_checks (
-                    run_id TEXT NOT NULL REFERENCES security_validation_runs(id) ON DELETE CASCADE,
-                    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
-                    code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
-                    category TEXT NOT NULL CHECK (category IN ('instance', 'isolated_scenario', 'manual_gate')),
-                    status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
-                    summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
-                    evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
-                    PRIMARY KEY (run_id, ordinal),
-                    UNIQUE (run_id, code)
-                 );
-                 PRAGMA user_version = 8;
+                 PRAGMA user_version = 7;
                  COMMIT;",
             )?;
         }
@@ -941,9 +854,6 @@ impl Catalog {
         }
         if (1..=6).contains(&version) {
             migrate_controlled_postgres_schema(&connection)?;
-        }
-        if (1..=7).contains(&version) {
-            migrate_security_validation_schema(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -1850,212 +1760,6 @@ impl Catalog {
         Ok(recovered)
     }
 
-    pub fn execute_security_validation(&self) -> Result<SecurityValidationRun, CatalogError> {
-        let started_at_unix_ms = now_unix_ms_i64()?;
-        let id = Uuid::new_v4();
-        let mut checks = self.instance_security_validation_checks();
-        checks.extend(isolated_security_validation_checks());
-        checks.push(SecurityValidationCheck {
-            code: "identity_boundary_review".to_owned(),
-            category: "manual_gate".to_owned(),
-            status: SecurityValidationStatus::Warning,
-            summary: "Operating-system identity isolation requires external verification"
-                .to_owned(),
-            evidence: "Runtime remains in unverified_same_user compatibility mode".to_owned(),
-        });
-        let status = if checks
-            .iter()
-            .any(|check| check.status == SecurityValidationStatus::Failed)
-        {
-            SecurityValidationStatus::Failed
-        } else if checks
-            .iter()
-            .any(|check| check.status == SecurityValidationStatus::Warning)
-        {
-            SecurityValidationStatus::Warning
-        } else {
-            SecurityValidationStatus::Passed
-        };
-        let finished_at_unix_ms = now_unix_ms_i64()?;
-        let mut run = SecurityValidationRun {
-            id,
-            suite_version: SECURITY_VALIDATION_SUITE_VERSION.to_owned(),
-            status,
-            application_version: env!("CARGO_PKG_VERSION").to_owned(),
-            platform: std::env::consts::OS.to_owned(),
-            started_at_unix_ms: started_at_unix_ms
-                .try_into()
-                .map_err(|_| CatalogError::Storage)?,
-            finished_at_unix_ms: finished_at_unix_ms
-                .try_into()
-                .map_err(|_| CatalogError::Storage)?,
-            evidence_digest_sha256: String::new(),
-            digest_verified: false,
-            checks,
-        };
-        run.evidence_digest_sha256 = security_validation_digest(&run)?;
-        run.digest_verified = true;
-
-        let mut connection = self.lock();
-        ensure_capacity(
-            &connection,
-            "security_validation_runs",
-            MAX_SECURITY_VALIDATION_RUNS,
-        )?;
-        let transaction = connection
-            .transaction()
-            .map_err(|_| CatalogError::Storage)?;
-        transaction
-            .execute(
-                "INSERT INTO security_validation_runs
-                    (id, suite_version, status, application_version, platform,
-                     started_at_unix_ms, finished_at_unix_ms, evidence_digest_sha256)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    run.id.to_string(),
-                    run.suite_version,
-                    run.status.as_storage(),
-                    run.application_version,
-                    run.platform,
-                    started_at_unix_ms,
-                    finished_at_unix_ms,
-                    run.evidence_digest_sha256
-                ],
-            )
-            .map_err(|_| CatalogError::Storage)?;
-        for (index, check) in run.checks.iter().enumerate() {
-            transaction
-                .execute(
-                    "INSERT INTO security_validation_checks
-                        (run_id, ordinal, code, category, status, summary, evidence)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        run.id.to_string(),
-                        i64::try_from(index + 1).map_err(|_| CatalogError::Storage)?,
-                        check.code,
-                        check.category,
-                        check.status.as_storage(),
-                        check.summary,
-                        check.evidence
-                    ],
-                )
-                .map_err(|_| CatalogError::Storage)?;
-        }
-        transaction.commit().map_err(|_| CatalogError::Storage)?;
-        Ok(run)
-    }
-
-    pub fn list_security_validation_runs(
-        &self,
-    ) -> Result<Vec<SecurityValidationRun>, CatalogError> {
-        let connection = self.lock();
-        let mut statement = connection
-            .prepare(
-                "SELECT id, suite_version, status, application_version, platform,
-                        started_at_unix_ms, finished_at_unix_ms, evidence_digest_sha256
-                   FROM security_validation_runs
-                  ORDER BY finished_at_unix_ms DESC, id DESC",
-            )
-            .map_err(|_| CatalogError::Storage)?;
-        let rows = statement
-            .query_map([], security_validation_run_header_from_row)
-            .map_err(|_| CatalogError::Storage)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|_| CatalogError::Storage)?;
-        rows.into_iter()
-            .map(|run| security_validation_with_checks(&connection, run))
-            .collect()
-    }
-
-    pub fn get_security_validation_run(
-        &self,
-        id: Uuid,
-    ) -> Result<SecurityValidationRun, CatalogError> {
-        let connection = self.lock();
-        let run = connection
-            .query_row(
-                "SELECT id, suite_version, status, application_version, platform,
-                        started_at_unix_ms, finished_at_unix_ms, evidence_digest_sha256
-                   FROM security_validation_runs WHERE id = ?1",
-                [id.to_string()],
-                security_validation_run_header_from_row,
-            )
-            .optional()
-            .map_err(|_| CatalogError::Storage)?
-            .ok_or(CatalogError::NotFound)?;
-        security_validation_with_checks(&connection, run)
-    }
-
-    fn instance_security_validation_checks(&self) -> Vec<SecurityValidationCheck> {
-        let connection = self.lock();
-        let integrity_ok = connection
-            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
-            .is_ok_and(|result| result == "ok");
-        let foreign_keys_ok = connection
-            .query_row(
-                "SELECT NOT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(false);
-        let secret_columns_absent = connection
-            .query_row(
-                "SELECT NOT EXISTS(
-                    SELECT 1 FROM pragma_table_info('credential_references')
-                     WHERE (lower(name) LIKE '%secret%' OR lower(name) LIKE '%password%'
-                            OR lower(name) LIKE '%token%' OR lower(name) LIKE '%cipher%'
-                            OR lower(name) LIKE '%private_key%')
-                       AND name NOT IN ('secret_state', 'secret_configured', 'secret_updated_at_unix_ms')
-                 )",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(false);
-        let safe_events_bounded = connection
-            .query_row(
-                "SELECT NOT EXISTS(
-                    SELECT 1 FROM safe_events WHERE message NOT IN
-                    ('request accepted', 'synthetic run started', 'synthetic run completed',
-                     'postgres connection check started', 'postgres connection check succeeded',
-                     'postgres connection check failed', 'run cancelled',
-                     'service restarted before completion', 'authorization no longer active')
-                 )",
-                [],
-                |row| row.get::<_, bool>(0),
-            )
-            .unwrap_or(false);
-        vec![
-            validation_check(
-                "catalog_integrity",
-                "instance",
-                integrity_ok,
-                "SQLite catalog integrity check completed",
-                "PRAGMA integrity_check returned the expected result",
-            ),
-            validation_check(
-                "foreign_key_integrity",
-                "instance",
-                foreign_keys_ok,
-                "Catalog relationships contain no foreign-key violations",
-                "PRAGMA foreign_key_check returned no rows",
-            ),
-            validation_check(
-                "credential_metadata_only",
-                "instance",
-                secret_columns_absent,
-                "Credential catalog stores metadata rather than secret values",
-                "Credential schema contains no secret-value storage column",
-            ),
-            validation_check(
-                "bounded_audit_payloads",
-                "instance",
-                safe_events_bounded,
-                "Safe-event payloads use the fixed server vocabulary",
-                "No persisted safe event falls outside the fixed message allowlist",
-            ),
-        ]
-    }
-
     pub fn delete_target(&self, id: Uuid) -> Result<(), CatalogError> {
         let connection = self.lock();
         let references = connection
@@ -2080,271 +1784,6 @@ impl Catalog {
         self.connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-}
-
-fn validation_check(
-    code: &str,
-    category: &str,
-    passed: bool,
-    summary: &str,
-    evidence: &str,
-) -> SecurityValidationCheck {
-    SecurityValidationCheck {
-        code: code.to_owned(),
-        category: category.to_owned(),
-        status: if passed {
-            SecurityValidationStatus::Passed
-        } else {
-            SecurityValidationStatus::Failed
-        },
-        summary: summary.to_owned(),
-        evidence: evidence.to_owned(),
-    }
-}
-
-#[allow(
-    clippy::too_many_lines,
-    reason = "the complete isolated security suite is kept together for auditability"
-)]
-fn isolated_security_validation_checks() -> Vec<SecurityValidationCheck> {
-    let single_use = (|| {
-        let (catalog, approval, _) = isolated_approved_catalog()?;
-        let first = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: approval.id,
-            idempotency_key: "validation-single-use".to_owned(),
-        })?;
-        let replay = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: approval.id,
-            idempotency_key: "validation-single-use".to_owned(),
-        })?;
-        let second = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: approval.id,
-            idempotency_key: "validation-second-use".to_owned(),
-        });
-        Ok::<_, CatalogError>(
-            !first.replayed
-                && replay.replayed
-                && first.run.id == replay.run.id
-                && matches!(second, Err(CatalogError::ApprovalConsumed)),
-        )
-    })()
-    .unwrap_or(false);
-
-    let pending_blocked = (|| {
-        let (catalog, approval, _) = isolated_catalog(false)?;
-        let result = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: approval.id,
-            idempotency_key: "validation-pending-bypass".to_owned(),
-        });
-        Ok::<_, CatalogError>(matches!(result, Err(CatalogError::ApprovalNotUsable)))
-    })()
-    .unwrap_or(false);
-
-    let rotation_invalidates = (|| {
-        let (catalog, approval, target) = isolated_approved_catalog()?;
-        catalog.update_target(
-            target.id,
-            &UpdateTarget {
-                name: target.name,
-                kind: target.kind,
-                environment: target.environment,
-                description: target.description,
-                credential_reference_id: target.credential_reference_id,
-                postgres: target.postgres,
-                expected_version: target.version,
-            },
-        )?;
-        let result = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: approval.id,
-            idempotency_key: "validation-stale-approval".to_owned(),
-        });
-        Ok::<_, CatalogError>(matches!(result, Err(CatalogError::PolicyDenied)))
-    })()
-    .unwrap_or(false);
-
-    let revocation_blocks = (|| {
-        let (catalog, approval, _) = isolated_approved_catalog()?;
-        let revoked = catalog.revoke_approval(
-            approval.id,
-            &DecideApproval {
-                expected_version: approval.version,
-                note: None,
-            },
-        )?;
-        let result = catalog.create_synthetic_run(&CreateSyntheticRun {
-            approval_id: revoked.id,
-            idempotency_key: "validation-revoked".to_owned(),
-        });
-        Ok::<_, CatalogError>(matches!(result, Err(CatalogError::ApprovalNotUsable)))
-    })()
-    .unwrap_or(false);
-
-    let restart_recovers = (|| {
-        let (catalog, approval, _) = isolated_approved_catalog()?;
-        let run = catalog
-            .create_synthetic_run(&CreateSyntheticRun {
-                approval_id: approval.id,
-                idempotency_key: "validation-recovery".to_owned(),
-            })?
-            .run;
-        catalog.start_run(run.id)?;
-        let recovered = catalog.recover_interrupted_runs()?;
-        let recovered_run = catalog.get_synthetic_run(run.id)?;
-        let events = catalog.list_safe_events(Some(run.id))?;
-        Ok::<_, CatalogError>(
-            recovered == 1
-                && recovered_run.state == RunState::Failed
-                && recovered_run.result_status.as_deref() == Some("service_restarted")
-                && events
-                    .last()
-                    .is_some_and(|event| event.kind == SafeEventKind::Interrupted),
-        )
-    })()
-    .unwrap_or(false);
-
-    vec![
-        validation_check(
-            "approval_bypass_blocked",
-            "isolated_scenario",
-            pending_blocked,
-            "Unapproved execution requests are rejected",
-            "An isolated pending approval could not create a run",
-        ),
-        validation_check(
-            "single_use_and_replay",
-            "isolated_scenario",
-            single_use,
-            "Approval consumption and idempotent replay are enforced",
-            "Same-key replay returned one run and second consumption was rejected",
-        ),
-        validation_check(
-            "rotation_invalidates_authorization",
-            "isolated_scenario",
-            rotation_invalidates,
-            "Target rotation invalidates stale authorization",
-            "A target version change caused policy revalidation to reject execution",
-        ),
-        validation_check(
-            "revocation_blocks_execution",
-            "isolated_scenario",
-            revocation_blocks,
-            "Revoked approval cannot start a controlled run",
-            "An isolated revoked approval was rejected before run creation",
-        ),
-        validation_check(
-            "interrupted_run_recovery",
-            "isolated_scenario",
-            restart_recovers,
-            "Interrupted runs recover to a terminal failed state",
-            "Recovery produced service_restarted status and a fixed interrupted event",
-        ),
-    ]
-}
-
-fn isolated_catalog(approve: bool) -> Result<(Catalog, Approval, Target), CatalogError> {
-    let catalog = Catalog::in_memory().map_err(|_| CatalogError::Storage)?;
-    let target = catalog.create_target(&CreateTarget {
-        name: "Security validation target".to_owned(),
-        kind: TargetKind::HttpService,
-        environment: TargetEnvironment::Test,
-        description: Some("Isolated synthetic validation fixture".to_owned()),
-        credential_reference_id: None,
-        postgres: None,
-    })?;
-    let template = catalog.create_action_template(&CreateActionTemplate {
-        target_id: target.id,
-        name: "Security validation action".to_owned(),
-        operation: ApprovalOperation::SyntheticHealthCheck,
-        result_scope: ApprovalResultScope::StatusOnly,
-        description: Some("No business system or credential access".to_owned()),
-        timeout_seconds: 30,
-    })?;
-    let pending = catalog.create_approval(&CreateApproval {
-        action_template_id: template.id,
-        reason: Some("Isolated security validation scenario".to_owned()),
-        expires_in_seconds: 300,
-    })?;
-    let approval = if approve {
-        catalog.approve_approval(
-            pending.id,
-            &DecideApproval {
-                expected_version: pending.version,
-                note: Some("Isolated validation only".to_owned()),
-            },
-        )?
-    } else {
-        pending
-    };
-    Ok((catalog, approval, target))
-}
-
-fn isolated_approved_catalog() -> Result<(Catalog, Approval, Target), CatalogError> {
-    isolated_catalog(true)
-}
-
-fn security_validation_digest(run: &SecurityValidationRun) -> Result<String, CatalogError> {
-    let payload = SecurityValidationEvidence {
-        id: run.id,
-        suite_version: &run.suite_version,
-        status: run.status,
-        application_version: &run.application_version,
-        platform: &run.platform,
-        started_at_unix_ms: run.started_at_unix_ms,
-        finished_at_unix_ms: run.finished_at_unix_ms,
-        checks: &run.checks,
-    };
-    let bytes = serde_json::to_vec(&payload).map_err(|_| CatalogError::Storage)?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
-fn security_validation_run_header_from_row(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<SecurityValidationRun> {
-    Ok(SecurityValidationRun {
-        id: uuid_from_row(row, 0)?,
-        suite_version: row.get(1)?,
-        status: SecurityValidationStatus::from_storage(&row.get::<_, String>(2)?)?,
-        application_version: row.get(3)?,
-        platform: row.get(4)?,
-        started_at_unix_ms: u64_from_row(row, 5)?,
-        finished_at_unix_ms: u64_from_row(row, 6)?,
-        evidence_digest_sha256: row.get(7)?,
-        digest_verified: false,
-        checks: Vec::new(),
-    })
-}
-
-fn security_validation_with_checks(
-    connection: &Connection,
-    mut run: SecurityValidationRun,
-) -> Result<SecurityValidationRun, CatalogError> {
-    let mut statement = connection
-        .prepare(
-            "SELECT code, category, status, summary, evidence
-               FROM security_validation_checks WHERE run_id = ?1 ORDER BY ordinal",
-        )
-        .map_err(|_| CatalogError::Storage)?;
-    run.checks = statement
-        .query_map([run.id.to_string()], |row| {
-            Ok(SecurityValidationCheck {
-                code: row.get(0)?,
-                category: row.get(1)?,
-                status: SecurityValidationStatus::from_storage(&row.get::<_, String>(2)?)?,
-                summary: row.get(3)?,
-                evidence: row.get(4)?,
-            })
-        })
-        .map_err(|_| CatalogError::Storage)?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|_| CatalogError::Storage)?;
-    run.digest_verified = run.verify_digest();
-    Ok(run)
-}
-
-impl SecurityValidationRun {
-    fn verify_digest(&self) -> bool {
-        security_validation_digest(self).is_ok_and(|digest| digest == self.evidence_digest_sha256)
     }
 }
 
@@ -2565,37 +2004,6 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
         return Err(rusqlite::Error::InvalidQuery);
     }
     Ok(())
-}
-
-fn migrate_security_validation_schema(connection: &Connection) -> rusqlite::Result<()> {
-    connection.execute_batch(
-        "BEGIN IMMEDIATE;
-         CREATE TABLE IF NOT EXISTS security_validation_runs (
-            id TEXT PRIMARY KEY NOT NULL,
-            suite_version TEXT NOT NULL CHECK (length(suite_version) BETWEEN 1 AND 80),
-            status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
-            application_version TEXT NOT NULL CHECK (length(application_version) BETWEEN 1 AND 80),
-            platform TEXT NOT NULL CHECK (length(platform) BETWEEN 1 AND 80),
-            started_at_unix_ms INTEGER NOT NULL,
-            finished_at_unix_ms INTEGER NOT NULL,
-            evidence_digest_sha256 TEXT NOT NULL CHECK (length(evidence_digest_sha256) = 64)
-         );
-         CREATE INDEX IF NOT EXISTS security_validation_runs_finished_idx
-            ON security_validation_runs(finished_at_unix_ms DESC, id);
-         CREATE TABLE IF NOT EXISTS security_validation_checks (
-            run_id TEXT NOT NULL REFERENCES security_validation_runs(id) ON DELETE CASCADE,
-            ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 64),
-            code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 80),
-            category TEXT NOT NULL CHECK (category IN ('instance', 'isolated_scenario', 'manual_gate')),
-            status TEXT NOT NULL CHECK (status IN ('passed', 'warning', 'failed')),
-            summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 240),
-            evidence TEXT NOT NULL CHECK (length(evidence) BETWEEN 1 AND 240),
-            PRIMARY KEY (run_id, ordinal),
-            UNIQUE (run_id, code)
-         );
-         PRAGMA user_version = 8;
-         COMMIT;",
-    )
 }
 
 fn column_exists(
@@ -3040,7 +2448,6 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
         "approvals" => "SELECT COUNT(*) FROM approvals",
         "action_templates" => "SELECT COUNT(*) FROM action_templates",
         "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
-        "security_validation_runs" => "SELECT COUNT(*) FROM security_validation_runs",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -3171,64 +2578,9 @@ mod tests {
         CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, POSTGRES_POLICY_VERSION,
         PolicyDecision, PolicyReasonCode, PolicyRequirement, PostgresRunResult,
         PostgresTargetConfig, PostgresTlsMode, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
-        SecretState, SecurityValidationStatus, TargetEnvironment, TargetKind, UpdateActionTemplate,
+        SecretState, TargetEnvironment, TargetKind, UpdateActionTemplate,
         UpdateCredentialReference, UpdateTarget,
     };
-
-    #[test]
-    fn security_validation_runs_full_isolated_suite_and_persists_evidence() {
-        let catalog = Catalog::in_memory().expect("in-memory catalog");
-        let run = catalog
-            .execute_security_validation()
-            .expect("execute security validation");
-
-        assert_eq!(run.status, SecurityValidationStatus::Warning);
-        assert_eq!(run.checks.len(), 10);
-        assert_eq!(
-            run.checks
-                .iter()
-                .filter(|check| check.status == SecurityValidationStatus::Passed)
-                .count(),
-            9
-        );
-        assert_eq!(
-            run.checks.last().map(|check| check.code.as_str()),
-            Some("identity_boundary_review")
-        );
-        assert!(run.digest_verified);
-
-        let stored = catalog
-            .get_security_validation_run(run.id)
-            .expect("stored validation");
-        assert!(stored.digest_verified);
-        assert_eq!(
-            catalog
-                .list_security_validation_runs()
-                .expect("validation history")
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn security_validation_digest_detects_evidence_tampering() {
-        let catalog = Catalog::in_memory().expect("in-memory catalog");
-        let run = catalog
-            .execute_security_validation()
-            .expect("execute security validation");
-        catalog
-            .lock()
-            .execute(
-                "UPDATE security_validation_checks SET evidence = 'tampered' WHERE run_id = ?1 AND ordinal = 1",
-                [run.id.to_string()],
-            )
-            .expect("tamper test evidence");
-
-        let stored = catalog
-            .get_security_validation_run(run.id)
-            .expect("stored validation");
-        assert!(!stored.digest_verified);
-    }
 
     #[test]
     fn linked_reference_cannot_be_deleted_before_its_target() {
@@ -3595,7 +2947,7 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 8);
+        assert_eq!(version, 7);
     }
 
     #[test]
@@ -3655,7 +3007,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            7
         );
     }
 
@@ -3689,7 +3041,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
+            7
         );
     }
 
@@ -3727,43 +3079,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            8
-        );
-    }
-
-    #[test]
-    fn version_seven_database_adds_security_evidence_without_losing_history() {
-        let database = TemporaryDatabase::new();
-        let target_id = {
-            let catalog = Catalog::open(&database.path).expect("create current catalog");
-            create_target(&catalog, create_credential(&catalog).id).id
-        };
-        {
-            let connection = rusqlite::Connection::open(&database.path).expect("open database");
-            connection
-                .execute_batch(
-                    "DROP TABLE security_validation_checks;
-                     DROP TABLE security_validation_runs;
-                     PRAGMA user_version = 7;",
-                )
-                .expect("restore version seven layout");
-        }
-
-        let catalog = Catalog::open(&database.path).expect("migrate v7 catalog");
-        assert_eq!(
-            catalog.list_targets().expect("preserved targets")[0].id,
-            target_id
-        );
-        let validation = catalog
-            .execute_security_validation()
-            .expect("validation after migration");
-        assert!(validation.digest_verified);
-        assert_eq!(
-            catalog
-                .lock()
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-                .expect("schema version"),
-            8
+            7
         );
     }
 

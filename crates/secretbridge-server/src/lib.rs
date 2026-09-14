@@ -14,7 +14,7 @@ pub use mcp::LocalMcpBridge;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
-    fmt::{self, Write as _},
+    fmt,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -22,7 +22,6 @@ use std::{
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{
         DefaultBodyLimit, Path as AxumPath, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -51,8 +50,8 @@ use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
     CreateSyntheticRun, CreateTarget, CredentialKind, CredentialReference, DecideApproval,
-    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SecurityValidationRun,
-    SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target,
+    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
@@ -358,20 +357,6 @@ struct SafeEventListResponse {
     payload_policy: &'static str,
 }
 
-#[derive(Serialize)]
-struct SecurityValidationListResponse {
-    items: Vec<SecurityValidationRun>,
-    evidence_policy: &'static str,
-}
-
-#[derive(Serialize)]
-struct SecurityValidationReportResponse {
-    run: SecurityValidationRun,
-    digest_verified: bool,
-    markdown: String,
-    disclosure: &'static str,
-}
-
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ClientTerminalMessage {
@@ -592,18 +577,6 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}/cancel", post(cancel_synthetic_run))
         .route("/api/v1/runs/{id}/events", get(list_run_safe_events))
         .route("/api/v1/safe-events", get(list_safe_events))
-        .route(
-            "/api/v1/security-validations",
-            get(list_security_validations).post(create_security_validation),
-        )
-        .route(
-            "/api/v1/security-validations/{id}",
-            get(get_security_validation),
-        )
-        .route(
-            "/api/v1/security-validations/{id}/report",
-            get(get_security_validation_report),
-        )
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
@@ -1432,116 +1405,6 @@ async fn list_safe_events(
         items,
         payload_policy: "fixed_safe_messages_only",
     }))
-}
-
-async fn list_security_validations(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityValidationListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_security_validation_runs())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(SecurityValidationListResponse {
-        items,
-        evidence_policy: "server_generated_fixed_evidence_only",
-    }))
-}
-
-async fn create_security_validation(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, Json<SecurityValidationRun>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    if !body.is_empty() {
-        return Err(ApiError::BadRequest);
-    }
-    let _configuration = state.configuration_gate.read().await;
-    let catalog = state.catalog.clone();
-    let run = task::spawn_blocking(move || catalog.execute_security_validation())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(run)))
-}
-
-async fn get_security_validation(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityValidationRun>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let run = task::spawn_blocking(move || catalog.get_security_validation_run(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(run))
-}
-
-async fn get_security_validation_report(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<Json<SecurityValidationReportResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let run = task::spawn_blocking(move || catalog.get_security_validation_run(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    let digest_verified = run.digest_verified;
-    let markdown = render_security_validation_markdown(&run, digest_verified);
-    Ok(Json(SecurityValidationReportResponse {
-        run,
-        digest_verified,
-        markdown,
-        disclosure: "self_validation_evidence_not_independent_certification",
-    }))
-}
-
-fn render_security_validation_markdown(
-    run: &SecurityValidationRun,
-    digest_verified: bool,
-) -> String {
-    let mut report = format!(
-        "# SecretBridge Security Validation Report\n\n\
-         - Run: `{}`\n\
-         - Suite: `{}`\n\
-         - Application: `{}`\n\
-         - Platform: `{}`\n\
-         - Result: `{:?}`\n\
-         - Started (Unix ms): `{}`\n\
-         - Finished (Unix ms): `{}`\n\
-         - Evidence SHA-256: `{}`\n\
-         - Digest verified: `{}`\n\n\
-         ## Checks\n\n",
-        run.id,
-        run.suite_version,
-        run.application_version,
-        run.platform,
-        run.status,
-        run.started_at_unix_ms,
-        run.finished_at_unix_ms,
-        run.evidence_digest_sha256,
-        digest_verified,
-    );
-    for check in &run.checks {
-        let _ = write!(
-            report,
-            "- **{:?}** `{}` — {}\n  - Evidence: {}\n",
-            check.status, check.code, check.summary, check.evidence
-        );
-    }
-    report.push_str(
-        "\n## Scope disclosure\n\n\
-         This report contains server-generated fixed evidence only. It is a repeatable self-validation artifact, not an independent security certification. The operating-system identity boundary remains a manual gate while the runtime reports `unverified_same_user`.\n",
-    );
-    report
 }
 
 async fn list_terminals(
@@ -2847,106 +2710,6 @@ mod tests {
         let cancelled = response_json(cancelled).await;
         assert_eq!(cancelled["state"], "cancelled");
         assert_eq!(cancelled["result_status"], "cancelled");
-    }
-
-    #[tokio::test]
-    async fn security_validation_api_persists_and_exports_verified_safe_evidence() {
-        let (app, bootstrap) = test_app();
-        let unauthenticated = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/v1/security-validations")
-                    .body(Body::empty())
-                    .expect("valid request"),
-            )
-            .await
-            .expect("router response");
-        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
-        let token = pair_test_session(&app, &bootstrap).await;
-        let missing_origin = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/security-validations",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(missing_origin.status(), StatusCode::FORBIDDEN);
-        let payload_attempt = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                "/api/v1/security-validations",
-                &token,
-                ORIGIN,
-                r#"{"unexpected":"caller supplied"}"#,
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(payload_attempt.status(), StatusCode::BAD_REQUEST);
-        let created = app
-            .clone()
-            .oneshot(authenticated_request(
-                "POST",
-                "/api/v1/security-validations",
-                &token,
-                Some(ORIGIN),
-            ))
-            .await
-            .expect("router response");
-        assert_eq!(created.status(), StatusCode::CREATED);
-        let run = response_json(created).await;
-        assert_eq!(run["status"], "warning");
-        assert_eq!(run["checks"].as_array().map(Vec::len), Some(10));
-        assert_eq!(
-            run["checks"]
-                .as_array()
-                .expect("checks")
-                .iter()
-                .filter(|check| check["status"] == "passed")
-                .count(),
-            9
-        );
-        let run_id = run["id"].as_str().expect("run id");
-
-        let history = app
-            .clone()
-            .oneshot(authenticated_request(
-                "GET",
-                "/api/v1/security-validations",
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let history = response_json(history).await;
-        assert_eq!(
-            history["evidence_policy"],
-            "server_generated_fixed_evidence_only"
-        );
-        assert_eq!(history["items"].as_array().map(Vec::len), Some(1));
-
-        let report = app
-            .oneshot(authenticated_request(
-                "GET",
-                &format!("/api/v1/security-validations/{run_id}/report"),
-                &token,
-                None,
-            ))
-            .await
-            .expect("router response");
-        let report = response_json(report).await;
-        assert_eq!(report["digest_verified"], true);
-        assert_eq!(
-            report["disclosure"],
-            "self_validation_evidence_not_independent_certification"
-        );
-        let markdown = report["markdown"].as_str().expect("Markdown report");
-        assert!(markdown.contains("identity boundary remains a manual gate"));
-        assert!(!markdown.to_ascii_lowercase().contains("password="));
     }
 
     #[tokio::test]
