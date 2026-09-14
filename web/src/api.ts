@@ -25,12 +25,38 @@ export interface SessionResponse {
 }
 
 export type TerminalStatus = "running" | "exited" | "terminated" | "failed";
+export type TerminalShell = "powershell" | "cmd" | "bash" | "zsh" | "synthetic";
 
 export interface TerminalSummary {
   id: string;
+  name: string;
+  shell: TerminalShell;
+  working_directory: string;
+  process_id: number | null;
+  environment_variable_count: number;
   created_at_unix_ms: number;
   status: TerminalStatus;
-  mode: "synthetic_only";
+  exit_code: number | null;
+}
+
+export interface TerminalCapabilities {
+  platform: "windows" | "linux" | "macos" | "unsupported";
+  default_shell: TerminalShell | null;
+  shells: Array<{
+    shell: TerminalShell;
+    display_name: string;
+  }>;
+  max_sessions: number;
+  max_environment_variables: number;
+}
+
+export interface CreateTerminalRequest {
+  rows: number;
+  cols: number;
+  shell: TerminalShell;
+  name?: string;
+  working_directory?: string;
+  environment: Record<string, string>;
 }
 
 export type CredentialKind = "password" | "api_token" | "ssh_key";
@@ -712,10 +738,21 @@ export async function listTerminals(
   return response.terminals;
 }
 
+export async function getTerminalCapabilities(
+  sessionToken: string,
+): Promise<TerminalCapabilities> {
+  return readJson<TerminalCapabilities>(
+    await fetch("/api/v1/terminals/capabilities", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
 export async function createTerminal(
   sessionToken: string,
-  rows: number,
-  cols: number,
+  request: CreateTerminalRequest,
 ): Promise<TerminalSummary> {
   return readJson<TerminalSummary>(
     await fetch("/api/v1/terminals", {
@@ -725,7 +762,7 @@ export async function createTerminal(
       headers: {
         ...sessionJsonHeaders(sessionToken),
       },
-      body: JSON.stringify({ rows, cols }),
+      body: JSON.stringify(request),
     }),
   );
 }

@@ -13,14 +13,70 @@ import {
   listCredentialReferences,
   setCredentialSecret,
   clearCredentialSecret,
+  createTerminal,
+  getTerminalCapabilities,
   updateCredentialReference,
 } from "./api";
+import { parseTerminalEnvironment } from "./terminal";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe("configuration API client", () => {
+  it("discovers real shells and creates a terminal with explicit process settings", async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        platform: "windows",
+        default_shell: "powershell",
+        shells: [
+          { shell: "powershell", display_name: "PowerShell" },
+          { shell: "cmd", display_name: "Command Prompt" },
+        ],
+        max_sessions: 8,
+        max_environment_variables: 32,
+      }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "terminal-id",
+        name: "Build",
+        shell: "powershell",
+        status: "running",
+      }), { status: 201, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetch);
+
+    await getTerminalCapabilities("session-token");
+    await createTerminal("session-token", {
+      rows: 24,
+      cols: 100,
+      shell: "powershell",
+      name: "Build",
+      working_directory: "D:\\workspace",
+      environment: { NODE_ENV: "development" },
+    });
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/terminals/capabilities");
+    const [path, request] = fetch.mock.calls[1] as [string, RequestInit];
+    expect(path).toBe("/api/v1/terminals");
+    expect(JSON.parse(request.body as string)).toEqual({
+      rows: 24,
+      cols: 100,
+      shell: "powershell",
+      name: "Build",
+      working_directory: "D:\\workspace",
+      environment: { NODE_ENV: "development" },
+    });
+  });
+
+  it("parses ordinary terminal environment variables without treating values as syntax", () => {
+    expect(parseTerminalEnvironment("NODE_ENV=development\nEMPTY=\nLABEL=a=b\nPADDED= value ")).toEqual({
+      NODE_ENV: "development",
+      EMPTY: "",
+      LABEL: "a=b",
+      PADDED: " value ",
+    });
+    expect(() => parseTerminalEnvironment("INVALID-NAME=value")).toThrow();
+  });
+
   it("preserves the storage mode returned by the catalog", async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [], storage: "sqlite" }), {

@@ -18,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. The Web console stores passwords and API tokens in the operating-system credential store. The MCP stdio service can request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. Real system terminals, general credential injection and more connectors are the next priorities.
+> This is a local prototype under active feature development. The Web console provides reconnectable PowerShell/CMD, Bash or Zsh sessions and stores passwords and API tokens in the operating-system credential store. The MCP stdio service can request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. AI terminal control, general credential injection and more connectors are the next priorities.
 
 ## Why SecretBridge?
 
@@ -32,7 +32,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and a reconnectable synthetic PTY are implemented. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP exposes fixed tools without approval decisions, secret access, SQL, credential-injected commands or connection strings. Schema v12 removes the premature security-evidence and pilot-governance product layers so development can focus on real terminals and credential-assisted execution. See the [feature-first roadmap](ROADMAP.md).
+One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP exposes fixed tools without approval decisions, secret access, SQL, credential-injected commands, connection strings or terminal control. See the [feature-first roadmap](ROADMAP.md).
 
 ## How it works
 
@@ -76,7 +76,7 @@ pnpm build
 cargo run -p secretbridge-server
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it. **Credentials** writes passwords and API tokens to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password. **Policies**, **Approvals**, **Runs** and **Audit** drive a fixed PostgreSQL status check or offline synthetic check; neither accepts caller-provided SQL. **Secure terminal** still runs a built-in synthetic process; real PowerShell, CMD, Bash and Zsh sessions are the next feature package. The project uses a browser UI and does not plan to introduce a desktop shell.
+The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it. **Credentials** writes passwords and API tokens to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password. **Policies**, **Approvals**, **Runs** and **Audit** drive a fixed PostgreSQL status check or offline synthetic check; neither accepts caller-provided SQL. **Terminal** starts a real platform shell: PowerShell or CMD on Windows, Bash on Linux, and Zsh on macOS. Ordinary terminal environment variables are process-local and are never populated from the credential store. The project uses a browser UI and does not plan to introduce a desktop shell.
 
 Start the long-lived broker once with no arguments, then configure the same executable as an MCP stdio bridge with the single argument `--mcp-stdio`. The bridge reserves stdout for JSON-RPC, sends diagnostics to stderr and connects to the broker through a token-authenticated Windows named pipe or Unix domain socket. Closing an MCP client stops only its bridge process; the Web console, run state and terminal sessions remain owned by the broker. See the [user guide](docs/使用指南.md#mcp-stdio) for startup order, the tool list and the current same-user security limitation.
 
@@ -84,15 +84,15 @@ Start the long-lived broker once with no arguments, then configure the same exec
 
 | Platform | First validation baseline | Runtime status |
 | :--- | :--- | :--- |
-| Windows | Windows 11 · x64 | Local prototype and CI synthetic paths verified |
-| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | CI synthetic paths verified; desktop integration pending |
-| macOS | macOS 14+ · arm64/x64 | CI synthetic paths verified; desktop integration pending |
+| Windows | Windows 11 · x64 | PowerShell and CMD PTY integration covered by automated acceptance |
+| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | Bash PTY integration covered by automated acceptance |
+| macOS | macOS 14+ · arm64/x64 | Zsh PTY integration covered by automated acceptance |
 
 Other OS versions and architectures require separate validation. Actual support will be documented for each future release.
 
 ## Contribute
 
-The project is under active feature development, prioritizing real terminals, immediate AI control, credential injection, reusable tasks and common connectors. Contributions to cross-platform implementation, UI, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is under active feature development, prioritizing immediate AI terminal control, credential injection, reusable tasks and common connectors. Contributions to cross-platform implementation, UI, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

@@ -56,8 +56,8 @@ use catalog::{
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
 use terminal::{
-    TerminalConnection, TerminalError, TerminalEvent, TerminalManager, TerminalStatus,
-    TerminalSummary,
+    CreateTerminal, TerminalCapabilities, TerminalConnection, TerminalError, TerminalEvent,
+    TerminalManager, TerminalShell, TerminalStatus, TerminalSummary,
 };
 
 const BEARER_PREFIX: &str = "Bearer ";
@@ -105,11 +105,9 @@ impl AppState {
     /// Panics if the process cannot initialize an in-memory SQLite connection.
     #[must_use]
     pub fn new(trusted_origins: impl IntoIterator<Item = String>) -> (Self, String) {
-        let program =
-            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("secretbridge-server"));
         Self::build(
             trusted_origins,
-            program,
+            TerminalManager::system(),
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
@@ -127,15 +125,13 @@ impl AppState {
         trusted_origins: impl IntoIterator<Item = String>,
         database_path: &Path,
     ) -> Result<(Self, String), AppStateInitializationError> {
-        let program =
-            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("secretbridge-server"));
         let catalog = Catalog::open(database_path).map_err(AppStateInitializationError)?;
         catalog
             .recover_interrupted_runs()
             .map_err(|_| AppStateInitializationError(CatalogOpenError::Recovery))?;
         Ok(Self::build(
             trusted_origins,
-            program,
+            TerminalManager::system(),
             catalog,
             ConfigurationStorage::Sqlite,
             persistent_secret_store(),
@@ -151,7 +147,7 @@ impl AppState {
     ) -> (Self, String) {
         Self::build(
             trusted_origins,
-            program,
+            TerminalManager::synthetic(program),
             Catalog::in_memory().expect("an in-memory SQLite catalog should initialize"),
             ConfigurationStorage::MemoryOnly,
             Arc::new(secret_store::MemorySecretStore::new()),
@@ -161,7 +157,7 @@ impl AppState {
 
     fn build(
         trusted_origins: impl IntoIterator<Item = String>,
-        program: PathBuf,
+        terminals: TerminalManager,
         catalog: Catalog,
         configuration_storage: ConfigurationStorage,
         secret_store: Arc<dyn SecretStore>,
@@ -181,7 +177,7 @@ impl AppState {
             postgres_executor,
             run_cancellations: RunCancellations::default(),
             secret_store,
-            terminals: TerminalManager::new(program),
+            terminals,
         };
         (state, bootstrap_token)
     }
@@ -287,13 +283,6 @@ struct SessionResponse {
     expires_in_seconds: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CreateTerminalRequest {
-    rows: u16,
-    cols: u16,
-}
-
 #[derive(Serialize)]
 struct TerminalListResponse {
     terminals: Vec<TerminalSummary>,
@@ -382,6 +371,7 @@ enum ServerTerminalMessage {
     Ready {
         terminal_id: Uuid,
         mode: &'static str,
+        shell: TerminalShell,
         status: TerminalStatus,
         replay_from: u64,
         next_cursor: u64,
@@ -455,7 +445,7 @@ impl IntoResponse for ApiError {
             Self::TerminalCapacity => (
                 StatusCode::CONFLICT,
                 "capacity_reached",
-                "The synthetic terminal limit has been reached.",
+                "The terminal session limit has been reached.",
             ),
             Self::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -580,6 +570,10 @@ fn api_router(state: AppState) -> Router {
         .route(
             "/api/v1/terminals",
             get(list_terminals).post(create_terminal),
+        )
+        .route(
+            "/api/v1/terminals/capabilities",
+            get(get_terminal_capabilities),
         )
         .route("/api/v1/terminals/{id}", delete(delete_terminal))
         .route("/api/v1/terminals/{id}/attach", get(attach_terminal))
@@ -1417,15 +1411,23 @@ async fn list_terminals(
     }))
 }
 
+async fn get_terminal_capabilities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<TerminalCapabilities>, ApiError> {
+    require_session(&state, &headers).await?;
+    Ok(Json(state.terminals.capabilities()))
+}
+
 async fn create_terminal(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<CreateTerminalRequest>,
+    Json(request): Json<CreateTerminal>,
 ) -> Result<(StatusCode, Json<TerminalSummary>), ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
     let terminals = state.terminals.clone();
-    let summary = task::spawn_blocking(move || terminals.create(request.rows, request.cols))
+    let summary = task::spawn_blocking(move || terminals.create(&request))
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_terminal_error)?;
@@ -1556,7 +1558,7 @@ async fn prepare_terminal_socket(
             socket,
             &ServerTerminalMessage::Error {
                 code: "terminal_not_found",
-                message: "The synthetic terminal does not exist.",
+                message: "The terminal session does not exist.",
             },
         )
         .await;
@@ -1566,7 +1568,12 @@ async fn prepare_terminal_socket(
         socket,
         &ServerTerminalMessage::Ready {
             terminal_id: snapshot.summary.id,
-            mode: "synthetic_only",
+            mode: if snapshot.summary.shell == TerminalShell::Synthetic {
+                "synthetic_test"
+            } else {
+                "system_shell"
+            },
+            shell: snapshot.summary.shell,
             status: snapshot.summary.status,
             replay_from: snapshot.replay_from,
             next_cursor: snapshot.next_cursor,
@@ -1688,7 +1695,7 @@ async fn handle_terminal_event(
                 socket,
                 &ServerTerminalMessage::Error {
                     code: "terminal_failed",
-                    message: "The synthetic terminal process failed.",
+                    message: "The terminal process failed.",
                 },
             )
             .await;
@@ -1768,7 +1775,7 @@ async fn handle_client_message(
         },
         _ => ServerTerminalMessage::Error {
             code: "terminal_operation_failed",
-            message: "The synthetic terminal operation failed.",
+            message: "The terminal operation failed.",
         },
     };
     let _ = send_server_message(socket, &error).await;
@@ -1803,6 +1810,10 @@ fn map_terminal_error(error: TerminalError) -> ApiError {
         TerminalError::Capacity => ApiError::TerminalCapacity,
         TerminalError::InvalidInput
         | TerminalError::InvalidSize
+        | TerminalError::InvalidEnvironment
+        | TerminalError::InvalidName
+        | TerminalError::InvalidWorkingDirectory
+        | TerminalError::UnsupportedShell
         | TerminalError::InputLeaseRequired
         | TerminalError::Closed => ApiError::BadRequest,
         TerminalError::NotFound => ApiError::NotFound,
