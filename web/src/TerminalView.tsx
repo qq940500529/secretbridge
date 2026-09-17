@@ -18,6 +18,7 @@ import {
   type TerminalSummary,
 } from "./api";
 import { parseTerminalEnvironment } from "./terminal";
+import { useServiceChanges } from "./service-events";
 
 type Language = "zh-CN" | "en";
 type SocketState = "disconnected" | "connecting" | "connected" | "error";
@@ -351,14 +352,11 @@ export function TerminalView({ language, sessionToken }: { language: Language; s
     };
   }, [connect, sessionToken, text.loadingError]);
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      void listTerminals(sessionToken).then((items) => {
-        if (mountedRef.current) setTerminals(items);
-      }).catch(() => undefined);
-    }, 3000);
-    return () => window.clearInterval(interval);
-  }, [sessionToken]);
+  useServiceChanges(sessionToken, () => {
+    void listTerminals(sessionToken).then((items) => {
+      if (mountedRef.current) setTerminals(items);
+    }).catch(() => undefined);
+  });
 
   async function handleCreate() {
     const terminal = terminalRef.current;

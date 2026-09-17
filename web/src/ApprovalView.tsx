@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { useServiceChanges } from "./service-events";
 
 import {
   type Approval,
@@ -226,6 +227,13 @@ export function ApprovalView({
         : templatesResponse.items.find((template) => template.enabled)?.id ?? "",
     );
   }
+
+  useServiceChanges(sessionToken, () => {
+    void reload().catch(() => setError(text.loadError));
+    if (templateId) {
+      void evaluateActionTemplate(sessionToken, templateId).then(setPolicyEvaluation).catch(() => setPolicyEvaluation(null));
+    }
+  });
 
   useEffect(() => {
     let active = true;

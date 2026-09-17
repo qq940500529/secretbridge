@@ -3,6 +3,7 @@
 
 import { Ban, CircleDot, Clock3, PlayCircle, RefreshCw, ShieldCheck } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { useServiceChanges } from "./service-events";
 
 import {
   type ActionTemplate,
@@ -104,7 +105,6 @@ export function OperationsView({ language, sessionToken }: { language: Language;
     () => approvals.filter((approval) => approval.state === "approved" && approval.action_template_id && !usedApprovals.has(approval.id)),
     [approvals, usedApprovals],
   );
-  const hasActiveRuns = runs.some((run) => run.state === "queued" || run.state === "running");
 
   async function refresh() {
     const [runResponse, approvalResponse, templateResponse, targetResponse] = await Promise.all([
@@ -127,11 +127,10 @@ export function OperationsView({ language, sessionToken }: { language: Language;
     return () => { active = false; };
   }, [sessionToken, text.loadError]);
 
-  useEffect(() => {
-    if (!hasActiveRuns) return;
-    const timer = window.setInterval(() => { void refresh().catch(() => setError(text.loadError)); }, 500);
-    return () => window.clearInterval(timer);
-  }, [hasActiveRuns, sessionToken, text.loadError]);
+  useServiceChanges(sessionToken, () => {
+    void refresh().catch(() => setError(text.loadError));
+    if (expandedRunId) void loadEvents(expandedRunId).catch(() => setError(text.loadError));
+  });
 
   async function submit(event: FormEvent) {
     event.preventDefault();
