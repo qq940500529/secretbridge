@@ -36,7 +36,9 @@ One-time pairing, expiring/revocable page sessions and reconnectable real PTYs a
 
 ## How it works
 
-Native [HTTP credential tasks](docs/HTTP凭据任务.md) support fixed endpoints, authentication slots in headers or JSON bodies, ordinary parameters and selected response fields without exposing tokens to an assistant or requiring curl. HTTPS uses platform trust roots; status-only results are the default. SSH, Git, MySQL and database queries remain planned.
+Native [HTTP credential tasks](docs/HTTP凭据任务.md) support fixed endpoints, authentication slots in headers or JSON bodies, ordinary parameters and selected response fields without exposing tokens to an assistant or requiring curl. HTTPS uses platform trust roots; status-only results are the default.
+
+[SSH credential tasks](docs/SSH凭据任务.md) support explicitly trusted host fingerprints, password or Ed25519/ECDSA private-key authentication, fixed POSIX remote commands and redacted streaming output. SSH file transfer, Git, MySQL and database queries remain planned.
 
 See [credential command tasks](docs/凭据命令任务.md) for execution and output, and [parameterized tasks and authorization](docs/参数化任务与授权.md) for defaults, confirmed values and repeated grants.
 

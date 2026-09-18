@@ -175,6 +175,7 @@ export interface CredentialSlot {
 }
 export interface CommandConfig {
   http?: HttpConfig | null;
+  ssh?: SshConfig | null;
   parameters?: ParameterDefinition[];
   program: string;
   working_directory: string;
@@ -185,6 +186,19 @@ export type HttpValueSource =
   | { kind: "literal"; value: string }
   | { kind: "parameter"; name: string }
   | { kind: "credential"; name: string; prefix: string };
+export interface SshConfig {
+  host: string;
+  port: number;
+  username: string;
+  host_key_sha256: string;
+  authentication:
+    | { kind: "password"; slot: string }
+    | { kind: "private_key"; slot: string; passphrase_slot: string | null };
+  remote_program: string;
+  arguments: Array<
+    { kind: "literal"; value: string } | { kind: "parameter"; name: string }
+  >;
+}
 export interface HttpField {
   name: string;
   source: HttpValueSource;

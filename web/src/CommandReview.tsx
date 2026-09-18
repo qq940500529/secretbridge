@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ActionTemplate, ParameterValue } from "./api";
+import { sshCommandPreview } from "./SshEditor";
 
 export function CommandReview({
   template,
@@ -24,6 +25,37 @@ export function CommandReview({
       </p>
     );
   const config = template.command;
+  if (config.ssh)
+    return (
+      <details className="mt-3 border-y border-slate-200 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
+          {zh
+            ? "查看 SSH 主机、认证与命令"
+            : "Review SSH host, authentication and command"}
+        </summary>
+        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-[7rem_1fr]">
+          <dt>{zh ? "连接" : "Connection"}</dt>
+          <dd className="break-all font-mono">
+            {config.ssh.username}@{config.ssh.host}:{config.ssh.port}
+          </dd>
+          <dt>{zh ? "主机指纹" : "Host fingerprint"}</dt>
+          <dd className="break-all font-mono">{config.ssh.host_key_sha256}</dd>
+          <dt>{zh ? "认证方式" : "Authentication"}</dt>
+          <dd>{config.ssh.authentication.kind}</dd>
+          <dt>{zh ? "远程命令" : "Remote command"}</dt>
+          <dd className="whitespace-pre-wrap break-all font-mono">
+            {sshCommandPreview(config.ssh, parameters)}
+          </dd>
+          <dt>{zh ? "凭据插槽" : "Credential slots"}</dt>
+          <dd>{config.slots.map((s) => s.name).join(", ")}</dd>
+        </dl>
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "普通参数逐项按 POSIX Shell 引用；不分配交互式终端。取消只断开连接，不保证远程任务撤回。"
+            : "Arguments are individually POSIX-shell quoted. No interactive terminal is allocated. Cancellation disconnects but cannot guarantee remote rollback."}
+        </p>
+      </details>
+    );
   if (config.http)
     return (
       <details className="mt-3 border-y border-slate-200 py-3">

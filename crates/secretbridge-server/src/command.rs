@@ -26,6 +26,8 @@ pub struct CommandConfig {
     #[serde(default)]
     pub http: Option<crate::http_task::HttpConfig>,
     #[serde(default)]
+    pub ssh: Option<crate::ssh_task::SshConfig>,
+    #[serde(default)]
     pub parameters: Vec<crate::parameters::ParameterDefinition>,
     pub program: String,
     pub working_directory: String,
@@ -55,6 +57,12 @@ pub enum Injection {
 impl CommandConfig {
     pub fn validate(&self) -> Result<(), CatalogError> {
         crate::parameters::validate(&self.parameters)?;
+        if self.http.is_some() && self.ssh.is_some() {
+            return Err(CatalogError::Invalid);
+        }
+        if let Some(ssh) = &self.ssh {
+            return ssh.validate(self);
+        }
         if let Some(http) = &self.http {
             return http.validate(self);
         }
@@ -296,6 +304,20 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
+    if let Some(ssh) = &config.ssh {
+        crate::ssh_task::drive(
+            state,
+            id,
+            ssh,
+            &config,
+            &parameters,
+            &secrets,
+            cancellation,
+            limit,
+        )
+        .await;
+        return;
+    }
     if let Some(http) = &config.http {
         crate::http_task::drive(
             state,
@@ -671,6 +693,7 @@ pub(crate) mod tests {
         }
         CommandConfig {
             http: None,
+            ssh: None,
             parameters: Vec::new(),
             program: program.to_string_lossy().into_owned(),
             working_directory: directory.to_string_lossy().into_owned(),
@@ -1042,6 +1065,16 @@ pub(crate) mod tests {
         path: &str,
         body: serde_json::Value,
     ) -> (axum::http::StatusCode, serde_json::Value) {
+        web_request_method(state, token, "POST", path, body).await
+    }
+
+    pub(crate) async fn web_request_method(
+        state: &AppState,
+        token: &str,
+        method: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
         use axum::{
             body::{Body, to_bytes},
             http::Request,
@@ -1050,7 +1083,7 @@ pub(crate) mod tests {
         let response = crate::router(state.clone())
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method(method)
                     .uri(path)
                     .header("origin", "http://127.0.0.1:8787")
                     .header("authorization", format!("Bearer {token}"))

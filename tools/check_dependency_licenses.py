@@ -30,6 +30,7 @@ REVIEWED_RUST_LICENSES = {
     "MIT AND BSD-3-Clause",
     "MIT OR Apache-2.0",
     "MIT OR Apache-2.0 OR Zlib",
+    "MIT OR Apache-2.0 OR BSD-1-Clause",
     "MIT OR Apache-2.0 OR LGPL-2.1-or-later",
     "MIT/Apache-2.0",
     "Unicode-3.0",

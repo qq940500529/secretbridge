@@ -6,7 +6,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-alpha.27"
+version = "0.1.0-alpha.28"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-or-later"
@@ -20,6 +20,8 @@ http-body-util = "=0.1.5"
 keyring = "=4.2.0"
 portable-pty = "=0.9.0"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }
+russh = { version = "=0.63.2", default-features = false, features = ["ring"] }
+rand = "=0.10.2"
 rmcp = { version = "=3.3.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rusqlite = { version = "=0.40.2", features = ["bundled"], default-features = false }
 schemars = "=1.2.2"
