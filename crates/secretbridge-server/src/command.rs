@@ -28,6 +28,8 @@ pub struct CommandConfig {
     #[serde(default)]
     pub ssh: Option<crate::ssh_task::SshConfig>,
     #[serde(default)]
+    pub git: Option<crate::git_task::GitConfig>,
+    #[serde(default)]
     pub parameters: Vec<crate::parameters::ParameterDefinition>,
     pub program: String,
     pub working_directory: String,
@@ -57,8 +59,15 @@ pub enum Injection {
 impl CommandConfig {
     pub fn validate(&self) -> Result<(), CatalogError> {
         crate::parameters::validate(&self.parameters)?;
-        if self.http.is_some() && self.ssh.is_some() {
+        if usize::from(self.http.is_some())
+            + usize::from(self.ssh.is_some())
+            + usize::from(self.git.is_some())
+            > 1
+        {
             return Err(CatalogError::Invalid);
+        }
+        if let Some(git) = &self.git {
+            return git.validate(self);
         }
         if let Some(ssh) = &self.ssh {
             return ssh.validate(self);
@@ -454,6 +463,17 @@ fn execute(
         return ("command_failed", None);
     }
     let mut command = Command::new(&config.program);
+    let git_operation = config.git.as_ref().map(|git| git.operation);
+    let prepared = config.git.as_ref().map(|git| git.prepare(config, secrets));
+    let (config, secrets) = if let Some(prepared) = &prepared {
+        let Ok((prepared_config, prepared_secrets)) = prepared else {
+            return ("command_failed", None);
+        };
+        crate::git_task::configure_environment(&mut command);
+        (prepared_config, prepared_secrets.as_slice())
+    } else {
+        (config, secrets)
+    };
     command
         .current_dir(&config.working_directory)
         .stdin(Stdio::piped())
@@ -621,6 +641,18 @@ fn execute(
     if !files.cleanup() {
         return ("command_cleanup_failed", exit);
     }
+    if let Some(operation) = git_operation {
+        let summary = serde_json::json!({"kind":"git", "operation":operation, "exit_code":exit, "error_code":match status {"command_ok" => None, "timed_out" => Some("timed_out"), "cancelled" => Some("cancelled"), _ => Some("git_failed")}}).to_string();
+        let mut redactor = Redactor::new(secrets);
+        let filtered = redactor.feed(summary.as_bytes(), true);
+        if state
+            .catalog
+            .append_output(id, "stdout", &String::from_utf8_lossy(&filtered))
+            .is_err()
+        {
+            return ("command_failed", exit);
+        }
+    }
     (status, exit)
 }
 
@@ -694,6 +726,7 @@ pub(crate) mod tests {
         CommandConfig {
             http: None,
             ssh: None,
+            git: None,
             parameters: Vec::new(),
             program: program.to_string_lossy().into_owned(),
             working_directory: directory.to_string_lossy().into_owned(),

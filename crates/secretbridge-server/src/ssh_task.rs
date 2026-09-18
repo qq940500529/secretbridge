@@ -43,6 +43,8 @@ pub struct SshConfig {
     pub remote_program: String,
     #[serde(default)]
     pub arguments: Vec<Argument>,
+    #[serde(default)]
+    pub transfer: Option<crate::sftp_task::TransferConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -84,7 +86,7 @@ impl SshConfig {
                 .username
                 .chars()
                 .any(|c| c.is_control() || c.is_whitespace())
-            || !self.remote_program.starts_with('/')
+            || (self.transfer.is_none() && !self.remote_program.starts_with('/'))
             || self.remote_program.len() > 1024
             || self.remote_program.contains('\0')
             || self.arguments.len() > 32
@@ -93,6 +95,15 @@ impl SshConfig {
             || !config.arguments.is_empty()
         {
             return Err(CatalogError::Invalid);
+        }
+        if let Some(transfer) = &self.transfer {
+            if !self.remote_program.is_empty()
+                || !self.arguments.is_empty()
+                || !config.parameters.is_empty()
+            {
+                return Err(CatalogError::Invalid);
+            }
+            transfer.validate()?;
         }
         let slots: Vec<&str> = match &self.authentication {
             Authentication::Password { slot } => vec![slot],
@@ -156,7 +167,7 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-struct HostVerifier {
+pub(crate) struct HostVerifier {
     expected: String,
     rejected: Arc<AtomicBool>,
 }
@@ -212,7 +223,7 @@ impl AsyncWrite for Transport {
         Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }
-struct TransportGuard(CancellationToken);
+pub(crate) struct TransportGuard(CancellationToken);
 impl Drop for TransportGuard {
     fn drop(&mut self) {
         self.0.cancel();
@@ -257,22 +268,13 @@ fn secret<'a>(
         .ok_or("invalid_input")
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "uses the existing credential execution context"
-)]
-async fn execute(
-    state: &AppState,
-    id: Uuid,
+pub(crate) async fn connect(
     ssh: &SshConfig,
     config: &CommandConfig,
-    parameters: &ParameterValues,
     secrets: &[Zeroizing<String>],
-    stdout: &mut Output,
-    stderr: &mut Output,
-) -> Result<i32, &'static str> {
+) -> Result<(client::Handle<HostVerifier>, TransportGuard), &'static str> {
     let transport_stop = CancellationToken::new();
-    let _guard = TransportGuard(transport_stop.clone());
+    let guard = TransportGuard(transport_stop.clone());
     let stream = TcpStream::connect((ssh.host.as_str(), ssh.port))
         .await
         .map_err(|_| "connection_failed")?;
@@ -329,6 +331,24 @@ async fn execute(
     if !authentication.success() {
         return Err("authentication_failed");
     }
+    Ok((session, guard))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "uses the existing credential execution context"
+)]
+async fn execute(
+    state: &AppState,
+    id: Uuid,
+    ssh: &SshConfig,
+    config: &CommandConfig,
+    parameters: &ParameterValues,
+    secrets: &[Zeroizing<String>],
+    stdout: &mut Output,
+    stderr: &mut Output,
+) -> Result<i32, &'static str> {
+    let (session, _guard) = connect(ssh, config, secrets).await?;
     let mut channel = session
         .channel_open_session()
         .await
@@ -371,6 +391,20 @@ pub async fn drive(
     cancellation: &CancellationToken,
     limit: Duration,
 ) {
+    if let Some(transfer) = &ssh.transfer {
+        crate::sftp_task::drive(
+            state,
+            id,
+            ssh,
+            config,
+            transfer,
+            secrets,
+            cancellation,
+            limit,
+        )
+        .await;
+        return;
+    }
     let mut stdout = Output {
         redactor: Redactor::new(secrets),
         decoder: Utf8Decoder::default(),
@@ -422,6 +456,9 @@ pub(crate) mod tests {
     pub(crate) const SECRET: &str = "Synthetic-ssh-password_A&z";
     const PASSPHRASE: &str = "Synthetic-key-passphrase_A&z";
     pub(crate) struct Fixture {
+        pub files: crate::sftp_task::tests::RemoteFiles,
+        pub slow_writes: Arc<AtomicBool>,
+        pub write_hits: Arc<AtomicUsize>,
         pub port: u16,
         pub fingerprint: String,
         key: PrivateKey,
@@ -436,6 +473,10 @@ pub(crate) mod tests {
         }
     }
     struct Server {
+        channels: std::collections::HashMap<ChannelId, Channel<server::Msg>>,
+        files: crate::sftp_task::tests::RemoteFiles,
+        slow_writes: Arc<AtomicBool>,
+        write_hits: Arc<AtomicUsize>,
         key: Arc<PublicKey>,
         auth_hits: Arc<AtomicUsize>,
         commands: Arc<Mutex<Vec<String>>>,
@@ -474,11 +515,36 @@ pub(crate) mod tests {
         }
         async fn channel_open_session(
             &mut self,
-            _channel: Channel<server::Msg>,
+            channel: Channel<server::Msg>,
             reply: server::ChannelOpenHandle,
             _session: &mut server::Session,
         ) -> Result<(), Self::Error> {
+            self.channels.insert(channel.id(), channel);
             reply.accept().await;
+            Ok(())
+        }
+        #[allow(
+            clippy::unused_async_trait_impl,
+            reason = "SFTP runs independently of SSH event processing"
+        )]
+        async fn subsystem_request(
+            &mut self,
+            id: ChannelId,
+            name: &str,
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            if name != "sftp" {
+                session.channel_failure(id)?;
+                return Ok(());
+            }
+            let channel = self.channels.remove(&id).unwrap();
+            let handler = crate::sftp_task::tests::MemorySftp::new(
+                self.files.clone(),
+                self.slow_writes.clone(),
+                self.write_hits.clone(),
+            );
+            session.channel_success(id)?;
+            tokio::spawn(russh_sftp::server::run(channel.into_stream(), handler));
             Ok(())
         }
         #[allow(
@@ -544,13 +610,19 @@ pub(crate) mod tests {
         let hits = auth_hits.clone();
         let executed = commands.clone();
         let closed = disconnected.clone();
+        let files = crate::sftp_task::tests::RemoteFiles::default();
+        let slow_writes = Arc::new(AtomicBool::new(false));
+        let write_hits = Arc::new(AtomicUsize::new(0));
+        let remote = files.clone();
+        let slow = slow_writes.clone();
+        let writes = write_hits.clone();
         let listener = tokio::spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
                     accepted = socket.accept() => {
                         let (stream, _) = accepted.unwrap();
-                        let handler = Server { key: public_key.clone(), auth_hits: hits.clone(), commands: executed.clone(), disconnected: closed.clone() };
+                        let handler = Server { channels: std::collections::HashMap::new(), files: remote.clone(), slow_writes: slow.clone(), write_hits: writes.clone(), key: public_key.clone(), auth_hits: hits.clone(), commands: executed.clone(), disconnected: closed.clone() };
                         let config = config.clone();
                         sessions.spawn(async move {
                             if let Ok(session) = server::run_stream(config, stream, handler).await { let _ = session.await; }
@@ -561,6 +633,9 @@ pub(crate) mod tests {
             }
         });
         Fixture {
+            files,
+            slow_writes,
+            write_hits,
             port,
             fingerprint,
             key,

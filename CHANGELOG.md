@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.29
+
+- Added native single-file SFTP upload/download through the existing pinned SSH password/private-key authentication, fixed paths, explicit replacement, size limits, temporary-file commit and bounded cleanup reporting.
+- Preserved existing destinations on transfer failure and cancellation; upload replacement requires the server's POSIX rename extension, and no-overwrite download uses exclusive hard-link commit.
+- Added Git HTTPS token tasks for fixed-branch inspection, fetch and non-forced push using a user-installed Git executable. Fetch does not merge the working tree; push cannot be rolled back by cancellation.
+- Kept Git authentication out of URLs, argv, credential helpers and temporary files. Auth headers exist only in the task's child-process environment; raw tokens and known encoded authentication representations are filtered before output storage.
+- Added dedicated bilingual editors, frozen approval previews, MCP execution-kind summaries, and real local SFTP/Git smart-HTTP, Web API, native MCP/IPC and SQLite reopen regression coverage.
+- Added exact russh-sftp 3.0.0 and base64 0.22.1 dependencies with third-party notices. Git over SSH, recursive transfers, clone, merge and force-push are not included.
+
 ## 0.1.0-alpha.28
 
 - Added native SSH credential tasks with mandatory SHA256 host-key pinning, password and Ed25519/ECDSA private-key authentication, including separate encrypted-key passphrase references.

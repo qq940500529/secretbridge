@@ -76,7 +76,7 @@ export function ActionTemplatesView({
             inspect_metadata: "查看非秘密元数据",
             synthetic_health_check: "合成健康检查",
             postgres_connection_check: "PostgreSQL 只读连接检查",
-            command_execution: "凭据任务（程序 / HTTP / SSH）",
+            command_execution: "凭据任务",
           },
           scopeLabels: {
             status_only: "仅状态",
@@ -127,7 +127,7 @@ export function ActionTemplatesView({
             inspect_metadata: "Inspect non-secret metadata",
             synthetic_health_check: "Synthetic health check",
             postgres_connection_check: "PostgreSQL read-only connection check",
-            command_execution: "Credential task (program / HTTP / SSH)",
+            command_execution: "Credential task",
           },
           scopeLabels: {
             status_only: "Status only",

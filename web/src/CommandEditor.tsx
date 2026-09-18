@@ -6,6 +6,7 @@ import type { CommandConfig, CredentialReference, CredentialSlot } from "./api";
 import { ParameterEditor } from "./ParameterEditor";
 import { HttpEditor, emptyHttp } from "./HttpEditor";
 import { SshEditor, emptySsh } from "./SshEditor";
+import { GitEditor, emptyGit } from "./GitEditor";
 
 export const emptyCommand: CommandConfig = {
   program: "",
@@ -37,12 +38,38 @@ export function CommandEditor({
     <label className="block text-sm font-semibold">
       {zh ? "执行方式" : "Execution method"}
       <select
-        value={value.ssh ? "ssh" : value.http ? "http" : "program"}
+        value={
+          value.git
+            ? "git"
+            : value.ssh?.transfer
+              ? "sftp"
+              : value.ssh
+                ? "ssh"
+                : value.http
+                  ? "http"
+                  : "program"
+        }
         onChange={(e) =>
           onChange({
             ...value,
             http: e.target.value === "http" ? emptyHttp : null,
-            ssh: e.target.value === "ssh" ? emptySsh : null,
+            ssh:
+              e.target.value === "ssh"
+                ? emptySsh
+                : e.target.value === "sftp"
+                  ? {
+                      ...emptySsh,
+                      transfer: {
+                        direction: "upload",
+                        local_path: "",
+                        remote_path: "",
+                        overwrite: false,
+                        max_bytes: 268435456,
+                      },
+                    }
+                  : null,
+            git: e.target.value === "git" ? emptyGit : null,
+            parameters: [],
             program: "",
             working_directory: "",
             arguments: [],
@@ -54,13 +81,32 @@ export function CommandEditor({
         <option value="program">{zh ? "本机程序" : "Local program"}</option>
         <option value="http">HTTP / HTTPS</option>
         <option value="ssh">SSH</option>
+        <option value="sftp">
+          {zh ? "SFTP 文件传输" : "SFTP file transfer"}
+        </option>
+        <option value="git">Git HTTPS</option>
       </select>
     </label>
   );
+  if (value.git)
+    return (
+      <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">
+        <legend className="px-1 text-sm font-semibold">Git HTTPS</legend>
+        {selector}
+        <GitEditor
+          config={value}
+          onChange={onChange}
+          credentials={credentials}
+          zh={zh}
+        />
+      </fieldset>
+    );
   if (value.ssh)
     return (
       <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">
-        <legend className="px-1 text-sm font-semibold">SSH</legend>
+        <legend className="px-1 text-sm font-semibold">
+          {value.ssh.transfer ? "SFTP" : "SSH"}
+        </legend>
         {selector}
         <SshEditor
           config={value}
@@ -68,11 +114,13 @@ export function CommandEditor({
           credentials={credentials}
           zh={zh}
         />
-        <ParameterEditor
-          value={value.parameters ?? []}
-          onChange={(parameters) => onChange({ ...value, parameters })}
-          zh={zh}
-        />
+        {!value.ssh.transfer && (
+          <ParameterEditor
+            value={value.parameters ?? []}
+            onChange={(parameters) => onChange({ ...value, parameters })}
+            zh={zh}
+          />
+        )}
       </fieldset>
     );
   if (value.http)
