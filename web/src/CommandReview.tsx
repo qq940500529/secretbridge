@@ -25,13 +25,45 @@ export function CommandReview({
       </p>
     );
   const config = template.command;
+  if (config.git)
+    return (
+      <details className="mt-3 border-y border-slate-200 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
+          {zh ? "查看 Git 仓库与操作" : "Review Git repository and operation"}
+        </summary>
+        <pre className="mt-3 overflow-auto text-xs">
+          {JSON.stringify(
+            {
+              program: config.program,
+              directory: config.working_directory,
+              operation: config.git.operation,
+              remote_url: config.git.remote_url,
+              branch: config.git.branch,
+              username: config.git.username,
+              credential_slots: config.slots.map((s) => s.name),
+            },
+            null,
+            2,
+          )}
+        </pre>
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "拉取不合并工作区；推送不强制覆盖。取消不能撤回远程更新。"
+            : "Fetch does not merge the working tree; push never forces. Cancellation cannot roll back remote updates."}
+        </p>
+      </details>
+    );
   if (config.ssh)
     return (
       <details className="mt-3 border-y border-slate-200 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
-          {zh
-            ? "查看 SSH 主机、认证与命令"
-            : "Review SSH host, authentication and command"}
+          {config.ssh.transfer
+            ? zh
+              ? "查看 SFTP 主机、认证与传输配置"
+              : "Review SFTP host, authentication and transfer"
+            : zh
+              ? "查看 SSH 主机、认证与命令"
+              : "Review SSH host, authentication and command"}
         </summary>
         <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-[7rem_1fr]">
           <dt>{zh ? "连接" : "Connection"}</dt>
@@ -42,17 +74,31 @@ export function CommandReview({
           <dd className="break-all font-mono">{config.ssh.host_key_sha256}</dd>
           <dt>{zh ? "认证方式" : "Authentication"}</dt>
           <dd>{config.ssh.authentication.kind}</dd>
-          <dt>{zh ? "远程命令" : "Remote command"}</dt>
+          <dt>
+            {config.ssh.transfer
+              ? zh
+                ? "传输配置"
+                : "Transfer"
+              : zh
+                ? "远程命令"
+                : "Remote command"}
+          </dt>
           <dd className="whitespace-pre-wrap break-all font-mono">
-            {sshCommandPreview(config.ssh, parameters)}
+            {config.ssh.transfer
+              ? `${zh ? "方向" : "Direction"}: ${config.ssh.transfer.direction}\n${zh ? "本机路径" : "Local path"}: ${config.ssh.transfer.local_path}\n${zh ? "远程路径" : "Remote path"}: ${config.ssh.transfer.remote_path}\n${zh ? "覆盖目标" : "Replacement"}: ${config.ssh.transfer.overwrite ? (zh ? "允许" : "Allowed") : zh ? "不允许" : "Denied"}\n${zh ? "大小上限（字节）" : "Size limit (bytes)"}: ${config.ssh.transfer.max_bytes}`
+              : sshCommandPreview(config.ssh, parameters)}
           </dd>
           <dt>{zh ? "凭据插槽" : "Credential slots"}</dt>
           <dd>{config.slots.map((s) => s.name).join(", ")}</dd>
         </dl>
         <p className="mt-2 text-xs text-slate-600">
-          {zh
-            ? "普通参数逐项按 POSIX Shell 引用；不分配交互式终端。取消只断开连接，不保证远程任务撤回。"
-            : "Arguments are individually POSIX-shell quoted. No interactive terminal is allocated. Cancellation disconnects but cannot guarantee remote rollback."}
+          {config.ssh.transfer
+            ? zh
+              ? "固定单文件传输；覆盖开关和大小限制随模板冻结。清理失败会在结果中标记。"
+              : "Fixed single-file transfer; overwrite and size limits are frozen with the template. Cleanup failures are marked in results."
+            : zh
+              ? "普通参数逐项按 POSIX Shell 引用；不分配交互式终端。取消只断开连接，不保证远程任务撤回。"
+              : "Arguments are individually POSIX-shell quoted. No interactive terminal is allocated. Cancellation disconnects but cannot guarantee remote rollback."}
         </p>
       </details>
     );

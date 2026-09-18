@@ -174,6 +174,7 @@ export interface CredentialSlot {
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  git?: GitConfig | null;
   http?: HttpConfig | null;
   ssh?: SshConfig | null;
   parameters?: ParameterDefinition[];
@@ -187,6 +188,7 @@ export type HttpValueSource =
   | { kind: "parameter"; name: string }
   | { kind: "credential"; name: string; prefix: string };
 export interface SshConfig {
+  transfer?: TransferConfig | null;
   host: string;
   port: number;
   username: string;
@@ -198,6 +200,20 @@ export interface SshConfig {
   arguments: Array<
     { kind: "literal"; value: string } | { kind: "parameter"; name: string }
   >;
+}
+export interface TransferConfig {
+  direction: "upload" | "download";
+  local_path: string;
+  remote_path: string;
+  overwrite: boolean;
+  max_bytes: number;
+}
+export interface GitConfig {
+  operation: "inspect" | "fetch" | "push";
+  remote_url: string;
+  branch: string;
+  username: string;
+  token_slot: string;
 }
 export interface HttpField {
   name: string;
@@ -288,8 +304,7 @@ export interface ApprovalListResponse extends CatalogListResponse<Approval> {
   execution_enabled: true;
 }
 
-export interface ActionTemplateListResponse
-  extends CatalogListResponse<ActionTemplate> {
+export interface ActionTemplateListResponse extends CatalogListResponse<ActionTemplate> {
   execution_enabled: true;
 }
 

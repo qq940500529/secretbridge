@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Plus, Trash2 } from "lucide-react";
+import { TransferEditor } from "./TransferEditor";
 import type {
   CommandConfig,
   CredentialReference,
@@ -95,8 +96,15 @@ export function SshEditor({
     <div className="space-y-5">
       <p className="text-sm leading-6 text-slate-600">
         {zh
-          ? "凭据仅用于协议认证，不写入命令行或临时文件。请通过可信渠道确认 SHA256 主机指纹；不会自动信任首次连接的主机。远程主机必须支持 POSIX Shell。"
-          : "Credentials are used only for protocol authentication, never command-line arguments or temporary files. Confirm the SHA256 host fingerprint through a trusted channel; first use is not automatically trusted. The remote host must support a POSIX shell."}
+          ? "凭据仅用于协议认证，不写入命令行或临时文件。请通过可信渠道确认 SHA256 主机指纹；不会自动信任首次连接的主机。"
+          : "Credentials are used only for protocol authentication, never command-line arguments or temporary files. Confirm the SHA256 host fingerprint through a trusted channel; first use is not automatically trusted."}
+        {ssh.transfer
+          ? zh
+            ? "远程主机需要启用 SFTP 子系统。"
+            : "The remote host must enable the SFTP subsystem."
+          : zh
+            ? "远程主机必须支持 POSIX Shell。"
+            : "The remote host must support a POSIX shell."}
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="text-sm font-semibold">
@@ -213,138 +221,150 @@ export function SshEditor({
           </>
         )}
       </section>
-      <section className="space-y-3 border-t border-slate-200 pt-4">
-        <label className="block text-sm font-semibold">
-          {zh ? "远程程序绝对路径" : "Absolute remote program path"}
-          <input
-            required
-            maxLength={1024}
-            className={`${input} font-mono`}
-            value={ssh.remote_program}
-            onChange={(e) => update({ remote_program: e.target.value })}
-            placeholder="/usr/bin/printf"
-          />
-        </label>
-        <p className="text-xs leading-5 text-slate-600">
-          {zh
-            ? "每行一个参数。普通参数在审批时确定，不替换主机、用户名、指纹或认证插槽；不会递归展开。"
-            : "One argument per row. Ordinary values are frozen at approval and cannot replace the host, username, fingerprint or authentication slots; they are never recursively expanded."}
-        </p>
-        <table className="w-full text-left text-sm">
-          <thead className="bg-slate-50">
-            <tr>
-              <th className="p-2">{zh ? "来源" : "Source"}</th>
-              <th className="p-2">
-                {zh ? "值 / 参数名" : "Value / parameter"}
-              </th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {ssh.arguments.map((arg, index) => (
-              <tr key={index} className="border-b border-slate-200">
-                <td className="p-2">
-                  <select
-                    aria-label={zh ? "参数来源" : "Argument source"}
-                    className={input}
-                    value={arg.kind}
-                    onChange={(e) =>
-                      update({
-                        arguments: ssh.arguments.map((a, i) =>
-                          i === index
-                            ? e.target.value === "literal"
-                              ? { kind: "literal", value: "" }
-                              : {
-                                  kind: "parameter",
-                                  name: config.parameters?.[0]?.name ?? "",
-                                }
-                            : a,
-                        ),
-                      })
-                    }
-                  >
-                    <option value="literal">{zh ? "固定值" : "Literal"}</option>
-                    <option value="parameter">
-                      {zh ? "普通参数" : "Parameter"}
-                    </option>
-                  </select>
-                </td>
-                <td className="p-2">
-                  {arg.kind === "literal" ? (
-                    <input
-                      aria-label={zh ? "固定参数值" : "Literal value"}
-                      maxLength={8192}
-                      className={input}
-                      value={arg.value}
-                      onChange={(e) =>
-                        update({
-                          arguments: ssh.arguments.map((a, i) =>
-                            i === index
-                              ? { kind: "literal", value: e.target.value }
-                              : a,
-                          ),
-                        })
-                      }
-                    />
-                  ) : (
+      {ssh.transfer ? (
+        <TransferEditor
+          value={ssh.transfer}
+          onChange={(transfer) => update({ transfer })}
+          zh={zh}
+        />
+      ) : (
+        <section className="space-y-3 border-t border-slate-200 pt-4">
+          <label className="block text-sm font-semibold">
+            {zh ? "远程程序绝对路径" : "Absolute remote program path"}
+            <input
+              required
+              maxLength={1024}
+              className={`${input} font-mono`}
+              value={ssh.remote_program}
+              onChange={(e) => update({ remote_program: e.target.value })}
+              placeholder="/usr/bin/printf"
+            />
+          </label>
+          <p className="text-xs leading-5 text-slate-600">
+            {zh
+              ? "每行一个参数。普通参数在审批时确定，不替换主机、用户名、指纹或认证插槽；不会递归展开。"
+              : "One argument per row. Ordinary values are frozen at approval and cannot replace the host, username, fingerprint or authentication slots; they are never recursively expanded."}
+          </p>
+          <table className="w-full text-left text-sm">
+            <thead className="bg-slate-50">
+              <tr>
+                <th className="p-2">{zh ? "来源" : "Source"}</th>
+                <th className="p-2">
+                  {zh ? "值 / 参数名" : "Value / parameter"}
+                </th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {ssh.arguments.map((arg, index) => (
+                <tr key={index} className="border-b border-slate-200">
+                  <td className="p-2">
                     <select
-                      required
-                      aria-label={zh ? "普通参数名" : "Parameter name"}
+                      aria-label={zh ? "参数来源" : "Argument source"}
                       className={input}
-                      value={arg.name}
+                      value={arg.kind}
                       onChange={(e) =>
                         update({
                           arguments: ssh.arguments.map((a, i) =>
                             i === index
-                              ? { kind: "parameter", name: e.target.value }
+                              ? e.target.value === "literal"
+                                ? { kind: "literal", value: "" }
+                                : {
+                                    kind: "parameter",
+                                    name: config.parameters?.[0]?.name ?? "",
+                                  }
                               : a,
                           ),
                         })
                       }
                     >
-                      <option value="">
-                        {zh ? "请选择参数" : "Choose a parameter"}
+                      <option value="literal">
+                        {zh ? "固定值" : "Literal"}
                       </option>
-                      {config.parameters?.map((p) => (
-                        <option key={p.name} value={p.name}>
-                          {p.label} ({p.name})
-                        </option>
-                      ))}
+                      <option value="parameter">
+                        {zh ? "普通参数" : "Parameter"}
+                      </option>
                     </select>
-                  )}
-                </td>
-                <td className="p-2">
-                  <button
-                    type="button"
-                    aria-label={zh ? "删除参数" : "Remove argument"}
-                    className="rounded-md p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
-                    onClick={() =>
-                      update({
-                        arguments: ssh.arguments.filter((_, i) => i !== index),
-                      })
-                    }
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <button
-          type="button"
-          disabled={ssh.arguments.length >= 32}
-          className="inline-flex items-center gap-2 text-sm font-semibold text-cyan-800 disabled:opacity-40"
-          onClick={() =>
-            update({
-              arguments: [...ssh.arguments, { kind: "literal", value: "" }],
-            })
-          }
-        >
-          <Plus size={16} />
-          {zh ? "增加参数" : "Add argument"}
-        </button>
-      </section>
+                  </td>
+                  <td className="p-2">
+                    {arg.kind === "literal" ? (
+                      <input
+                        aria-label={zh ? "固定参数值" : "Literal value"}
+                        maxLength={8192}
+                        className={input}
+                        value={arg.value}
+                        onChange={(e) =>
+                          update({
+                            arguments: ssh.arguments.map((a, i) =>
+                              i === index
+                                ? { kind: "literal", value: e.target.value }
+                                : a,
+                            ),
+                          })
+                        }
+                      />
+                    ) : (
+                      <select
+                        required
+                        aria-label={zh ? "普通参数名" : "Parameter name"}
+                        className={input}
+                        value={arg.name}
+                        onChange={(e) =>
+                          update({
+                            arguments: ssh.arguments.map((a, i) =>
+                              i === index
+                                ? { kind: "parameter", name: e.target.value }
+                                : a,
+                            ),
+                          })
+                        }
+                      >
+                        <option value="">
+                          {zh ? "请选择参数" : "Choose a parameter"}
+                        </option>
+                        {config.parameters?.map((p) => (
+                          <option key={p.name} value={p.name}>
+                            {p.label} ({p.name})
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                  <td className="p-2">
+                    <button
+                      type="button"
+                      aria-label={zh ? "删除参数" : "Remove argument"}
+                      className="rounded-md p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-700"
+                      onClick={() =>
+                        update({
+                          arguments: ssh.arguments.filter(
+                            (_, i) => i !== index,
+                          ),
+                        })
+                      }
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <button
+            type="button"
+            disabled={ssh.arguments.length >= 32}
+            className="inline-flex items-center gap-2 text-sm font-semibold text-cyan-800 disabled:opacity-40"
+            onClick={() =>
+              update({
+                arguments: [...ssh.arguments, { kind: "literal", value: "" }],
+              })
+            }
+          >
+            <Plus size={16} />
+            {zh ? "增加参数" : "Add argument"}
+          </button>
+        </section>
+      )}
     </div>
   );
 }

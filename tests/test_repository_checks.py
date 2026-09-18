@@ -105,7 +105,7 @@ class RepositoryChecks(unittest.TestCase):
     def test_application_source_types_are_checked_as_text(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("main.rs", "App.tsx", "styles.css", "Cargo.toml", "fixture.ps1", "fixture.sh"):
+            for name in ("main.rs", "App.tsx", "styles.css", "Cargo.toml", "fixture.ps1", "fixture.sh", "fixture.mjs"):
                 with self.subTest(name=name):
                     path = root / name
                     path.write_text("synthetic", encoding="utf-8")

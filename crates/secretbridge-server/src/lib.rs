@@ -5,12 +5,14 @@
 
 mod catalog;
 mod command;
+mod git_task;
 mod http_task;
 mod mcp;
 mod parameters;
 mod postgres;
 mod redaction;
 mod secret_store;
+mod sftp_task;
 mod ssh_task;
 mod terminal;
 mod terminal_control;

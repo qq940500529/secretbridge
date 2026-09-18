@@ -1451,7 +1451,15 @@ struct TemplateSummary {
 impl From<ActionTemplate> for TemplateSummary {
     fn from(template: ActionTemplate) -> Self {
         Self {
-            execution_kind: if template.command.as_ref().is_some_and(|c| c.ssh.is_some()) {
+            execution_kind: if template
+                .command
+                .as_ref()
+                .is_some_and(|c| c.ssh.as_ref().is_some_and(|s| s.transfer.is_some()))
+            {
+                "sftp"
+            } else if template.command.as_ref().is_some_and(|c| c.git.is_some()) {
+                "git"
+            } else if template.command.as_ref().is_some_and(|c| c.ssh.is_some()) {
                 "ssh"
             } else if template.command.as_ref().is_some_and(|c| c.http.is_some()) {
                 "http"
@@ -2081,6 +2089,106 @@ mod tests {
         stop.cancel();
         broker.await.unwrap();
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_mcp_executes_sftp_and_git_through_the_shared_broker() {
+        use crate::{
+            git_task::{Operation, integration_tests as git},
+            sftp_task::{Direction, tests::LocalDirectory},
+        };
+        let ssh = crate::ssh_task::tests::server().await;
+        let git = git::server().await;
+        let files = LocalDirectory::new();
+        let source = files.0.join("source.bin");
+        fs::write(&source, b"MCP transfer contents").unwrap();
+        for kind in ["sftp", "git"] {
+            let directory = std::env::temp_dir().join(format!(
+                "sb-c-{}",
+                &Uuid::new_v4().simple().to_string()[..8]
+            ));
+            fs::create_dir(&directory).unwrap();
+            #[cfg(unix)]
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            let (state, _) = AppState::new([]);
+            let template = if kind == "sftp" {
+                crate::sftp_task::tests::configure(
+                    &state,
+                    &ssh,
+                    &source,
+                    Direction::Upload,
+                    false,
+                    10,
+                )
+            } else {
+                git::configure(&state, &git, Operation::Inspect, &git.url, 10)
+            };
+            let bridge = LocalMcpBridge::bind(&directory, state.clone()).unwrap();
+            let stop = CancellationToken::new();
+            let broker_stop = stop.clone();
+            let broker = tokio::spawn(async move {
+                bridge.serve(broker_stop).await.unwrap();
+            });
+            let (client, server) = connect_server(SecretBridgeMcp::new_remote(
+                BridgeClient::from_file(directory.join("mcp-bridge.json")),
+            ))
+            .await;
+            let templates =
+                terminal_tool(&client, "secretbridge_list_action_templates", json!({})).await;
+            assert_eq!(templates["items"][0]["execution_kind"], kind);
+            let approval = terminal_tool(
+                &client,
+                "secretbridge_request_approval",
+                json!({"action_template_id":template,"expires_in_seconds":60}),
+            )
+            .await;
+            let id = Uuid::parse_str(approval["id"].as_str().unwrap()).unwrap();
+            let current = state.catalog.get_approval(id).unwrap();
+            state
+                .catalog
+                .approve_approval(
+                    id,
+                    &DecideApproval {
+                        expected_version: current.version,
+                        note: None,
+                    },
+                )
+                .unwrap();
+            let request = json!({"approval_id":id,"idempotency_key":Uuid::new_v4().to_string()});
+            let run = terminal_tool(&client, "secretbridge_create_run", request.clone()).await;
+            assert_eq!(
+                terminal_tool(&client, "secretbridge_create_run", request).await["replayed"],
+                true
+            );
+            let id = Uuid::parse_str(run["run"]["id"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                crate::ssh_task::tests::wait(&state, id).await.state,
+                crate::catalog::RunState::Succeeded
+            );
+            let page = terminal_tool(
+                &client,
+                "secretbridge_read_run_output",
+                json!({"id":id,"cursor":0,"wait_ms":0}),
+            )
+            .await;
+            assert_eq!(page["state"], "succeeded");
+            assert_eq!(page["exit_code"], 0);
+            assert!(!page.to_string().contains(crate::ssh_task::tests::SECRET));
+            assert!(!page.to_string().contains(git::TOKEN));
+            if kind == "sftp" {
+                assert_eq!(
+                    ssh.files.lock().unwrap()["/fixture.bin"],
+                    b"MCP transfer contents"
+                );
+            } else {
+                assert_eq!(git.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+            }
+            client.cancel().await.unwrap();
+            server.await.unwrap();
+            stop.cancel();
+            broker.await.unwrap();
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     async fn terminal_tool(
