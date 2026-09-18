@@ -132,15 +132,9 @@ export type ApprovalOperation =
   | "postgres_connection_check"
   | "command_execution";
 export type ApprovalResultScope =
-  | "status_only"
-  | "metadata_summary"
-  | "sanitized_output";
+  "status_only" | "metadata_summary" | "sanitized_output";
 export type ApprovalState =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "revoked"
-  | "expired";
+  "pending" | "approved" | "denied" | "revoked" | "expired";
 
 export interface ActionTemplate {
   command?: CommandConfig | null;
@@ -174,6 +168,7 @@ export interface CredentialSlot {
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  database?: DatabaseConfig | null;
   git?: GitConfig | null;
   http?: HttpConfig | null;
   ssh?: SshConfig | null;
@@ -182,6 +177,20 @@ export interface CommandConfig {
   working_directory: string;
   arguments: string[];
   slots: CredentialSlot[];
+}
+export interface DatabaseConfig {
+  engine: "postgres" | "mysql";
+  operation: "check" | "version" | "query";
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password_slot: string;
+  tls_mode: "verify_full" | "loopback_plaintext";
+  ca_certificate: string | null;
+  query: string;
+  columns: string[];
+  max_rows: number;
 }
 export type HttpValueSource =
   | { kind: "literal"; value: string }
@@ -350,17 +359,11 @@ export interface PolicyEvaluation {
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
   execution_mode:
-    | "synthetic_simulation"
-    | "controlled_postgres"
-    | "credential_command";
+    "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type RunState =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "cancelled"
-  | "failed";
+  "queued" | "running" | "succeeded" | "cancelled" | "failed";
 
 export interface SyntheticRun {
   id: string;
@@ -398,9 +401,7 @@ export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
   execution_mode:
-    | "synthetic_simulation"
-    | "controlled_postgres"
-    | "credential_command";
+    "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type SafeEventKind =

@@ -16,6 +16,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  database-connectors:
+    name: Real PostgreSQL and MySQL connectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test disposable native database connectors
+        run: bash tools/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
     strategy:

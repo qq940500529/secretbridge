@@ -17,6 +17,8 @@ reqwest.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 base64.workspace = true
+mysql_async.workspace = true
+futures-util.workspace = true
 rmcp.workspace = true
 rusqlite.workspace = true
 schemars.workspace = true
@@ -38,7 +40,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 rand.workspace = true
-futures-util.workspace = true
 http-body-util.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 tokio-tungstenite.workspace = true
