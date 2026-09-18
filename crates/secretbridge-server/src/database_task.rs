@@ -303,6 +303,7 @@ struct Sessions {
     postgres: Option<tokio_postgres::Client>,
     connection: Option<tokio::task::JoinHandle<()>>,
     mysql: Option<Conn>,
+    unfinished: bool,
 }
 impl Drop for Sessions {
     fn drop(&mut self) {
@@ -524,26 +525,32 @@ async fn request(
                     )
                 })
                 .collect();
-            let stream = tx
-                .query_typed_raw(&sql, typed)
-                .await
-                .map_err(|_| "query_failed")?;
-            pin_mut!(stream);
-            while let Some(row) = stream.next().await {
-                let row = row.map_err(|_| "query_failed")?;
-                let text: Zeroizing<String> =
-                    Zeroizing::new(row.try_get(0).map_err(|_| "result_conversion_failed")?);
-                if text.len() > 262_144 {
-                    return Err("result_too_large");
-                }
-                let value = serde_json::from_str(&text).map_err(|_| "result_conversion_failed")?;
-                if !result.add(value, database.max_rows, secrets)? {
-                    break;
+            {
+                let stream = tx
+                    .query_typed_raw(&sql, typed)
+                    .await
+                    .map_err(|_| "query_failed")?;
+                pin_mut!(stream);
+                while let Some(row) = stream.next().await {
+                    let row = row.map_err(|_| "query_failed")?;
+                    let text: Zeroizing<String> =
+                        Zeroizing::new(row.try_get(0).map_err(|_| "result_conversion_failed")?);
+                    if text.len() > 262_144 {
+                        return Err("result_too_large");
+                    }
+                    let value =
+                        serde_json::from_str(&text).map_err(|_| "result_conversion_failed")?;
+                    if !result.add(value, database.max_rows, secrets)? {
+                        break;
+                    }
                 }
             }
-            // Dropping an unfinished stream before rollback is intentional; the
-            // bounded LIMIT caps returned rows while statement_timeout caps work.
-            tx.rollback().await.map_err(|_| "query_failed")?;
+            sessions.unfinished = result.truncated;
+            // Do not wait to drain a result after reaching the byte budget.
+            // Cleanup cancels/closes this read-only connection instead.
+            if !result.truncated {
+                tx.rollback().await.map_err(|_| "query_failed")?;
+            }
         }
         DatabaseEngine::Mysql => {
             let connection = Conn::new(mysql_options(database, password)?)
@@ -589,8 +596,13 @@ async fn request(
                     break;
                 }
             }
-            query.drop_result().await.map_err(|_| "query_failed")?;
-            tx.rollback().await.map_err(|_| "query_failed")?;
+            sessions.unfinished = result.truncated;
+            if result.truncated {
+                drop(query);
+            } else {
+                query.drop_result().await.map_err(|_| "query_failed")?;
+                tx.rollback().await.map_err(|_| "query_failed")?;
+            }
         }
     }
     let mut columns = json!(database.output_columns());
@@ -629,6 +641,7 @@ async fn cleanup(
     secrets: &[Zeroizing<String>],
     interrupted: bool,
 ) -> bool {
+    let interrupted = interrupted || sessions.unfinished;
     let mut cleaned = true;
     if let Some(client) = &sessions.postgres
         && interrupted

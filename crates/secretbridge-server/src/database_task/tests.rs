@@ -356,6 +356,35 @@ async fn failures_limits_and_cancel(engine: DatabaseEngine) {
         .await
         .is_err()
     );
+    command.database.as_mut().unwrap().query = "SELECT REPEAT('x', 100000) AS n UNION ALL SELECT REPEAT('y', 100000) AS n UNION ALL SELECT REPEAT('z', 100000) AS n".into();
+    command.database.as_mut().unwrap().max_rows = 1000;
+    let mut sessions = Sessions::default();
+    let bounded = tokio::time::timeout(
+        Duration::from_secs(5),
+        request(
+            command.database.as_ref().unwrap(),
+            &command,
+            &ParameterValues::new(),
+            &secrets,
+            &mut sessions,
+            Duration::from_secs(5),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(bounded["row_count"], 1);
+    assert_eq!(bounded["truncated"], true);
+    assert!(sessions.unfinished);
+    assert!(
+        cleanup(
+            &mut sessions,
+            command.database.as_ref().unwrap(),
+            &secrets,
+            false
+        )
+        .await
+    );
     command.database.as_mut().unwrap().columns = vec!["missing".into()];
     let mut sessions = Sessions::default();
     assert_eq!(
