@@ -1649,7 +1649,7 @@ impl Catalog {
         exit_code: Option<i32>,
     ) -> Result<SyntheticRun, CatalogError> {
         let succeeded = status == "command_ok";
-        let run = self.transition_run(
+        self.transition_run_with_exit(
             id,
             None,
             &[RunState::Running],
@@ -1672,14 +1672,8 @@ impl Catalog {
                 "command run failed"
             },
             false,
-        )?;
-        self.lock()
-            .execute(
-                "UPDATE synthetic_runs SET exit_code=?1 WHERE id=?2",
-                params![exit_code, id.to_string()],
-            )
-            .map_err(|_| CatalogError::Storage)?;
-        Ok(run)
+            exit_code,
+        )
     }
 
     pub fn run_execution_context(&self, id: Uuid) -> Result<RunExecutionContext, CatalogError> {
@@ -1750,6 +1744,35 @@ impl Catalog {
         event_message: &str,
         revalidate_authorization: bool,
     ) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run_with_exit(
+            id,
+            expected_version,
+            allowed_states,
+            next_state,
+            result_status,
+            event_kind,
+            event_message,
+            revalidate_authorization,
+            None,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "state, result, exit code and event commit atomically"
+    )]
+    fn transition_run_with_exit(
+        &self,
+        id: Uuid,
+        expected_version: Option<u64>,
+        allowed_states: &[RunState],
+        next_state: RunState,
+        result_status: Option<&str>,
+        event_kind: SafeEventKind,
+        event_message: &str,
+        revalidate_authorization: bool,
+        exit_code: Option<i32>,
+    ) -> Result<SyntheticRun, CatalogError> {
         let mut connection = self.lock();
         let now = now_unix_ms_i64()?;
         expire_approvals(&connection, now)?;
@@ -1789,7 +1812,7 @@ impl Catalog {
                     SET state = ?1, result_status = ?2, updated_at_unix_ms = ?3,
                         started_at_unix_ms = COALESCE(?4, started_at_unix_ms),
                         finished_at_unix_ms = COALESCE(?5, finished_at_unix_ms),
-                        version = version + 1
+                        version = version + 1, exit_code = ?8
                   WHERE id = ?6 AND version = ?7",
                 params![
                     next_state.as_storage(),
@@ -1798,7 +1821,8 @@ impl Catalog {
                     started_at,
                     finished_at,
                     id.to_string(),
-                    i64::try_from(current.version).map_err(|_| CatalogError::Storage)?
+                    i64::try_from(current.version).map_err(|_| CatalogError::Storage)?,
+                    exit_code
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
