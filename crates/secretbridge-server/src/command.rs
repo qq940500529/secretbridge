@@ -779,6 +779,43 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn process_completion_commits_exit_code_state_and_event_together() {
+        let (state, _) = AppState::new([]);
+        let (approval, _) = configure(&state, "argument", 10);
+        let created = state
+            .catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval,
+                idempotency_key: Uuid::new_v4().to_string(),
+            })
+            .unwrap();
+        let id = created.run.id;
+        state.catalog.start_run(id).unwrap();
+        // A deterministic invariant: a successful process must become visible
+        // with its exit code in the same SQL update, never a later statement.
+        state.catalog.lock().execute_batch("CREATE TEMP TRIGGER process_completion_requires_exit BEFORE UPDATE ON synthetic_runs WHEN NEW.state='succeeded' AND NEW.result_status='command_ok' AND NEW.exit_code IS NULL BEGIN SELECT RAISE(ABORT,'exit code must be atomic'); END;").unwrap();
+        assert!(
+            state
+                .catalog
+                .complete_command_run(id, "command_ok", None)
+                .is_err()
+        );
+        let page = state.catalog.output(id, 0).unwrap();
+        assert_eq!(page.state, RunState::Running);
+        assert_eq!(page.exit_code, None);
+        let events = state.catalog.list_safe_events(Some(id)).unwrap();
+        assert_eq!(events.len(), 2);
+        state
+            .catalog
+            .complete_command_run(id, "command_ok", Some(0))
+            .unwrap();
+        let page = state.catalog.output(id, 0).unwrap();
+        assert_eq!(page.state, RunState::Succeeded);
+        assert_eq!(page.exit_code, Some(0));
+        assert_eq!(state.catalog.list_safe_events(Some(id)).unwrap().len(), 3);
+    }
+
     #[tokio::test]
     async fn command_timeout_and_explicit_cancellation_stop_real_processes() {
         for cancel in [false, true] {
