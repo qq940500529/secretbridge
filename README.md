@@ -18,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. The Web console provides reconnectable PowerShell/CMD, Bash or Zsh sessions and stores passwords and API tokens in the operating-system credential store. The MCP stdio service can control ordinary terminals, request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. General credential injection and more connectors are the next priorities.
+> This is a local prototype under active feature development. It provides persistent terminals, an operating-system credential store, fixed program tasks and explicit single-use approvals. Named slots support stdin, child environment, arguments and temporary files; Web and MCP can read filtered run output incrementally. Secrets have no read/export tool or API. Ordinary terminals never receive injected credentials; output filtering is not a program sandbox. Parameterized templates and more connectors remain in development.
 
 ## Why SecretBridge?
 

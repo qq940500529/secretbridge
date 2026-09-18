@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.25 · credential command execution and streaming redaction
+
+- Extend existing templates, single-use approvals and idempotent runs with fixed local program tasks and named credential slots for stdin, child environment, arguments and temporary files.
+- Keep credential values out of tool requests and template definitions; add an explicit sanitized-output scope and show program/argument/slot configuration before Web approval.
+- Filter raw stdout/stderr bytes across read boundaries before decoding, bounded persistence or return; preserve split UTF-8 text and filter raw, UTF-16, JSON-escaped and common percent-encoded representations.
+- Add Web run output and `secretbridge_read_run_output` over native IPC with chunk-sequence cursors, explicit replay gaps and process exit status; preserve retry deduplication without rerunning programs.
+- Bound command concurrency, support timeout/cancellation and process-tree termination, clean transient credential files, report cleanup failures and recover managed leftovers on broker startup.
+- Upgrade SQLite to schema v13 without removing existing workflows; credential rotation invalidates approvals for linked command templates.
+- Add real-program acceptance for all injection methods, native MCP/IPC output, encoding boundaries, retention gaps, credential rotation, cancellation, timeout and recovery cleanup. No dependencies were added; output filtering is not a sandbox or universal secret recognizer.
+
 ### 0.1.0-alpha.24 · AI terminal control and live state
 
 - Add ten MCP tools for ordinary terminal capability discovery, list/create, attach, bounded cursor reads, write/resize, Ctrl+C, detach and close through the existing native IPC broker.

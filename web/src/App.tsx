@@ -114,9 +114,9 @@ const copy: Record<Language, Copy> = {
     settings: "系统设置",
     overview: "任务与连接总览",
     subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    syntheticTitle: "PostgreSQL 连接检查可用",
+    syntheticTitle: "凭据任务可用",
     syntheticBody:
-      "密码保留在操作系统凭据库中。获批运行可执行固定的 PostgreSQL 只读连接检查，只向页面返回结构化状态；普通终端不会获得凭据。",
+      "凭据保留在系统凭据库中。获批任务可执行固定程序并持续返回脱敏输出，或执行 PostgreSQL 只读连接检查；普通终端不会获得注入的凭据。",
     service: "本地服务",
     online: "在线",
     offline: "未连接",
@@ -160,9 +160,9 @@ const copy: Record<Language, Copy> = {
     overview: "Tasks and connections",
     subtitle:
       "Credentials remain local while automation receives sanitized results.",
-    syntheticTitle: "PostgreSQL connection check is available",
+    syntheticTitle: "Credential-backed tasks are available",
     syntheticBody:
-      "Passwords remain in the operating-system credential store. Approved runs can perform the fixed PostgreSQL read-only connection check and return structured status only; ordinary terminals never receive credentials.",
+      "Credentials remain in the system store. Approved tasks run fixed programs with filtered output or perform the PostgreSQL read-only check; ordinary terminals never receive injected credentials.",
     service: "Local service",
     online: "Online",
     offline: "Disconnected",

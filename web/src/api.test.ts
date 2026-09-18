@@ -15,6 +15,7 @@ import {
   clearCredentialSecret,
   createTerminal,
   getTerminalCapabilities,
+  readRunOutput,
   updateCredentialReference,
 } from "./api";
 import { parseTerminalEnvironment } from "./terminal";
@@ -24,6 +25,17 @@ afterEach(() => {
 });
 
 describe("configuration API client", () => {
+  it("sends credential references and reads output without a secret-bearing request",async()=>{
+    const fetch=vi.fn().mockImplementation(async()=>new Response(JSON.stringify({items:[],next_cursor:7}),{status:200}));
+    vi.stubGlobal("fetch",fetch);
+    await createActionTemplate("session-token",{name:"Diagnostic",target_id:"target-id",operation:"command_execution",result_scope:"sanitized_output",timeout_seconds:10,command:{program:"/usr/bin/tool",working_directory:"/tmp",arguments:["{{password}}"],slots:[{name:"password",credential_id:"credential-id",injection:"argument",environment_variable:null}]}});
+    const definition=JSON.parse(fetch.mock.calls[0][1].body);
+    expect(definition.command.slots[0]).toEqual({name:"password",credential_id:"credential-id",injection:"argument",environment_variable:null});
+    await readRunOutput("session-token","run/id",7);
+    expect(fetch.mock.calls[1][0]).toBe("/api/v1/runs/run%2Fid/output");
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({cursor:7,wait_ms:0});
+    expect(fetch.mock.calls[1][1].headers.Authorization).toBe("Bearer session-token");
+  });
   it("discovers real shells and creates a terminal with explicit process settings", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({

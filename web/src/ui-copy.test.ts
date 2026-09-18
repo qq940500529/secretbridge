@@ -15,6 +15,9 @@ const renderedViews = [
   "CatalogView.tsx",
   "OperationsView.tsx",
   "TerminalView.tsx",
+  "CommandEditor.tsx",
+  "CommandReview.tsx",
+  "RunOutputView.tsx",
 ];
 
 describe("operator-facing copy", () => {
