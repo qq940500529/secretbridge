@@ -9,13 +9,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::parameters::{AuthorizationMode, ParameterValues};
 use rusqlite::{Connection, OptionalExtension, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -393,6 +394,8 @@ pub enum PolicyReasonCode {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicyRequirement {
+    ValidatedParameters,
+    ScopedAuthorization,
     ExplicitApproval,
     NoParameters,
     SingleUse,
@@ -446,6 +449,8 @@ impl ApprovalState {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Approval {
+    pub authorization_mode: AuthorizationMode,
+    pub parameters: ParameterValues,
     pub id: Uuid,
     pub action_template_id: Option<Uuid>,
     pub action_template_version: Option<u64>,
@@ -465,6 +470,10 @@ pub struct Approval {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateApproval {
+    #[serde(default)]
+    pub(crate) authorization_mode: AuthorizationMode,
+    #[serde(default)]
+    pub(crate) parameters: ParameterValues,
     pub(crate) action_template_id: Uuid,
     pub(crate) reason: Option<String>,
     pub(crate) expires_in_seconds: u64,
@@ -886,6 +895,9 @@ impl Catalog {
                     sequence INTEGER NOT NULL, stream TEXT NOT NULL, text TEXT NOT NULL,
                     PRIMARY KEY(run_id, sequence));
                 PRAGMA user_version = 13; COMMIT;")?;
+        }
+        if version < 14 {
+            migrate_parameterized_tasks(&connection)?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -1315,7 +1327,8 @@ impl Catalog {
             .prepare(
                 "SELECT id, action_template_id, action_template_version, target_id, target_version,
                         operation, result_scope, reason, state, decision_note,
-                        created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version
+                        created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
+                        authorization_mode, parameters_json
                    FROM approvals
                   ORDER BY created_at_unix_ms DESC, id",
             )
@@ -1347,6 +1360,13 @@ impl Catalog {
             .ok_or(CatalogError::NotFound)?;
         let target =
             target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
+        let parameters = crate::parameters::resolve(
+            template
+                .command
+                .as_ref()
+                .map_or(&[], |c| c.parameters.as_slice()),
+            &request.parameters,
+        )?;
         if policy_evaluation(&connection, &template, &target)?.decision
             != PolicyDecision::EligibleForApproval
         {
@@ -1364,8 +1384,9 @@ impl Catalog {
                 "INSERT INTO approvals
                     (id, action_template_id, action_template_version, target_id, target_version,
                      operation, result_scope, reason, state, decision_note,
-                     created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, ?9, ?9, ?10, 1)",
+                     created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
+                     authorization_mode, parameters_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, ?9, ?9, ?10, 1, ?11, ?12)",
                 params![
                     id.to_string(),
                     template.id.to_string(),
@@ -1376,7 +1397,9 @@ impl Catalog {
                     template.result_scope.as_storage(),
                     reason,
                     now,
-                    expires_at
+                    expires_at,
+                    serde_json::to_string(&request.authorization_mode).map_err(|_| CatalogError::Invalid)?,
+                    serde_json::to_string(&parameters).map_err(|_| CatalogError::Invalid)?
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -1497,12 +1520,14 @@ impl Catalog {
                 replayed: true,
             });
         }
-        if synthetic_run_by_approval(&connection, request.approval_id)?.is_some() {
-            return Err(CatalogError::ApprovalConsumed);
-        }
         let approval = approval_by_id(&connection, request.approval_id)?
             .filter(|approval| approval.state == ApprovalState::Approved)
             .ok_or(CatalogError::ApprovalNotUsable)?;
+        if approval.authorization_mode != AuthorizationMode::TimeWindow
+            && synthetic_run_by_approval(&connection, request.approval_id)?.is_some()
+        {
+            return Err(CatalogError::ApprovalConsumed);
+        }
         ensure_approval_policy(&connection, &approval)?;
         let template_id = approval
             .action_template_id
@@ -1624,7 +1649,7 @@ impl Catalog {
         exit_code: Option<i32>,
     ) -> Result<SyntheticRun, CatalogError> {
         let succeeded = status == "command_ok";
-        let run = self.transition_run(
+        self.transition_run_with_exit(
             id,
             None,
             &[RunState::Running],
@@ -1647,14 +1672,8 @@ impl Catalog {
                 "command run failed"
             },
             false,
-        )?;
-        self.lock()
-            .execute(
-                "UPDATE synthetic_runs SET exit_code=?1 WHERE id=?2",
-                params![exit_code, id.to_string()],
-            )
-            .map_err(|_| CatalogError::Storage)?;
-        Ok(run)
+            exit_code,
+        )
     }
 
     pub fn run_execution_context(&self, id: Uuid) -> Result<RunExecutionContext, CatalogError> {
@@ -1725,6 +1744,35 @@ impl Catalog {
         event_message: &str,
         revalidate_authorization: bool,
     ) -> Result<SyntheticRun, CatalogError> {
+        self.transition_run_with_exit(
+            id,
+            expected_version,
+            allowed_states,
+            next_state,
+            result_status,
+            event_kind,
+            event_message,
+            revalidate_authorization,
+            None,
+        )
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "state, result, exit code and event commit atomically"
+    )]
+    fn transition_run_with_exit(
+        &self,
+        id: Uuid,
+        expected_version: Option<u64>,
+        allowed_states: &[RunState],
+        next_state: RunState,
+        result_status: Option<&str>,
+        event_kind: SafeEventKind,
+        event_message: &str,
+        revalidate_authorization: bool,
+        exit_code: Option<i32>,
+    ) -> Result<SyntheticRun, CatalogError> {
         let mut connection = self.lock();
         let now = now_unix_ms_i64()?;
         expire_approvals(&connection, now)?;
@@ -1764,7 +1812,7 @@ impl Catalog {
                     SET state = ?1, result_status = ?2, updated_at_unix_ms = ?3,
                         started_at_unix_ms = COALESCE(?4, started_at_unix_ms),
                         finished_at_unix_ms = COALESCE(?5, finished_at_unix_ms),
-                        version = version + 1
+                        version = version + 1, exit_code = ?8
                   WHERE id = ?6 AND version = ?7",
                 params![
                     next_state.as_storage(),
@@ -1773,7 +1821,8 @@ impl Catalog {
                     started_at,
                     finished_at,
                     id.to_string(),
-                    i64::try_from(current.version).map_err(|_| CatalogError::Storage)?
+                    i64::try_from(current.version).map_err(|_| CatalogError::Storage)?,
+                    exit_code
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -2269,8 +2318,8 @@ fn policy_evaluation(
         requirements: if command {
             vec![
                 PolicyRequirement::ExplicitApproval,
-                PolicyRequirement::NoParameters,
-                PolicyRequirement::SingleUse,
+                PolicyRequirement::ValidatedParameters,
+                PolicyRequirement::ScopedAuthorization,
                 PolicyRequirement::TransitionRevalidation,
                 PolicyRequirement::RedactedOutput,
             ]
@@ -2278,7 +2327,7 @@ fn policy_evaluation(
             vec![
                 PolicyRequirement::ExplicitApproval,
                 PolicyRequirement::NoParameters,
-                PolicyRequirement::SingleUse,
+                PolicyRequirement::ScopedAuthorization,
                 PolicyRequirement::TransitionRevalidation,
                 PolicyRequirement::TlsVerifyFull,
                 PolicyRequirement::ReadOnlyTransaction,
@@ -2288,7 +2337,7 @@ fn policy_evaluation(
             vec![
                 PolicyRequirement::ExplicitApproval,
                 PolicyRequirement::NoParameters,
-                PolicyRequirement::SingleUse,
+                PolicyRequirement::ScopedAuthorization,
                 PolicyRequirement::SyntheticOnly,
                 PolicyRequirement::TransitionRevalidation,
             ]
@@ -2429,6 +2478,40 @@ fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     })
 }
 
+fn migrate_parameterized_tasks(connection: &Connection) -> rusqlite::Result<()> {
+    // Keep the original name in all foreign-key declarations. Rebuild only the
+    // run table, preserving output, events, exit codes and idempotency keys.
+    let sql: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='synthetic_runs'",
+        [],
+        |row| row.get(0),
+    )?;
+    let sql = sql
+        .replacen("synthetic_runs", "synthetic_runs_next", 1)
+        .replace(
+            "approval_id TEXT NOT NULL UNIQUE",
+            "approval_id TEXT NOT NULL",
+        );
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        connection.execute_batch("BEGIN IMMEDIATE;")?;
+        connection.execute_batch(&sql)?;
+        connection.execute_batch("INSERT INTO synthetic_runs_next SELECT * FROM synthetic_runs;
+            DROP TABLE synthetic_runs;
+            ALTER TABLE synthetic_runs_next RENAME TO synthetic_runs;
+            CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+            CREATE INDEX synthetic_runs_approval_idx ON synthetic_runs(approval_id);
+            ALTER TABLE approvals ADD COLUMN authorization_mode TEXT NOT NULL DEFAULT '\"every_run\"';
+            ALTER TABLE approvals ADD COLUMN parameters_json TEXT NOT NULL DEFAULT '{}';
+            PRAGMA user_version=14; COMMIT;")
+    })();
+    if result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK;");
+    }
+    connection.pragma_update(None, "foreign_keys", true)?;
+    result
+}
+
 fn action_template_by_id(
     connection: &Connection,
     id: Uuid,
@@ -2471,7 +2554,8 @@ fn approval_by_id(connection: &Connection, id: Uuid) -> Result<Option<Approval>,
         .query_row(
             "SELECT id, action_template_id, action_template_version, target_id, target_version,
                     operation, result_scope, reason, state, decision_note,
-                    created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version
+                    created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
+                    authorization_mode, parameters_json
                FROM approvals WHERE id = ?1",
             [id.to_string()],
             approval_from_row,
@@ -2483,6 +2567,10 @@ fn approval_by_id(connection: &Connection, id: Uuid) -> Result<Option<Approval>,
 fn approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
     let template_id = row.get::<_, Option<String>>(1)?;
     Ok(Approval {
+        authorization_mode: serde_json::from_str(&row.get::<_, String>(14)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
+        parameters: serde_json::from_str(&row.get::<_, String>(15)?)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?,
         id: uuid_from_row(row, 0)?,
         action_template_id: template_id
             .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
@@ -3201,6 +3289,153 @@ mod tests {
     }
 
     #[test]
+    fn version_thirteen_migration_preserves_output_events_and_idempotency() {
+        let database = TemporaryDatabase::new();
+        let (run_id, approval_id) = {
+            let catalog = Catalog::open(&database.path).unwrap();
+            let approval = create_approved_workflow(&catalog);
+            let run = catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: "v13-preserved".into(),
+                })
+                .unwrap()
+                .run;
+            catalog
+                .append_output(run.id, "stdout", "already-sanitized")
+                .unwrap();
+            catalog
+                .lock()
+                .execute(
+                    "UPDATE synthetic_runs SET exit_code=7 WHERE id=?1",
+                    [run.id.to_string()],
+                )
+                .unwrap();
+            (run.id, approval.id)
+        };
+        let connection = rusqlite::Connection::open(&database.path).unwrap();
+        let sql: String = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='synthetic_runs'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let sql = sql
+            .replacen("synthetic_runs", "runs_old_schema", 1)
+            .replace(
+                "approval_id TEXT NOT NULL REFERENCES",
+                "approval_id TEXT NOT NULL UNIQUE REFERENCES",
+            );
+        connection
+            .execute_batch("PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;")
+            .unwrap();
+        connection.execute_batch(&sql).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO runs_old_schema SELECT * FROM synthetic_runs;
+            DROP TABLE synthetic_runs; ALTER TABLE runs_old_schema RENAME TO synthetic_runs;
+            CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
+            ALTER TABLE approvals DROP COLUMN authorization_mode;
+            ALTER TABLE approvals DROP COLUMN parameters_json;
+            PRAGMA user_version=13; COMMIT;",
+            )
+            .unwrap();
+        drop(connection);
+        let catalog = Catalog::open(&database.path).unwrap();
+        let page = catalog.output(run_id, 0).unwrap();
+        assert_eq!(page.items[0].text, "already-sanitized");
+        assert_eq!(page.exit_code, Some(7));
+        assert_eq!(catalog.list_safe_events(Some(run_id)).unwrap().len(), 1);
+        assert!(
+            catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id,
+                    idempotency_key: "v13-preserved".into()
+                })
+                .unwrap()
+                .replayed
+        );
+        assert_eq!(
+            catalog
+                .get_approval(approval_id)
+                .unwrap()
+                .authorization_mode,
+            crate::parameters::AuthorizationMode::EveryRun
+        );
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn authorization_modes_control_consumption_and_revalidate_every_run() {
+        use crate::parameters::{AuthorizationMode, ParameterValues};
+        for mode in [
+            AuthorizationMode::EveryRun,
+            AuthorizationMode::Once,
+            AuthorizationMode::TimeWindow,
+        ] {
+            let catalog = Catalog::in_memory().unwrap();
+            let initial = create_approved_workflow(&catalog);
+            let approval = catalog
+                .create_approval(&CreateApproval {
+                    action_template_id: initial.action_template_id.unwrap(),
+                    reason: None,
+                    expires_in_seconds: 60,
+                    authorization_mode: mode,
+                    parameters: ParameterValues::new(),
+                })
+                .unwrap();
+            let approval = catalog
+                .approve_approval(
+                    approval.id,
+                    &DecideApproval {
+                        expected_version: approval.version,
+                        note: None,
+                    },
+                )
+                .unwrap();
+            let request = CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "mode-first".into(),
+            };
+            let first = catalog.create_synthetic_run(&request).unwrap();
+            assert_eq!(
+                catalog.create_synthetic_run(&request).unwrap().run.id,
+                first.run.id
+            );
+            let second = catalog.create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "mode-second".into(),
+            });
+            assert_eq!(second.is_ok(), mode == AuthorizationMode::TimeWindow);
+            catalog
+                .lock()
+                .execute(
+                    "UPDATE targets SET version=version+1 WHERE id=?1",
+                    [approval.target_id.to_string()],
+                )
+                .unwrap();
+            assert!(
+                catalog
+                    .create_synthetic_run(&CreateSyntheticRun {
+                        approval_id: approval.id,
+                        idempotency_key: "mode-changed".into()
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn version_two_approval_records_survive_template_migration() {
         let database = TemporaryDatabase::new();
         let target_id = Uuid::new_v4();
@@ -3589,6 +3824,8 @@ mod tests {
         assert!(!disabled.enabled);
         assert!(matches!(
             catalog.create_approval(&CreateApproval {
+                authorization_mode: crate::parameters::AuthorizationMode::default(),
+                parameters: crate::parameters::ParameterValues::default(),
                 action_template_id: template.id,
                 reason: None,
                 expires_in_seconds: 300,
@@ -3742,6 +3979,8 @@ mod tests {
     fn create_approval(catalog: &Catalog, action_template_id: Uuid) -> super::Approval {
         catalog
             .create_approval(&CreateApproval {
+                authorization_mode: crate::parameters::AuthorizationMode::default(),
+                parameters: crate::parameters::ParameterValues::default(),
                 action_template_id,
                 reason: Some("Synthetic workflow validation".to_owned()),
                 expires_in_seconds: 300,

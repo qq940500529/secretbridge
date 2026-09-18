@@ -23,6 +23,8 @@ use zeroize::Zeroizing;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandConfig {
+    #[serde(default)]
+    pub parameters: Vec<crate::parameters::ParameterDefinition>,
     pub program: String,
     pub working_directory: String,
     pub arguments: Vec<String>,
@@ -49,6 +51,7 @@ pub enum Injection {
 
 impl CommandConfig {
     pub fn validate(&self) -> Result<(), CatalogError> {
+        crate::parameters::validate(&self.parameters)?;
         if !Path::new(&self.program).is_absolute()
             || !Path::new(&self.program).is_file()
             || !Path::new(&self.working_directory).is_absolute()
@@ -60,7 +63,6 @@ impl CommandConfig {
                 .arguments
                 .iter()
                 .any(|a| a.len() > 2048 || a.contains('\0'))
-            || self.slots.is_empty()
             || self.slots.len() > 8
         {
             return Err(CatalogError::Invalid);
@@ -103,6 +105,10 @@ impl CommandConfig {
                     matches!(s.injection, Injection::Argument | Injection::File)
                         && *argument == format!("{{{{{}}}}}", s.name)
                 })
+                && !self
+                    .parameters
+                    .iter()
+                    .any(|p| *argument == format!("{{{{param:{}}}}}", p.name))
             {
                 return Err(CatalogError::Invalid);
             }
@@ -111,7 +117,7 @@ impl CommandConfig {
     }
 }
 
-fn identifier(value: &str) -> bool {
+pub(crate) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -257,6 +263,7 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
     let Some(config) = context.template.command else {
         return;
     };
+    let parameters = context.approval.parameters;
     let mut secrets = Vec::new();
     for slot in &config.slots {
         let store = state.secret_store.clone();
@@ -285,7 +292,15 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
     let state = state.clone();
     let cancellation = cancellation.clone();
     let _ = tokio::task::spawn_blocking(move || {
-        let (status, exit) = execute(&state, id, &config, &secrets, &cancellation, limit);
+        let (status, exit) = execute(
+            &state,
+            id,
+            &config,
+            &secrets,
+            &cancellation,
+            limit,
+            &parameters,
+        );
         let _ = state.catalog.complete_command_run(id, status, exit);
         let _ = state.changes.send(());
     })
@@ -387,6 +402,7 @@ fn execute(
     secrets: &[Zeroizing<String>],
     cancel: &CancellationToken,
     limit: Duration,
+    parameters: &crate::parameters::ParameterValues,
 ) -> (&'static str, Option<i32>) {
     if cancel.is_cancelled() || limit.is_zero() {
         return ("cancelled", None);
@@ -401,6 +417,14 @@ fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut arguments = Zeroizing::new(config.arguments.clone());
+    for argument in arguments.iter_mut() {
+        for (name, value) in parameters {
+            if *argument == format!("{{{{param:{name}}}}}") {
+                *argument = crate::parameters::argument(value);
+                break;
+            }
+        }
+    }
     let mut files = TemporaryFiles { paths: Vec::new() };
     for (slot, secret) in config.slots.iter().zip(secrets) {
         match slot.injection {
@@ -422,8 +446,10 @@ fn execute(
                     secret.clone()
                 };
                 let placeholder = format!("{{{{{}}}}}", slot.name);
-                for argument in arguments.iter_mut().filter(|a| **a == placeholder) {
-                    argument.clone_from(&value);
+                for (index, original) in config.arguments.iter().enumerate() {
+                    if *original == placeholder {
+                        arguments[index].clone_from(&value);
+                    }
                 }
             }
             Injection::Stdin => {}
@@ -589,7 +615,7 @@ pub(crate) mod tests {
         CreateTarget, DecideApproval,
     };
 
-    fn fixture(mode: &str, id: Uuid) -> CommandConfig {
+    pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let (program, mut arguments) = if cfg!(windows) {
             let root = std::env::var_os("SystemRoot").expect("Windows root");
@@ -623,6 +649,7 @@ pub(crate) mod tests {
             arguments.push("{{password}}".into());
         }
         CommandConfig {
+            parameters: Vec::new(),
             program: program.to_string_lossy().into_owned(),
             working_directory: directory.to_string_lossy().into_owned(),
             arguments,
@@ -752,6 +779,43 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn process_completion_commits_exit_code_state_and_event_together() {
+        let (state, _) = AppState::new([]);
+        let (approval, _) = configure(&state, "argument", 10);
+        let created = state
+            .catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval,
+                idempotency_key: Uuid::new_v4().to_string(),
+            })
+            .unwrap();
+        let id = created.run.id;
+        state.catalog.start_run(id).unwrap();
+        // A deterministic invariant: a successful process must become visible
+        // with its exit code in the same SQL update, never a later statement.
+        state.catalog.lock().execute_batch("CREATE TEMP TRIGGER process_completion_requires_exit BEFORE UPDATE ON synthetic_runs WHEN NEW.state='succeeded' AND NEW.result_status='command_ok' AND NEW.exit_code IS NULL BEGIN SELECT RAISE(ABORT,'exit code must be atomic'); END;").unwrap();
+        assert!(
+            state
+                .catalog
+                .complete_command_run(id, "command_ok", None)
+                .is_err()
+        );
+        let page = state.catalog.output(id, 0).unwrap();
+        assert_eq!(page.state, RunState::Running);
+        assert_eq!(page.exit_code, None);
+        let events = state.catalog.list_safe_events(Some(id)).unwrap();
+        assert_eq!(events.len(), 2);
+        state
+            .catalog
+            .complete_command_run(id, "command_ok", Some(0))
+            .unwrap();
+        let page = state.catalog.output(id, 0).unwrap();
+        assert_eq!(page.state, RunState::Succeeded);
+        assert_eq!(page.exit_code, Some(0));
+        assert_eq!(state.catalog.list_safe_events(Some(id)).unwrap().len(), 3);
+    }
+
     #[tokio::test]
     async fn command_timeout_and_explicit_cancellation_stop_real_processes() {
         for cancel in [false, true] {
@@ -824,6 +888,92 @@ pub(crate) mod tests {
         assert!(config.validate().is_err());
     }
 
+    #[tokio::test]
+    async fn parameterized_commands_freeze_values_and_do_not_expand_them_again() {
+        let (state, _) = AppState::new([]);
+        let (_, credential) = configure(&state, "argument", 10);
+        let template = state.catalog.list_action_templates().unwrap().remove(0);
+        let mut config = fixture("argument", credential);
+        config.arguments.push("{{param:company}}".into());
+        config.parameters = serde_json::from_value(serde_json::json!([{
+            "name":"company","label":"公司","kind":"string","required":true,
+            "default":"天津; {{password}} & 100","choices":[],"max_length":128
+        }]))
+        .unwrap();
+        let update = serde_json::from_value(serde_json::json!({
+            "target_id":template.target_id,"name":template.name,"operation":"command_execution",
+            "result_scope":"sanitized_output","timeout_seconds":10,"enabled":true,
+            "expected_version":template.version,"command":config
+        }))
+        .unwrap();
+        let template = state
+            .catalog
+            .update_action_template(template.id, &update)
+            .unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "action_template_id":template.id,"expires_in_seconds":60,"authorization_mode":"time_window"
+        })).unwrap();
+        let approval = state.catalog.create_approval(&request).unwrap();
+        assert_eq!(approval.parameters["company"], "天津; {{password}} & 100");
+        let decision =
+            serde_json::from_value(serde_json::json!({"expected_version":approval.version}))
+                .unwrap();
+        state
+            .catalog
+            .approve_approval(approval.id, &decision)
+            .unwrap();
+        for _ in 0..2 {
+            let key = Uuid::new_v4().to_string();
+            let request = CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: key.clone(),
+            };
+            let result = crate::create_run_for_state(&state, request).await.unwrap();
+            let page = wait(&state, result.run.id).await;
+            assert_eq!(page.state, RunState::Succeeded);
+            let output = page
+                .items
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<String>();
+            assert!(
+                output.contains("|parameter:天津; {{password}} & 100|"),
+                "{output}"
+            );
+            assert!(output.contains("[REDACTED]"));
+            assert!(!output.contains("Synthetic-SB-command_A&z"));
+            let replay = state
+                .catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: key,
+                })
+                .unwrap();
+            assert!(replay.replayed);
+            assert_eq!(replay.run.id, result.run.id);
+        }
+        let current = state.catalog.get_approval(approval.id).unwrap();
+        state
+            .catalog
+            .revoke_approval(
+                approval.id,
+                &crate::catalog::DecideApproval {
+                    expected_version: current.version,
+                    note: None,
+                },
+            )
+            .unwrap();
+        assert!(
+            state
+                .catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: Uuid::new_v4().to_string()
+                })
+                .is_err()
+        );
+    }
+
     #[test]
     fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
         let (state, _) = AppState::new([]);
@@ -862,6 +1012,108 @@ pub(crate) mod tests {
             state.catalog.start_run(outcome.run.id),
             Err(CatalogError::PolicyDenied)
         ));
+    }
+
+    async fn web_request(
+        state: &AppState,
+        token: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        use axum::{
+            body::{Body, to_bytes},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("origin", "http://127.0.0.1:8787")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 16_384).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    #[tokio::test]
+    async fn web_parameter_approval_and_time_window_use_the_real_executor() {
+        use axum::http::StatusCode;
+        use serde_json::json;
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
+        let (_, credential) = configure(&state, "argument", 10);
+        let template = state.catalog.list_action_templates().unwrap().remove(0);
+        let mut config = fixture("argument", credential);
+        config.arguments.push("{{param:company}}".into());
+        config.parameters=serde_json::from_value(json!([{"name":"company","label":"公司","kind":"string","required":true,"default":"100","choices":["100","101"],"max_length":3}])).unwrap();
+        let update=serde_json::from_value(json!({"target_id":template.target_id,"name":template.name,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":10,"enabled":true,"expected_version":template.version,"command":config})).unwrap();
+        state
+            .catalog
+            .update_action_template(template.id, &update)
+            .unwrap();
+        let (token, _) = state.issue_session().await;
+        for parameters in [
+            json!({"company":100}),
+            json!({"company":"102"}),
+            json!({"unknown":"100"}),
+        ] {
+            let (status,_)=web_request(&state,&token,"/api/v1/approvals",json!({"action_template_id":template.id,"expires_in_seconds":60,"parameters":parameters})).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+        let (status,approval)=web_request(&state,&token,"/api/v1/approvals",json!({"action_template_id":template.id,"expires_in_seconds":60,"authorization_mode":"time_window"})).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(approval["parameters"]["company"], "100");
+        let id = approval["id"].as_str().unwrap();
+        let (status, approved) = web_request(
+            &state,
+            &token,
+            &format!("/api/v1/approvals/{id}/approve"),
+            json!({"expected_version":approval["version"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        for _ in 0..2 {
+            let request = json!({"approval_id":id,"idempotency_key":Uuid::new_v4().to_string()});
+            let (status, result) =
+                web_request(&state, &token, "/api/v1/runs", request.clone()).await;
+            assert_eq!(status, StatusCode::CREATED);
+            let run = Uuid::parse_str(result["run"]["id"].as_str().unwrap()).unwrap();
+            let page = wait(&state, run).await;
+            assert_eq!(page.state, RunState::Succeeded);
+            let output = page
+                .items
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<String>();
+            assert!(output.contains("|parameter:100|"));
+            assert!(!output.contains("Synthetic-SB-command_A&z"));
+            let (_, replay) = web_request(&state, &token, "/api/v1/runs", request).await;
+            assert_eq!(replay["replayed"], true);
+            assert_eq!(replay["run"]["id"], result["run"]["id"]);
+        }
+        let (status, _) = web_request(
+            &state,
+            &token,
+            &format!("/api/v1/approvals/{id}/revoke"),
+            json!({"expected_version":approved["version"]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = web_request(
+            &state,
+            &token,
+            "/api/v1/runs",
+            json!({"approval_id":id,"idempotency_key":Uuid::new_v4().to_string()}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
     }
 
     #[tokio::test]

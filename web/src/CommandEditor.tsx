@@ -3,6 +3,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import type { CommandConfig, CredentialReference, CredentialSlot } from "./api";
+import { ParameterEditor } from "./ParameterEditor";
 
 export const emptyCommand: CommandConfig = {program:"",working_directory:"",arguments:[],slots:[]};
 
@@ -26,6 +27,7 @@ export function CommandEditor({value,onChange,credentials,language}:{value:Comma
     </tr>)}</tbody></table></div>
     <button type="button" disabled={value.slots.length>=8} onClick={()=>onChange({...value,slots:[...value.slots,{name:`secret_${value.slots.length+1}`,credential_id:"",injection:"stdin",environment_variable:null}]})} className="inline-flex items-center gap-2 text-sm font-semibold text-cyan-700 disabled:opacity-50"><Plus className="size-4"/>{zh?"添加凭据插槽":"Add credential slot"}</button>
     <p className="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900">{zh?"参数可能被进程查看工具读到，环境变量会传给子进程，临时文件继承本机目录权限。优先使用标准输入或目标工具的原生认证机制。输出过滤不是程序沙箱，不会阻止程序主动向外发送秘密。":"Arguments may be visible to process inspection; environment variables reach descendants; temporary files inherit local directory permissions. Prefer stdin or native authentication. Output filtering is not a sandbox and cannot stop a program transmitting secrets."}</p>
+    <ParameterEditor value={value.parameters??[]} onChange={parameters=>onChange({...value,parameters})} zh={zh}/>
   </fieldset>;
 }
 
