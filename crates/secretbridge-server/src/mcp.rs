@@ -1451,7 +1451,9 @@ struct TemplateSummary {
 impl From<ActionTemplate> for TemplateSummary {
     fn from(template: ActionTemplate) -> Self {
         Self {
-            execution_kind: if template.command.as_ref().is_some_and(|c| c.http.is_some()) {
+            execution_kind: if template.command.as_ref().is_some_and(|c| c.ssh.is_some()) {
+                "ssh"
+            } else if template.command.as_ref().is_some_and(|c| c.http.is_some()) {
                 "http"
             } else if template.command.is_some() {
                 "program"
@@ -1986,6 +1988,94 @@ mod tests {
         assert!(output.contains("[REDACTED]"));
         assert!(!output.contains(crate::http_task::tests::SECRET));
         assert_eq!(fixture.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        client.cancel().await.unwrap();
+        server.await.unwrap();
+        stop.cancel();
+        broker.await.unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_mcp_executes_ssh_and_reads_filtered_remote_output() {
+        let fixture = crate::ssh_task::tests::server().await;
+        let directory = std::env::temp_dir().join(format!(
+            "sb-s-{}",
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let (state, _) = AppState::new([]);
+        let template = crate::ssh_task::tests::configure(&state, &fixture, 10);
+        let bridge = LocalMcpBridge::bind(&directory, state.clone()).unwrap();
+        let stop = CancellationToken::new();
+        let broker_stop = stop.clone();
+        let broker = tokio::spawn(async move {
+            bridge.serve(broker_stop).await.unwrap();
+        });
+        let (client, server) = connect_server(SecretBridgeMcp::new_remote(
+            BridgeClient::from_file(directory.join("mcp-bridge.json")),
+        ))
+        .await;
+        let templates =
+            terminal_tool(&client, "secretbridge_list_action_templates", json!({})).await;
+        assert_eq!(templates["items"][0]["execution_kind"], "ssh");
+        assert!(
+            !templates
+                .to_string()
+                .contains(crate::ssh_task::tests::SECRET)
+        );
+        let approval = terminal_tool(&client, "secretbridge_request_approval", json!({"action_template_id":template,"expires_in_seconds":60,"parameters":{"message":"100"}})).await;
+        let id = Uuid::parse_str(approval["id"].as_str().unwrap()).unwrap();
+        let current = state.catalog.get_approval(id).unwrap();
+        state
+            .catalog
+            .approve_approval(
+                id,
+                &DecideApproval {
+                    expected_version: current.version,
+                    note: None,
+                },
+            )
+            .unwrap();
+        let request = json!({"approval_id":id,"idempotency_key":Uuid::new_v4().to_string()});
+        let run = terminal_tool(&client, "secretbridge_create_run", request.clone()).await;
+        assert_eq!(
+            terminal_tool(&client, "secretbridge_create_run", request).await["replayed"],
+            true
+        );
+        let mut cursor = 0;
+        let mut output = String::new();
+        time::timeout(Duration::from_secs(20), async {
+            loop {
+                let page = terminal_tool(
+                    &client,
+                    "secretbridge_read_run_output",
+                    json!({"id":run["run"]["id"],"cursor":cursor,"wait_ms":1000}),
+                )
+                .await;
+                cursor = page["next_cursor"].as_u64().unwrap();
+                for chunk in page["items"].as_array().unwrap() {
+                    output.push_str(chunk["text"].as_str().unwrap());
+                }
+                if page["state"] == "succeeded" && !page["has_more"].as_bool().unwrap() {
+                    assert_eq!(page["exit_code"], 0);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains(crate::ssh_task::tests::SECRET));
+        assert_eq!(
+            fixture.auth_hits.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            fixture.commands.lock().unwrap()[0],
+            "'/usr/bin/printf' '%s' '100'"
+        );
         client.cancel().await.unwrap();
         server.await.unwrap();
         stop.cancel();

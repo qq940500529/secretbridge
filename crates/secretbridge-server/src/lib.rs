@@ -11,6 +11,7 @@ mod parameters;
 mod postgres;
 mod redaction;
 mod secret_store;
+mod ssh_task;
 mod terminal;
 mod terminal_control;
 
@@ -55,9 +56,9 @@ use uuid::Uuid;
 use catalog::{
     ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
-    CreateSyntheticRun, CreateTarget, CredentialKind, CredentialReference, DecideApproval,
-    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target,
-    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation,
+    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
+    UpdateCredentialReference, UpdateTarget,
 };
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
 use secret_store::SecretStore;
@@ -939,9 +940,6 @@ async fn set_credential_secret(
         .map_err(map_catalog_error)?;
     if current.version != request.expected_version {
         return Err(ApiError::VersionConflict);
-    }
-    if current.kind == CredentialKind::SshKey {
-        return Err(ApiError::BadRequest);
     }
     let prior_secret = if current.secret_state == SecretState::Available {
         let store = state.secret_store.clone();

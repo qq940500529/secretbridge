@@ -17,7 +17,12 @@ use secretbridge_server::{AppState, LocalMcpBridge, router_with_web, serve_mcp_s
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{
+    EnvFilter, Layer,
+    filter::{FilterExt, filter_fn},
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+};
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
 const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
@@ -35,13 +40,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let startup_mode = parse_startup_mode(&arguments)?;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("secretbridge_server=info")),
+    let log_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("secretbridge_server=info"))
+        .and(filter_fn(|metadata| {
+            application_log_target(metadata.target())
+        }));
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(io::stderr)
+                .with_target(false)
+                .with_filter(log_filter),
         )
-        .with_writer(io::stderr)
-        .with_target(false)
         .init();
 
     if startup_mode == StartupMode::McpStdio {
@@ -282,6 +292,12 @@ fn default_web_root() -> PathBuf {
         .join("dist")
 }
 
+// Protocol-library logs are upstream of credential redaction. RUST_LOG must not
+// opt raw packets, authentication material or response text into broker stderr.
+fn application_log_target(target: &str) -> bool {
+    target == "secretbridge_server" || target.starts_with("secretbridge_server::")
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
@@ -297,6 +313,51 @@ fn require_loopback(address: SocketAddr) -> Result<SocketAddr, &'static str> {
 #[cfg(test)]
 mod tests {
     use std::{ffi::OsStr, net::SocketAddr};
+
+    #[test]
+    fn global_trace_logging_cannot_enable_raw_protocol_output() {
+        use std::{
+            io::{self, Write},
+            sync::{Arc, Mutex},
+        };
+        use tracing_subscriber::{
+            EnvFilter, Layer,
+            filter::{FilterExt, filter_fn},
+            layer::SubscriberExt,
+        };
+        #[derive(Clone)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let capture = bytes.clone();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || Capture(capture.clone()))
+                .with_filter(
+                    EnvFilter::new("trace,russh::client=trace,reqwest=trace")
+                        .and(filter_fn(|m| super::application_log_target(m.target()))),
+                ),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target:"secretbridge_server::command", "fixed-application-status");
+            tracing::trace!(target:"russh::client", "synthetic-unfiltered-protocol-value");
+            tracing::info!(target:"reqwest", "synthetic-unfiltered-protocol-value");
+            tracing::warn!(target:"secretbridge_server_other", "synthetic-unfiltered-protocol-value");
+        });
+        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("fixed-application-status"));
+        assert!(!output.contains("synthetic-unfiltered-protocol-value"));
+    }
 
     use super::{
         StartupMode, bounded_argument, parse_startup_mode, require_loopback, resolve_data_directory,

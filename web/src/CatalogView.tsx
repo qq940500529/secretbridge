@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { CredentialSecretInput } from "./CredentialSecretInput";
 
 import {
   createCredentialReference,
@@ -108,7 +109,7 @@ export function CredentialReferencesView({
   const text = language === "zh-CN"
     ? {
         title: "建立凭据用途清单",
-        subtitle: "名称、类型和用途保存在本机配置库；密码与 API 令牌单独写入操作系统凭据库，页面与 API 都不会回读秘密值。",
+        subtitle: "名称、类型和用途保存在本机配置库；密码、API 令牌与 SSH 私钥单独写入操作系统凭据库，页面与 API 都不会回读秘密值。",
         formTitle: "添加凭据引用",
         name: "引用名称",
         namePlaceholder: "例如：测试库只读账号",
@@ -123,11 +124,10 @@ export function CredentialReferencesView({
         clearSecret: "清除秘密",
         confirmClear: "确定从操作系统凭据库清除这个秘密值吗？",
         secretError: "系统凭据库操作失败。请检查系统凭据服务、字段内容或页面会话。",
-        sshPending: "SSH 私钥写入将在专用文件型凭据适配器中提供。",
       }
     : {
         title: "Build a credential-purpose catalog",
-        subtitle: "Names, types, and purposes stay in local configuration. Passwords and API tokens are written separately to the OS credential store and are never returned by the page or API.",
+        subtitle: "Names, types, and purposes stay in local configuration. Passwords, API tokens and SSH private keys are written separately to the OS credential store and are never returned by the page or API.",
         formTitle: "Add credential reference",
         name: "Reference name",
         namePlaceholder: "Example: test database read-only account",
@@ -142,7 +142,6 @@ export function CredentialReferencesView({
         clearSecret: "Clear secret",
         confirmClear: "Remove this secret from the operating-system credential store?",
         secretError: "The OS credential-store operation failed. Check the system credential service, field value, or page session.",
-        sshPending: "SSH private keys will use a dedicated file-credential adapter in a later increment.",
       };
   const [items, setItems] = useState<CredentialReference[]>([]);
   const [name, setName] = useState("");
@@ -344,18 +343,14 @@ export function CredentialReferencesView({
                 <DeleteButton label={common.delete} onClick={() => void remove(item.id)} />
               </div>
             </div>
-            {item.kind === "ssh_key" ? (
-              <p className="mb-0 mt-4 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-800">{text.sshPending}</p>
-            ) : (
               <div className="mt-4 border-t border-slate-100 pt-4">
                 <label htmlFor={`secret-${item.id}`} className="mb-1.5 block text-xs font-semibold text-slate-600">{text.secret}</label>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <input id={`secret-${item.id}`} type="password" autoComplete="new-password" maxLength={8192} value={secretDrafts[item.id] ?? ""} onChange={(event) => setSecretDrafts((current) => ({ ...current, [item.id]: event.target.value }))} placeholder={text.secretPlaceholder} className={inputClass} />
+                  <CredentialSecretInput id={`secret-${item.id}`} kind={item.kind} value={secretDrafts[item.id] ?? ""} onChange={(value) => setSecretDrafts((current) => ({ ...current, [item.id]: value }))} onError={() => setError(text.secretError)} placeholder={text.secretPlaceholder} className={inputClass} zh={language === "zh-CN"} disabled={secretBusyId === item.id} />
                   <button type="button" disabled={secretBusyId === item.id || !(secretDrafts[item.id] ?? "")} onClick={() => void saveSecret(item)} className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50">{text.setSecret}</button>
                   {item.secret_state === "available" && <button type="button" disabled={secretBusyId === item.id} onClick={() => void clearSecret(item)} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"><Eraser className="size-4" />{text.clearSecret}</button>}
                 </div>
               </div>
-            )}
           </article>
         ))}
       </CatalogList>

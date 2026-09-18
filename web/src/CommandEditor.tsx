@@ -5,6 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import type { CommandConfig, CredentialReference, CredentialSlot } from "./api";
 import { ParameterEditor } from "./ParameterEditor";
 import { HttpEditor, emptyHttp } from "./HttpEditor";
+import { SshEditor, emptySsh } from "./SshEditor";
 
 export const emptyCommand: CommandConfig = {
   program: "",
@@ -36,11 +37,12 @@ export function CommandEditor({
     <label className="block text-sm font-semibold">
       {zh ? "执行方式" : "Execution method"}
       <select
-        value={value.http ? "http" : "program"}
+        value={value.ssh ? "ssh" : value.http ? "http" : "program"}
         onChange={(e) =>
           onChange({
             ...value,
             http: e.target.value === "http" ? emptyHttp : null,
+            ssh: e.target.value === "ssh" ? emptySsh : null,
             program: "",
             working_directory: "",
             arguments: [],
@@ -51,9 +53,28 @@ export function CommandEditor({
       >
         <option value="program">{zh ? "本机程序" : "Local program"}</option>
         <option value="http">HTTP / HTTPS</option>
+        <option value="ssh">SSH</option>
       </select>
     </label>
   );
+  if (value.ssh)
+    return (
+      <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">
+        <legend className="px-1 text-sm font-semibold">SSH</legend>
+        {selector}
+        <SshEditor
+          config={value}
+          onChange={onChange}
+          credentials={credentials}
+          zh={zh}
+        />
+        <ParameterEditor
+          value={value.parameters ?? []}
+          onChange={(parameters) => onChange({ ...value, parameters })}
+          zh={zh}
+        />
+      </fieldset>
+    );
   if (value.http)
     return (
       <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">

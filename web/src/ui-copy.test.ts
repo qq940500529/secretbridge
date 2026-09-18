@@ -21,6 +21,8 @@ const renderedViews = [
   "ParameterEditor.tsx",
   "ParameterFields.tsx",
   "HttpEditor.tsx",
+  "SshEditor.tsx",
+  "CredentialSecretInput.tsx",
 ];
 
 describe("operator-facing copy", () => {
