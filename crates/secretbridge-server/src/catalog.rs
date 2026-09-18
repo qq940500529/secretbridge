@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 14;
+pub(crate) mod maintenance;
+
+pub(crate) const SCHEMA_VERSION: i64 = 15;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -653,7 +655,7 @@ impl PostgresRunResult {
 
 impl Catalog {
     pub fn open(path: &Path) -> Result<Self, CatalogOpenError> {
-        Self::initialize(Connection::open(path)?)
+        crate::maintenance::open_with_migration_backup(path)
     }
 
     pub fn in_memory() -> Result<Self, CatalogOpenError> {
@@ -664,7 +666,7 @@ impl Catalog {
         clippy::too_many_lines,
         reason = "transactional schema migrations remain auditable when kept together"
     )]
-    fn initialize(connection: Connection) -> Result<Self, CatalogOpenError> {
+    pub(crate) fn initialize(connection: Connection) -> Result<Self, CatalogOpenError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "busy_timeout", 5_000_i64)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -898,6 +900,15 @@ impl Catalog {
         }
         if version < 14 {
             migrate_parameterized_tasks(&connection)?;
+        }
+        if version < 15 {
+            connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                CREATE TABLE configuration_imports (
+                    digest TEXT PRIMARY KEY NOT NULL,
+                    report_json TEXT NOT NULL
+                ); PRAGMA user_version = 15; COMMIT;",
+            )?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -2740,6 +2751,7 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
         "approvals" => "SELECT COUNT(*) FROM approvals",
         "action_templates" => "SELECT COUNT(*) FROM action_templates",
         "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
+        "configuration_imports" => "SELECT COUNT(*) FROM configuration_imports",
         _ => return Err(CatalogError::Storage),
     };
     let count = connection
@@ -3261,7 +3273,7 @@ mod tests {
         let connection = rusqlite::Connection::open(&database.path).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE command_slots; DROP TABLE run_output;
+                "DROP TABLE configuration_imports; DROP TABLE command_slots; DROP TABLE run_output;
             ALTER TABLE action_templates DROP COLUMN command_json;
             ALTER TABLE synthetic_runs DROP COLUMN exit_code;
             PRAGMA user_version=12;",
@@ -3338,6 +3350,7 @@ mod tests {
             CREATE INDEX synthetic_runs_state_idx ON synthetic_runs(state);
             ALTER TABLE approvals DROP COLUMN authorization_mode;
             ALTER TABLE approvals DROP COLUMN parameters_json;
+            DROP TABLE configuration_imports;
             PRAGMA user_version=13; COMMIT;",
             )
             .unwrap();
@@ -3504,7 +3517,7 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "DROP TABLE command_slots; DROP TABLE run_output;
+                    "DROP TABLE configuration_imports; DROP TABLE command_slots; DROP TABLE run_output;
                      DROP TABLE safe_events;
                      DROP TABLE synthetic_runs;
                      PRAGMA user_version = 3;",
@@ -3550,7 +3563,7 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "DROP TABLE command_slots; DROP TABLE run_output;
+                    "DROP TABLE configuration_imports; DROP TABLE command_slots; DROP TABLE run_output;
                      ALTER TABLE synthetic_runs DROP COLUMN target_version;
                      ALTER TABLE approvals DROP COLUMN target_version;
                      PRAGMA user_version = 4;",
@@ -3578,7 +3591,7 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "DROP TABLE command_slots; DROP TABLE run_output;
+                    "DROP TABLE configuration_imports; DROP TABLE command_slots; DROP TABLE run_output;
                      CREATE TABLE security_validation_runs (id TEXT PRIMARY KEY);
                      CREATE TABLE security_validation_checks (id TEXT PRIMARY KEY);
                      CREATE TABLE pilot_readiness_snapshots (id TEXT PRIMARY KEY);

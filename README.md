@@ -62,6 +62,8 @@ The assistant does not receive the stored secret. Ordinary terminals and credent
 
 ## Choose a starting point
 
+Configuration migration, private SQLite backups and concise diagnostics are available in Settings. Import adds fresh references and templates after preflight; offline restoration only writes to a new data directory, preserving the original for rollback. Secrets must be entered again and outstanding authorizations are revoked. See [configuration migration and recovery](docs/配置迁移与备份恢复.md) — Chinese.
+
 | Your goal | Start here |
 | :--- | :--- |
 | Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |

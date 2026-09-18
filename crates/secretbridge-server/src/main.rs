@@ -38,6 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return run_synthetic_terminal();
     }
+    if run_maintenance(&arguments)? {
+        return Ok(());
+    }
     let startup_mode = parse_startup_mode(&arguments)?;
 
     let log_filter = EnvFilter::try_from_default_env()
@@ -119,6 +122,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn run_maintenance(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn std::error::Error>> {
+    if !arguments
+        .first()
+        .is_some_and(|argument| argument == "--inspect-backup" || argument == "--restore-backup")
+    {
+        return Ok(false);
+    }
+    if arguments.len() != 2 {
+        return Err("maintenance_requires_backup_path".into());
+    }
+    let path = PathBuf::from(&arguments[1]);
+    let report = if arguments[0] == "--inspect-backup" {
+        secretbridge_server::inspect_configuration_backup(&path)?
+    } else {
+        let directory = env::var_os("SECRETBRIDGE_DATA_DIR")
+            .map(PathBuf::from)
+            .ok_or("restore_requires_explicit_data_directory")?;
+        secretbridge_server::restore_configuration_backup(&path, &directory)?
+    };
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(true)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

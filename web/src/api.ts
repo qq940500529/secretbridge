@@ -12,6 +12,136 @@ export interface ServiceStatus {
 
 export type ConfigurationStorage = "memory_only" | "sqlite";
 
+export interface ConfigurationBundle {
+  format: "secretbridge-configuration";
+  format_version: 1;
+  exported_at_unix_ms: number;
+  credentials: Array<
+    Pick<CredentialReference, "id" | "name" | "kind" | "purpose">
+  >;
+  connections: Array<
+    Pick<
+      Target,
+      | "id"
+      | "name"
+      | "kind"
+      | "environment"
+      | "description"
+      | "credential_reference_id"
+      | "postgres"
+    >
+  >;
+  templates: Array<
+    Pick<
+      ActionTemplate,
+      | "id"
+      | "target_id"
+      | "name"
+      | "operation"
+      | "result_scope"
+      | "description"
+      | "timeout_seconds"
+      | "enabled"
+      | "command"
+    >
+  >;
+}
+export interface ImportReport {
+  digest: string;
+  credentials: number;
+  connections: number;
+  templates: number;
+  replayed: boolean;
+  credentials_need_configuration: boolean;
+}
+export interface BackupReport {
+  schema_version: number;
+  restore_schema_version: number;
+  integrity_ok: boolean;
+  credentials: number;
+  connections: number;
+  templates: number;
+  runs: number;
+  requires_secret_reentry: boolean;
+  restores_authorizations: boolean;
+}
+export interface Diagnostics {
+  format: string;
+  version: string;
+  platform: string;
+  schema_version: number;
+  storage: ConfigurationStorage;
+  credentials: number;
+  configured_credentials: number;
+  connections: number;
+  templates: number;
+  pending_authorizations: number;
+  failed_runs: number;
+  terminal_sessions: number;
+  error_codes: Record<string, number>;
+}
+async function maintenanceJson<T>(
+  token: string,
+  path: string,
+  payload?: unknown,
+): Promise<T> {
+  return readJson<T>(
+    await fetch(`/api/v1/maintenance/${path}`, {
+      method: payload === undefined ? "GET" : "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers:
+        payload === undefined
+          ? sessionHeaders(token)
+          : sessionJsonHeaders(token),
+      body: payload === undefined ? undefined : JSON.stringify(payload),
+    }),
+  );
+}
+export const exportConfiguration = (token: string) =>
+  maintenanceJson<ConfigurationBundle>(token, "configuration");
+export const previewConfiguration = (
+  token: string,
+  bundle: ConfigurationBundle,
+) => maintenanceJson<ImportReport>(token, "configuration/preview", bundle);
+export const importConfiguration = (
+  token: string,
+  bundle: ConfigurationBundle,
+  digest: string,
+) =>
+  maintenanceJson<ImportReport>(token, "configuration/import", {
+    bundle,
+    expected_digest: digest,
+  });
+export const getDiagnostics = (token: string) =>
+  maintenanceJson<Diagnostics>(token, "diagnostics");
+export async function downloadBackup(token: string): Promise<Blob> {
+  const response = await fetch("/api/v1/maintenance/backup", {
+    credentials: "omit",
+    cache: "no-store",
+    headers: sessionHeaders(token),
+  });
+  await requireOk(response);
+  return response.blob();
+}
+export async function previewBackup(
+  token: string,
+  file: Blob,
+): Promise<BackupReport> {
+  return readJson<BackupReport>(
+    await fetch("/api/v1/maintenance/backup/preview", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: {
+        ...sessionHeaders(token),
+        "Content-Type": "application/octet-stream",
+      },
+      body: file,
+    }),
+  );
+}
+
 export interface PairResponse {
   session_token: string;
   token_type: "Bearer";
@@ -132,9 +262,15 @@ export type ApprovalOperation =
   | "postgres_connection_check"
   | "command_execution";
 export type ApprovalResultScope =
-  "status_only" | "metadata_summary" | "sanitized_output";
+  | "status_only"
+  | "metadata_summary"
+  | "sanitized_output";
 export type ApprovalState =
-  "pending" | "approved" | "denied" | "revoked" | "expired";
+  | "pending"
+  | "approved"
+  | "denied"
+  | "revoked"
+  | "expired";
 
 export interface ActionTemplate {
   command?: CommandConfig | null;
@@ -313,7 +449,8 @@ export interface ApprovalListResponse extends CatalogListResponse<Approval> {
   execution_enabled: true;
 }
 
-export interface ActionTemplateListResponse extends CatalogListResponse<ActionTemplate> {
+export interface ActionTemplateListResponse
+  extends CatalogListResponse<ActionTemplate> {
   execution_enabled: true;
 }
 
@@ -359,11 +496,17 @@ export interface PolicyEvaluation {
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
   execution_mode:
-    "synthetic_simulation" | "controlled_postgres" | "credential_command";
+    | "synthetic_simulation"
+    | "controlled_postgres"
+    | "credential_command";
 }
 
 export type RunState =
-  "queued" | "running" | "succeeded" | "cancelled" | "failed";
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "cancelled"
+  | "failed";
 
 export interface SyntheticRun {
   id: string;
@@ -401,7 +544,9 @@ export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
   execution_mode:
-    "synthetic_simulation" | "controlled_postgres" | "credential_command";
+    | "synthetic_simulation"
+    | "controlled_postgres"
+    | "credential_command";
 }
 
 export type SafeEventKind =
@@ -500,8 +645,14 @@ function sessionHeaders(sessionToken: string): HeadersInit {
 }
 
 export async function revokePageSession(token: string): Promise<void> {
-  const response = await fetch("/api/v1/session", { method: "DELETE", headers: sessionHeaders(token), credentials: "omit", cache: "no-store" });
-  if (!response.ok) throw new SecretBridgeApiError(response.status, "session_revoke_failed");
+  const response = await fetch("/api/v1/session", {
+    method: "DELETE",
+    headers: sessionHeaders(token),
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!response.ok)
+    throw new SecretBridgeApiError(response.status, "session_revoke_failed");
 }
 
 function sessionJsonHeaders(sessionToken: string): HeadersInit {

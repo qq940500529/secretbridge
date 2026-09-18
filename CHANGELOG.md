@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.32
+
+- Added settings workflows for non-secret configuration export, read-only import preflight and explicit confirmation, remapping imported UUIDs and credential slots without replacing existing records.
+- Added persistent digest-based import receipts so retries, lost responses and broker restarts do not create duplicate records; staging failures leave the live catalog unchanged.
+- Added bounded native SQLite consistency backups including committed WAL pages, standalone backup downloads and schema/integrity/relationship preflight.
+- Added offline inspection and restoration into a new data directory only. Restored references require secret re-entry, pending/approved grants are revoked and unfinished runs are interrupted; existing data directories and credential stores remain untouched.
+- Added automatic pre-migration rollback snapshots and database rollback on migration failure, plus concise diagnostics restricted to fixed environment fields, counts and allowlisted error codes.
+- Enabled existing rusqlite backup/serialize features, migrated the catalog to schema 15 and added backend, real local credential-command recovery and browser workflow regressions. No new application dependency was added.
+
 ## 0.1.0-alpha.31
 
 - Reorganized the console into Credentials, Connections, Tasks, Terminal, History and Settings, with task and history sub-navigation.
