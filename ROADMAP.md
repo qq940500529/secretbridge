@@ -129,7 +129,7 @@ SecretBridge 的目标很直接：用户在本机保存凭据，AI 不读取凭�
 
 支持范围与限制见[SSH 凭据任务](docs/SSH凭据任务.md)。当前不支持 RSA、主机证书、Agent、PTY 或 Windows 原生远程 Shell；断开连接不等于远程业务撤回。
 
-本地验收：Rust 102 项通过、2 项显式跳过，Web 54 项通过，仓库工具 20 项通过；Rust 格式/Clippy、Web 类型检查/构建、仓库与依赖许可检查通过（443 个 Rust 包、5 组 npm 许可）。真实 SSH 服务覆盖 Web 和原生 MCP/IPC 执行，私钥通过 Web 写入“SSH 密钥”引用后完成明文与加密认证。三平台检查在功能 PR 中运行，状态以实际 CI 为准。
+本地验收：Rust 102 项通过、2 项显式跳过，Web 54 项通过，仓库工具 20 项通过；Rust 格式/Clippy、Web 类型检查/构建、仓库与依赖许可检查通过（443 个 Rust 包、5 组 npm 许可）。真实 SSH 服务覆盖 Web 和原生 MCP/IPC 执行，私钥通过 Web 写入“SSH 密钥”引用后完成明文与加密认证。实现与三平台检查见[PR #29](https://github.com/qq940500529/secretbridge/pull/29)，状态以实际 CI 为准。
 
 原先 SSH 与 Git 的整体连接器计划拆为两个独立验收包：本版本交付 SSH 远程命令完整链路，下一版本继续文件传输与 Git，不将这两项算入已交付功能。
 
