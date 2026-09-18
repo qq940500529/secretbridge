@@ -156,8 +156,55 @@ async fn assert_output_flood_and_truncation(
     let replay_from = ready["replay_from"].as_u64().expect("replay start");
     let next_cursor = ready["next_cursor"].as_u64().expect("next cursor");
     assert_eq!(next_cursor - replay_from, 64 * 1024);
-    let _ = read_until(&mut recovered, b"flood complete bytes=2097152").await;
-    recovered
+    // Flood completion is not guaranteed by a fixed two-second sleep. If a
+    // recovered stream also lags, exercise the documented reconnect workflow.
+    for _ in 0..8 {
+        if read_flood_completion(&mut recovered).await {
+            return recovered;
+        }
+        let (replacement, ready) = connect(url, origin, token, client_id, Some(0)).await;
+        assert_eq!(ready["replay_truncated"], true);
+        recovered = replacement;
+    }
+    panic!("flood completion must become available within the reconnect budget");
+}
+
+async fn read_flood_completion(socket: &mut TestSocket) -> bool {
+    let mut output = Vec::new();
+    for _ in 0..1024 {
+        let message = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("flood output timeout")
+            .expect("flood stream remains open")
+            .expect("valid flood websocket message");
+        match message {
+            Message::Binary(bytes) => {
+                output.extend_from_slice(&bytes);
+                if output.ends_with(b"\x1b[6n") {
+                    socket
+                        .send(Message::Text(
+                            serde_json::json!({"type":"input","data":"\u{1b}[1;1R"})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .expect("answer flood cursor query");
+                }
+                if contains(&output, b"flood complete bytes=2097152") {
+                    return true;
+                }
+            }
+            Message::Text(text) => {
+                let control: serde_json::Value = serde_json::from_str(&text).expect("control JSON");
+                if control["type"] == "output_lagged" {
+                    return false;
+                }
+            }
+            Message::Close(_) => panic!("unexpected close without a lag notification"),
+            _ => {}
+        }
+    }
+    panic!("flood output exceeded the read budget");
 }
 
 async fn assert_terminal_cancellation(

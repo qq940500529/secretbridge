@@ -19,6 +19,8 @@ This inventory describes material included in the repository. Technologies discu
 | Lucide React 1.44.0 | Web icons, ISC | Copyright and ISC terms must be retained |
 | xterm.js 6.0.0 / Fit addon 0.11.0 | Browser terminal runtime, MIT | Copyright and MIT terms must be retained with distributed Web assets |
 | portable-pty 0.9.0 | Cross-platform PTY runtime, MIT | Preserve the crate license and upstream copyright notice with distributed service packages |
+| reqwest 0.13.5 | Native HTTP runtime, MIT OR Apache-2.0; upstream source https://github.com/seanmonstar/reqwest | Exact version and minimal TLS feature locked; no vendored source modifications. Preserve the selected license and applicable upstream notices in service distributions |
+| hyper-rustls 0.27.9, base64 0.23.1, ipnet 2.12.2, tower-http 0.6.11, try-lock 0.2.5, want 0.3.1 and wasm-bindgen-futures 0.4.78 | Additional HTTP dependency graph, MIT and/or Apache-2.0 | Review target-specific inclusion and preserve applicable terms; exact expressions remain in the locked dependency inventory |
 | SHA-2 0.10.9 | In-memory token digest runtime, MIT OR Apache-2.0 | Record the chosen license path and preserve applicable terms and notices |
 | rusqlite 0.40.2 / libsqlite3-sys 0.38.2 | SQLite binding and bundled native build, MIT | Preserve upstream MIT notices; only the `bundled` feature is enabled |
 | SQLite 3.53.2 | Bundled non-secret metadata database, public domain per upstream | Record the exact bundled source version and upstream provenance in release materials |
@@ -53,7 +55,7 @@ Record the following before merge:
 
 Generated inventories must be reviewed against actual release contents. A dependency list is not itself a license or vulnerability audit.
 
-For maintainer decisions, see [open-source governance](docs/开源治理与发布.md) and the [dependency license assessment](docs/依赖许可风险评估.md). The latter reviews the M0 direct dependencies and future candidates; it is not a legal opinion or an audit of every transitive dependency and release binary.
+For maintainer decisions, see [open-source governance](docs/开源治理与发布.md) and the [dependency license assessment](docs/依赖许可风险评估.md). The latter reviews current direct dependencies and future candidates; it is not a legal opinion or an audit of every transitive dependency and release binary.
 
 ---
 

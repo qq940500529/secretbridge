@@ -24,6 +24,8 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 pub struct CommandConfig {
     #[serde(default)]
+    pub http: Option<crate::http_task::HttpConfig>,
+    #[serde(default)]
     pub parameters: Vec<crate::parameters::ParameterDefinition>,
     pub program: String,
     pub working_directory: String,
@@ -47,11 +49,15 @@ pub enum Injection {
     Environment,
     Argument,
     File,
+    Protocol,
 }
 
 impl CommandConfig {
     pub fn validate(&self) -> Result<(), CatalogError> {
         crate::parameters::validate(&self.parameters)?;
+        if let Some(http) = &self.http {
+            return http.validate(self);
+        }
         if !Path::new(&self.program).is_absolute()
             || !Path::new(&self.program).is_file()
             || !Path::new(&self.working_directory).is_absolute()
@@ -75,6 +81,7 @@ impl CommandConfig {
                 return Err(CatalogError::Invalid);
             }
             match slot.injection {
+                Injection::Protocol => return Err(CatalogError::Invalid),
                 Injection::Stdin => {
                     if stdin {
                         return Err(CatalogError::Invalid);
@@ -289,6 +296,20 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
+    if let Some(http) = &config.http {
+        crate::http_task::drive(
+            state,
+            id,
+            http,
+            &config,
+            &parameters,
+            &secrets,
+            cancellation,
+            limit,
+        )
+        .await;
+        return;
+    }
     let state = state.clone();
     let cancellation = cancellation.clone();
     let _ = tokio::task::spawn_blocking(move || {
@@ -452,7 +473,7 @@ fn execute(
                     }
                 }
             }
-            Injection::Stdin => {}
+            Injection::Stdin | Injection::Protocol => {}
         }
     }
     command.args(arguments.iter());
@@ -649,6 +670,7 @@ pub(crate) mod tests {
             arguments.push("{{password}}".into());
         }
         CommandConfig {
+            http: None,
             parameters: Vec::new(),
             program: program.to_string_lossy().into_owned(),
             working_directory: directory.to_string_lossy().into_owned(),
@@ -1014,7 +1036,7 @@ pub(crate) mod tests {
         ));
     }
 
-    async fn web_request(
+    pub(crate) async fn web_request(
         state: &AppState,
         token: &str,
         path: &str,
