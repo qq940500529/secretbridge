@@ -8,6 +8,7 @@ mod mcp;
 mod postgres;
 mod secret_store;
 mod terminal;
+mod terminal_control;
 
 pub use mcp::LocalMcpBridge;
 
@@ -27,9 +28,10 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{
-        HeaderMap, HeaderName, HeaderValue, StatusCode,
+        HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode,
         header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY},
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
@@ -80,6 +82,8 @@ pub struct AppState {
     run_cancellations: RunCancellations,
     secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
+    terminal_controls: terminal_control::TerminalControls,
+    changes: broadcast::Sender<()>,
 }
 
 #[derive(Debug)]
@@ -177,7 +181,9 @@ impl AppState {
             postgres_executor,
             run_cancellations: RunCancellations::default(),
             secret_store,
+            changes: terminals.change_notifier(),
             terminals,
+            terminal_controls: terminal_control::TerminalControls::default(),
         };
         (state, bootstrap_token)
     }
@@ -577,8 +583,97 @@ fn api_router(state: AppState) -> Router {
         )
         .route("/api/v1/terminals/{id}", delete(delete_terminal))
         .route("/api/v1/terminals/{id}/attach", get(attach_terminal))
+        .route("/api/v1/events", get(attach_events))
         .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            notify_mutations,
+        ))
         .with_state(state)
+}
+
+async fn notify_mutations(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let mutation = !matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    );
+    let response = next.run(request).await;
+    if mutation && response.status().is_success() {
+        let _ = state.changes.send(());
+    }
+    response
+}
+
+async fn attach_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    validate_origin(&headers, &state)?;
+    Ok(upgrade
+        .max_message_size(1024)
+        .on_upgrade(move |socket| events_socket(socket, state))
+        .into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum EventAuthentication {
+    Authenticate { token: String },
+}
+
+async fn events_socket(mut socket: WebSocket, state: AppState) {
+    let mut changes = state.changes.subscribe();
+    let mut revocations = state.session_revocations.subscribe();
+    let auth = timeout(WEBSOCKET_AUTH_TIMEOUT, socket.recv()).await;
+    let Ok(Some(Ok(Message::Text(text)))) = auth else {
+        let _ = send_socket_message(&mut socket, Message::Close(None)).await;
+        return;
+    };
+    let Ok(EventAuthentication::Authenticate { token }) =
+        serde_json::from_str::<EventAuthentication>(&text)
+    else {
+        let _ = send_socket_message(&mut socket, Message::Close(None)).await;
+        return;
+    };
+    let digest = token_digest(&token);
+    let Some(expires) = state.authenticate_digest(&digest).await else {
+        let _ = send_socket_message(&mut socket, Message::Close(None)).await;
+        return;
+    };
+    if send_socket_message(&mut socket, Message::Text("{\"type\":\"ready\"}".into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let expiry = sleep(Duration::from_secs(expires));
+    tokio::pin!(expiry);
+    loop {
+        tokio::select! {
+            () = &mut expiry => break,
+            revoked = revocations.recv() => {
+                if !matches!(revoked, Ok(other) if other != digest) { break; }
+            }
+            event = changes.recv() => {
+                if matches!(event, Err(broadcast::error::RecvError::Closed)) { break; }
+                if state.authenticate_digest(&digest).await.is_none() { break; }
+                if send_socket_message(&mut socket, Message::Text("{\"type\":\"changed\"}".into())).await.is_err() { break; }
+            }
+            received = socket.recv() => match received {
+                Some(Ok(Message::Ping(bytes))) => {
+                    if send_socket_message(&mut socket, Message::Pong(bytes)).await.is_err() { break; }
+                }
+                Some(Ok(Message::Pong(_))) => {},
+                _ => break,
+            }
+        }
+    }
+    let _ = send_socket_message(&mut socket, Message::Close(None)).await;
 }
 
 fn apply_security_headers(router: Router) -> Router {
@@ -1190,6 +1285,7 @@ async fn create_run_for_state(
         tokio::spawn(async move {
             drive_run(drive_state.clone(), run_id, cancellation).await;
             drive_state.run_cancellations.remove(run_id).await;
+            let _ = drive_state.changes.send(());
         });
     }
     Ok(outcome)
@@ -1224,6 +1320,7 @@ async fn drive_run(state: AppState, run_id: Uuid, cancellation: CancellationToke
         }
         _ => return,
     };
+    let _ = state.changes.send(());
     if started.operation == catalog::ApprovalOperation::PostgresConnectionCheck {
         drive_postgres_check(&state, run_id, &cancellation).await;
     } else {

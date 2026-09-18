@@ -17,6 +17,7 @@ use std::{
 use portable_pty::{
     Child, ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -40,6 +41,7 @@ pub struct TerminalManager {
     sessions: Arc<RwLock<HashMap<Uuid, Arc<TerminalSession>>>>,
     creation_lock: Arc<Mutex<()>>,
     launcher: TerminalLauncher,
+    changes: broadcast::Sender<()>,
 }
 
 #[derive(Clone)]
@@ -64,6 +66,7 @@ struct TerminalSession {
     output: Arc<Mutex<OutputBuffer>>,
     input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
+    changes: broadcast::Sender<()>,
 }
 
 struct InputLease {
@@ -105,7 +108,9 @@ pub enum TerminalStatus {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalShell {
     #[serde(rename = "powershell")]
@@ -130,7 +135,7 @@ impl TerminalShell {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTerminal {
     pub rows: u16,
@@ -192,6 +197,7 @@ impl TerminalManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             creation_lock: Arc::new(Mutex::new(())),
             launcher: TerminalLauncher::System,
+            changes: broadcast::channel(64).0,
         }
     }
 
@@ -202,6 +208,7 @@ impl TerminalManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             creation_lock: Arc::new(Mutex::new(())),
             launcher: TerminalLauncher::Synthetic(program),
+            changes: broadcast::channel(64).0,
         }
     }
 
@@ -234,9 +241,10 @@ impl TerminalManager {
         }
 
         let launch = self.prepare_launch(request)?;
-        let session = spawn_terminal(launch)?;
+        let session = spawn_terminal(launch, self.changes.clone())?;
         let summary = session.summary();
         self.write_sessions().insert(summary.id, session);
+        let _ = self.changes.send(());
         Ok(summary)
     }
 
@@ -309,6 +317,10 @@ impl TerminalManager {
         sessions
     }
 
+    pub fn change_notifier(&self) -> broadcast::Sender<()> {
+        self.changes.clone()
+    }
+
     pub fn attach(
         &self,
         id: Uuid,
@@ -355,7 +367,9 @@ impl TerminalManager {
             .write_sessions()
             .remove(&id)
             .ok_or(TerminalError::NotFound)?;
-        session.terminate()
+        let result = session.terminate();
+        let _ = self.changes.send(());
+        result
     }
 
     fn read_sessions(&self) -> std::sync::RwLockReadGuard<'_, HashMap<Uuid, Arc<TerminalSession>>> {
@@ -373,7 +387,10 @@ impl TerminalManager {
     }
 }
 
-fn spawn_terminal(launch: PreparedTerminalLaunch) -> Result<Arc<TerminalSession>, TerminalError> {
+fn spawn_terminal(
+    launch: PreparedTerminalLaunch,
+    changes: broadcast::Sender<()>,
+) -> Result<Arc<TerminalSession>, TerminalError> {
     let pair = NativePtySystem::default()
         .openpty(PtySize {
             rows: launch.rows,
@@ -419,6 +436,7 @@ fn spawn_terminal(launch: PreparedTerminalLaunch) -> Result<Arc<TerminalSession>
         output: Arc::clone(&output),
         input_lease: Mutex::new(None),
         events: events.clone(),
+        changes: changes.clone(),
     });
     spawn_terminal_reader(launch.id, reader, output, events.clone(), output_activity)?;
     spawn_terminal_waiter(
@@ -428,6 +446,7 @@ fn spawn_terminal(launch: PreparedTerminalLaunch) -> Result<Arc<TerminalSession>
         exit_code,
         events,
         output_activity_rx,
+        changes,
     )?;
     Ok(session)
 }
@@ -473,6 +492,7 @@ fn spawn_terminal_waiter(
     exit_code: Arc<Mutex<Option<u32>>>,
     events: broadcast::Sender<TerminalEvent>,
     output_activity: std::sync::mpsc::Receiver<()>,
+    changes: broadcast::Sender<()>,
 ) -> Result<(), TerminalError> {
     thread::Builder::new()
         .name(format!("secretbridge-terminal-wait-{id}"))
@@ -480,6 +500,7 @@ fn spawn_terminal_waiter(
             let Ok(exit) = child.wait() else {
                 status.store(STATUS_FAILED, Ordering::Release);
                 let _ = events.send(TerminalEvent::Failed);
+                let _ = changes.send(());
                 return;
             };
             // Drain PTY bytes that became readable as the child exited before publishing its
@@ -499,6 +520,7 @@ fn spawn_terminal_waiter(
             } else if previous == STATUS_TERMINATED {
                 let _ = events.send(TerminalEvent::Terminated);
             }
+            let _ = changes.send(());
         })
         .map(|_| ())
         .map_err(|_| TerminalError::SpawnFailed)
@@ -521,7 +543,50 @@ pub struct TerminalConnection {
     connection_id: Uuid,
 }
 
+#[derive(Serialize)]
+pub struct TerminalRead {
+    pub terminal: TerminalSummary,
+    pub cursor: u64,
+    pub next_cursor: u64,
+    pub oldest_cursor: u64,
+    pub available_cursor: u64,
+    pub truncated: bool,
+    pub has_more: bool,
+    /// UTF-8 preview; use bytes for lossless decoding across read boundaries.
+    pub text: String,
+    pub bytes: Vec<u8>,
+}
+
 impl TerminalConnection {
+    pub fn summary(&self) -> TerminalSummary {
+        self.session.summary()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<TerminalEvent> {
+        self.session.events.subscribe()
+    }
+
+    pub fn read(&self, cursor: u64, max_bytes: usize) -> TerminalRead {
+        let output = self
+            .session
+            .output
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut replay = output.snapshot(Some(cursor));
+        replay.output.truncate(max_bytes);
+        let next_cursor = replay.replay_from + replay.output.len() as u64;
+        TerminalRead {
+            terminal: self.summary(),
+            cursor: replay.replay_from,
+            next_cursor,
+            oldest_cursor: output.oldest_cursor,
+            available_cursor: output.next_cursor,
+            truncated: replay.truncated,
+            has_more: next_cursor < output.next_cursor,
+            text: String::from_utf8_lossy(&replay.output).into_owned(),
+            bytes: replay.output,
+        }
+    }
     #[must_use]
     pub fn output_bounds(&self) -> (u64, u64) {
         let output = self
@@ -662,6 +727,7 @@ impl TerminalSession {
             return Ok(());
         }
         self.status.store(STATUS_TERMINATED, Ordering::Release);
+        let _ = self.changes.send(());
         let graceful = self
             .writer
             .lock()

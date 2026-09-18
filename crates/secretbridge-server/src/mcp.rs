@@ -36,6 +36,11 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOpti
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::terminal::CreateTerminal;
+use crate::terminal_control::{
+    AttachParams, OwnedTerminalRequest, ReadParams, ResizeParams, TerminalIdParams,
+    TerminalRequest, WriteParams,
+};
 use crate::{
     AppState, cancel_run_for_state,
     catalog::{
@@ -47,12 +52,13 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "SecretBridge exposes fixed controlled operations only. Request approval, wait for the user to approve it in the Web console, then create one run. Never ask for or submit credentials, SQL, connection strings, shell commands, or business data.";
+const SERVER_INSTRUCTIONS: &str = "SecretBridge provides approved credential-backed operations and ordinary persistent terminals. For credential-backed operations request approval and wait for the user in the Web console. Ordinary terminals accept non-secret commands only: never submit passwords or tokens, retrieve credential files, or use the shell to bypass credential-backed operations. Attach before reading or writing; input requires request_input=true. Read with next_cursor, not by re-executing commands. Writes are not automatically retried. Detach releases input without stopping the process; close terminates and removes it. The returned terminal exit code is the shell process exit code, not each command's exit code. Terminal bytes are ordinary unfiltered process output; credential injection and streaming redaction are not available on this path.";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
     backend: McpBackend,
     tool_router: ToolRouter<Self>,
+    actor: Uuid,
 }
 
 impl SecretBridgeMcp {
@@ -61,6 +67,7 @@ impl SecretBridgeMcp {
         Self {
             backend: McpBackend::Local(state),
             tool_router: Self::tool_router(),
+            actor: Uuid::new_v4(),
         }
     }
 
@@ -68,7 +75,22 @@ impl SecretBridgeMcp {
         Self {
             backend: McpBackend::Remote(client),
             tool_router: Self::tool_router(),
+            actor: Uuid::new_v4(),
         }
+    }
+
+    async fn terminal(
+        &self,
+        request: TerminalRequest,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        Ok(McpJson(
+            self.backend
+                .terminal_request(OwnedTerminalRequest {
+                    actor: self.actor,
+                    request,
+                })
+                .await?,
+        ))
     }
 }
 
@@ -79,6 +101,20 @@ enum McpBackend {
 }
 
 impl McpBackend {
+    async fn terminal_request(
+        &self,
+        request: OwnedTerminalRequest,
+    ) -> Result<serde_json::Value, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                state
+                    .terminal_controls
+                    .execute(&state.terminals, request)
+                    .await
+            }
+            Self::Remote(client) => client.call(OP_TERMINAL, &request).await,
+        }
+    }
     async fn list_action_templates(&self) -> Result<TemplateList, ErrorData> {
         match self {
             Self::Local(state) => {
@@ -117,6 +153,7 @@ impl McpBackend {
                     expires_in_seconds: params.expires_in_seconds,
                 };
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
+                let _ = state.changes.send(());
                 Ok(ApprovalSummary::from(approval))
             }
             Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
@@ -147,6 +184,7 @@ impl McpBackend {
                 )
                 .await
                 .map_err(catalog_error)?;
+                let _ = state.changes.send(());
                 Ok(CreateRunSummary {
                     execution_mode: run_execution_mode(outcome.run.operation).to_owned(),
                     replayed: outcome.replayed,
@@ -181,6 +219,7 @@ impl McpBackend {
                 )
                 .await
                 .map_err(catalog_error)?;
+                let _ = state.changes.send(());
                 Ok(RunSummary::from(run))
             }
             Self::Remote(client) => client.call(OP_CANCEL_RUN, &params).await,
@@ -205,6 +244,109 @@ impl McpBackend {
 
 #[tool_router]
 impl SecretBridgeMcp {
+    #[tool(
+        name = "secretbridge_terminal_capabilities",
+        description = "Discover supported ordinary system shells and terminal limits. No credentials are injected."
+    )]
+    async fn terminal_capabilities(&self) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Capabilities).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_list",
+        description = "List broker-owned terminal sessions, lifecycle status, process IDs and shell exit codes."
+    )]
+    async fn terminal_list(&self) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::List).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_create",
+        description = "Create a real persistent terminal for ordinary commands. Environment and paths must contain no secrets. Creation does not grant input; attach next."
+    )]
+    async fn terminal_create(
+        &self,
+        Parameters(request): Parameters<CreateTerminal>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Create { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_attach",
+        description = "Attach this MCP session to a terminal. Request input explicitly; input_granted=false means another client owns it. Idle attachments expire after 60 seconds; detach before yielding to the user."
+    )]
+    async fn terminal_attach(
+        &self,
+        Parameters(request): Parameters<AttachParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Attach { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_read",
+        description = "Read bounded ordinary output after a byte cursor. max_bytes=1..16384; wait_ms=0..5000. Continue with next_cursor; truncated reports a retention gap; bytes provide lossless decoding and text is a UTF-8 preview. Never re-execute a command to recover output."
+    )]
+    async fn terminal_read(
+        &self,
+        Parameters(request): Parameters<ReadParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Read { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_write",
+        description = "Write at most 4096 bytes of non-secret input using this MCP session's input lease. Include the shell newline to execute. Failure may mean delivery is uncertain: do not blindly retry."
+    )]
+    async fn terminal_write(
+        &self,
+        Parameters(request): Parameters<WriteParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Write { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_resize",
+        description = "Resize a terminal using its input lease. Does not restart or re-execute work."
+    )]
+    async fn terminal_resize(
+        &self,
+        Parameters(request): Parameters<ResizeParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Resize { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_interrupt",
+        description = "Send Ctrl+C using the input lease. This is a best-effort foreground interruption, not guaranteed termination. Read subsequent output to confirm; close if forced termination is required."
+    )]
+    async fn terminal_interrupt(
+        &self,
+        Parameters(request): Parameters<TerminalIdParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Interrupt { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_detach",
+        description = "Release this MCP session's terminal attachment and input lease without stopping the shell. Safe to repeat."
+    )]
+    async fn terminal_detach(
+        &self,
+        Parameters(request): Parameters<TerminalIdParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Detach { request }).await
+    }
+
+    #[tool(
+        name = "secretbridge_terminal_close",
+        description = "Terminate and remove the terminal using this MCP session's input lease. This stops running work; use detach to preserve it."
+    )]
+    async fn terminal_close(
+        &self,
+        Parameters(request): Parameters<TerminalIdParams>,
+    ) -> Result<McpJson<serde_json::Value>, ErrorData> {
+        self.terminal(TerminalRequest::Close { request }).await
+    }
     #[tool(
         name = "secretbridge_list_action_templates",
         description = "List configured controlled-action templates without exposing target addresses, descriptions, credential references, or secrets."
@@ -325,11 +467,21 @@ pub async fn serve_stdio_bridge(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let client = BridgeClient::from_file(connection_file);
     client.health().await.map_err(Box::new)?;
-    SecretBridgeMcp::new_remote(client)
-        .serve(stdio())
-        .await?
-        .waiting()
-        .await?;
+    let server = SecretBridgeMcp::new_remote(client);
+    let actor = server.actor;
+    let backend = server.backend.clone();
+    let result: Result<(), Box<dyn Error + Send + Sync>> = async {
+        server.serve(stdio()).await?.waiting().await?;
+        Ok(())
+    }
+    .await;
+    let _ = backend
+        .terminal_request(OwnedTerminalRequest {
+            actor,
+            request: TerminalRequest::Release,
+        })
+        .await;
+    result?;
     Ok(())
 }
 
@@ -355,6 +507,7 @@ const OP_CREATE_RUN: &str = "create_run";
 const OP_GET_RUN: &str = "get_run";
 const OP_CANCEL_RUN: &str = "cancel_run";
 const OP_LIST_RUN_EVENTS: &str = "list_run_events";
+const OP_TERMINAL: &str = "terminal";
 
 #[derive(Clone)]
 struct BridgeClient {
@@ -640,7 +793,16 @@ impl LocalMcpBridge {
             _connection_guard,
         } = self;
         let capacity = Arc::new(Semaphore::new(MAX_BRIDGE_CONNECTIONS));
-        serve_bridge_listener(listener, state, token_digest, capacity, cancellation).await
+        let controls = state.terminal_controls.clone();
+        tokio::select! {
+            result = serve_bridge_listener(listener, state, token_digest, capacity, cancellation) => result,
+            () = async move {
+                loop {
+                    time::sleep(Duration::from_secs(5)).await;
+                    controls.expire();
+                }
+            } => Ok(()),
+        }
     }
 }
 
@@ -879,6 +1041,11 @@ async fn dispatch_bridge_request(
                 .list_run_events(parse_bridge_payload(payload)?)
                 .await?,
         ),
+        OP_TERMINAL => {
+            backend
+                .terminal_request(parse_bridge_payload(payload)?)
+                .await
+        }
         _ => Err(ErrorData::invalid_params("invalid_request", None)),
     }
 }
@@ -906,7 +1073,12 @@ fn safe_bridge_error_code(error: ErrorData) -> String {
         | "idempotency_conflict"
         | "policy_denied"
         | "resource_in_use"
-        | "version_conflict" => code,
+        | "version_conflict"
+        | "terminal_attach_required"
+        | "terminal_input_required"
+        | "terminal_closed"
+        | "terminal_spawn_failed"
+        | "terminal_unsupported_shell" => code,
         _ => "secretbridge_operation_failed".to_owned(),
     }
 }
@@ -1377,14 +1549,19 @@ impl From<SafeEvent> for EventSummary {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::{collections::BTreeMap, fs, time::Duration};
+    use tokio::time;
 
     use rmcp::{ServiceExt, model::CallToolRequestParams};
     use serde_json::{Map, Value, json};
     use tokio_util::sync::CancellationToken;
     use uuid::Uuid;
 
-    use super::{BridgeClient, LocalMcpBridge, SecretBridgeMcp};
+    use super::{
+        BridgeClient, LocalMcpBridge, OwnedTerminalRequest, SecretBridgeMcp, TerminalRequest,
+    };
     use crate::{
         AppState,
         catalog::{
@@ -1412,6 +1589,8 @@ mod tests {
     ) {
         let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
         let server_handle = tokio::spawn(async move {
+            let backend = server.backend.clone();
+            let actor = server.actor;
             server
                 .serve(server_transport)
                 .await
@@ -1419,6 +1598,13 @@ mod tests {
                 .waiting()
                 .await
                 .expect("MCP server stops cleanly");
+            backend
+                .terminal_request(OwnedTerminalRequest {
+                    actor,
+                    request: TerminalRequest::Release,
+                })
+                .await
+                .expect("release MCP attachments");
         });
         let client = ().serve(client_transport).await.expect("MCP client starts");
         (client, server_handle)
@@ -1452,6 +1638,16 @@ mod tests {
                 "secretbridge_list_action_templates",
                 "secretbridge_list_run_events",
                 "secretbridge_request_approval",
+                "secretbridge_terminal_attach",
+                "secretbridge_terminal_capabilities",
+                "secretbridge_terminal_close",
+                "secretbridge_terminal_create",
+                "secretbridge_terminal_detach",
+                "secretbridge_terminal_interrupt",
+                "secretbridge_terminal_list",
+                "secretbridge_terminal_read",
+                "secretbridge_terminal_resize",
+                "secretbridge_terminal_write",
             ]
         );
 
@@ -1473,6 +1669,29 @@ mod tests {
                 vec!["expected_version", "run_id"],
             ),
             ("secretbridge_list_run_events", vec!["id"]),
+            ("secretbridge_terminal_attach", vec!["id", "request_input"]),
+            ("secretbridge_terminal_capabilities", vec![]),
+            ("secretbridge_terminal_close", vec!["id"]),
+            (
+                "secretbridge_terminal_create",
+                vec![
+                    "cols",
+                    "environment",
+                    "name",
+                    "rows",
+                    "shell",
+                    "working_directory",
+                ],
+            ),
+            ("secretbridge_terminal_detach", vec!["id"]),
+            ("secretbridge_terminal_interrupt", vec!["id"]),
+            ("secretbridge_terminal_list", vec![]),
+            (
+                "secretbridge_terminal_read",
+                vec!["cursor", "id", "max_bytes", "wait_ms"],
+            ),
+            ("secretbridge_terminal_resize", vec!["cols", "id", "rows"]),
+            ("secretbridge_terminal_write", vec!["data", "id"]),
         ]);
         for tool in &tools {
             let mut properties = tool
@@ -1493,6 +1712,244 @@ mod tests {
 
         client.cancel().await.expect("stop MCP client");
         server_handle.await.expect("join MCP server");
+    }
+
+    async fn terminal_tool(
+        client: &rmcp::service::RunningService<rmcp::RoleClient, ()>,
+        name: &'static str,
+        params: Value,
+    ) -> Value {
+        let result = client
+            .call_tool(CallToolRequestParams::new(name).with_arguments(arguments(params)))
+            .await
+            .expect("terminal tool succeeds");
+        result
+            .structured_content
+            .expect("structured terminal result")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "end-to-end native IPC and MCP lifecycle acceptance"
+    )]
+    async fn native_mcp_controls_real_terminal_without_reexecuting_on_reconnect() {
+        let identifier = Uuid::new_v4().simple().to_string();
+        let directory = std::env::temp_dir().join(format!("sb-t-{}", &identifier[..8]));
+        fs::create_dir(&directory).expect("create test directory");
+        #[cfg(unix)]
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("private directory");
+        let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        let bridge = LocalMcpBridge::bind(&directory, state.clone()).expect("bind bridge");
+        let cancellation = CancellationToken::new();
+        let broker_stop = cancellation.clone();
+        let broker = tokio::spawn(async move {
+            bridge.serve(broker_stop).await.expect("serve bridge");
+        });
+        let bridge_client = BridgeClient::from_file(directory.join("mcp-bridge.json"));
+        let (client, server) =
+            connect_server(SecretBridgeMcp::new_remote(bridge_client.clone())).await;
+        let (other, other_server) =
+            connect_server(SecretBridgeMcp::new_remote(bridge_client)).await;
+        let capabilities =
+            terminal_tool(&client, "secretbridge_terminal_capabilities", json!({})).await;
+        assert!(
+            !capabilities["shells"]
+                .as_array()
+                .expect("shells")
+                .is_empty()
+        );
+        let created = terminal_tool(
+            &client,
+            "secretbridge_terminal_create",
+            json!({"rows":24,"cols":80,"name":"AI acceptance"}),
+        )
+        .await;
+        let id = created["terminal"]["id"].as_str().expect("terminal id");
+        let first = terminal_tool(
+            &client,
+            "secretbridge_terminal_attach",
+            json!({"id":id,"request_input":true}),
+        )
+        .await;
+        assert_eq!(first["input_granted"], true);
+        let mut cursor = first["oldest_cursor"].as_u64().expect("cursor");
+        assert!(
+            other
+                .call_tool(
+                    CallToolRequestParams::new("secretbridge_terminal_read")
+                        .with_arguments(arguments(json!({"id":id,"cursor":0})))
+                )
+                .await
+                .is_err()
+        );
+        let observer = terminal_tool(
+            &other,
+            "secretbridge_terminal_attach",
+            json!({"id":id,"request_input":true}),
+        )
+        .await;
+        assert_eq!(observer["input_granted"], false);
+        assert!(
+            other
+                .call_tool(
+                    CallToolRequestParams::new("secretbridge_terminal_write")
+                        .with_arguments(arguments(json!({"id":id,"data":"echo forbidden\r"})))
+                )
+                .await
+                .is_err()
+        );
+        terminal_tool(
+            &client,
+            "secretbridge_terminal_resize",
+            json!({"id":id,"rows":30,"cols":100}),
+        )
+        .await;
+        let command = if cfg!(windows) {
+            "$sbAcceptance = 'ai-' + 'terminal-ready'; Write-Output $sbAcceptance\r"
+        } else {
+            "sb_acceptance=ai-; sb_acceptance=${sb_acceptance}terminal-ready; printf '%s\\n' \"$sb_acceptance\"\n"
+        };
+        terminal_tool(
+            &client,
+            "secretbridge_terminal_write",
+            json!({"id":id,"data":command}),
+        )
+        .await;
+        let mut output = Vec::new();
+        for _ in 0..40 {
+            let read = terminal_tool(
+                &client,
+                "secretbridge_terminal_read",
+                json!({"id":id,"cursor":cursor,"wait_ms":1000,"max_bytes":1024}),
+            )
+            .await;
+            assert_eq!(read["cursor"], cursor);
+            let bytes = read["bytes"]
+                .as_array()
+                .expect("output bytes")
+                .iter()
+                .map(|byte| u8::try_from(byte.as_u64().expect("byte")).expect("u8"))
+                .collect::<Vec<_>>();
+            cursor = read["next_cursor"].as_u64().expect("next cursor");
+            output.extend(bytes);
+            if output.ends_with(b"\x1b[6n") {
+                terminal_tool(
+                    &client,
+                    "secretbridge_terminal_write",
+                    json!({"id":id,"data":"\u{1b}[1;1R"}),
+                )
+                .await;
+            }
+            if output
+                .windows(b"ai-terminal-ready".len())
+                .any(|bytes| bytes == b"ai-terminal-ready")
+            {
+                break;
+            }
+        }
+        assert!(
+            output
+                .windows(b"ai-terminal-ready".len())
+                .any(|bytes| bytes == b"ai-terminal-ready"),
+            "command really executed"
+        );
+        client.cancel().await.expect("disconnect first MCP session");
+        server.await.expect("release first input lease");
+        let attached = terminal_tool(
+            &other,
+            "secretbridge_terminal_attach",
+            json!({"id":id,"request_input":true}),
+        )
+        .await;
+        assert_eq!(attached["input_granted"], true);
+        let persisted = if cfg!(windows) {
+            "Write-Output ($sbAcceptance + '-persisted')\r"
+        } else {
+            "printf '%s%s\\n' \"$sb_acceptance\" -persisted\n"
+        };
+        terminal_tool(
+            &other,
+            "secretbridge_terminal_write",
+            json!({"id":id,"data":persisted}),
+        )
+        .await;
+        let mut continued = String::new();
+        for _ in 0..20 {
+            let read = terminal_tool(
+                &other,
+                "secretbridge_terminal_read",
+                json!({"id":id,"cursor":cursor,"wait_ms":1000}),
+            )
+            .await;
+            assert_eq!(read["cursor"], cursor);
+            cursor = read["next_cursor"].as_u64().expect("next cursor");
+            continued.push_str(read["text"].as_str().expect("preview"));
+            if continued.contains("ai-terminal-ready-persisted") {
+                break;
+            }
+        }
+        assert!(
+            continued.contains("ai-terminal-ready-persisted"),
+            "same shell state survived MCP disconnect"
+        );
+        assert!(
+            other
+                .call_tool(
+                    CallToolRequestParams::new("secretbridge_terminal_read")
+                        .with_arguments(arguments(json!({"id":id,"cursor":cursor,"wait_ms":5001})))
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            other
+                .call_tool(
+                    CallToolRequestParams::new("secretbridge_terminal_write")
+                        .with_arguments(arguments(json!({"id":id,"data":"x".repeat(4097)})))
+                )
+                .await
+                .is_err()
+        );
+        terminal_tool(&other, "secretbridge_terminal_interrupt", json!({"id":id})).await;
+        terminal_tool(
+            &other,
+            "secretbridge_terminal_write",
+            json!({"id":id,"data":if cfg!(windows) { "exit 7\r" } else { "exit 7\n" }}),
+        )
+        .await;
+        let mut exited = false;
+        for _ in 0..40 {
+            let read = terminal_tool(
+                &other,
+                "secretbridge_terminal_read",
+                json!({"id":id,"cursor":cursor,"wait_ms":500}),
+            )
+            .await;
+            cursor = read["next_cursor"].as_u64().expect("cursor");
+            if read["terminal"]["status"] == "exited" {
+                assert_eq!(read["terminal"]["exit_code"], 7);
+                exited = true;
+                break;
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(exited, "natural shell exit recorded");
+        terminal_tool(&other, "secretbridge_terminal_detach", json!({"id":id})).await;
+        terminal_tool(
+            &other,
+            "secretbridge_terminal_attach",
+            json!({"id":id,"request_input":true}),
+        )
+        .await;
+        terminal_tool(&other, "secretbridge_terminal_close", json!({"id":id})).await;
+        assert!(state.terminals.list().is_empty());
+        other.cancel().await.expect("stop other client");
+        other_server.await.expect("stop other server");
+        cancellation.cancel();
+        broker.await.expect("stop broker");
+        fs::remove_dir(&directory).expect("remove empty test directory");
     }
 
     #[tokio::test]

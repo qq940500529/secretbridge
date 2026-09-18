@@ -6,6 +6,16 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.24 · AI terminal control and live state
+
+- Add ten MCP tools for ordinary terminal capability discovery, list/create, attach, bounded cursor reads, write/resize, Ctrl+C, detach and close through the existing native IPC broker.
+- Scope attachments to internally generated MCP-session identities; preserve input leases across calls, release them on orderly disconnect, and expire idle attachments without stopping their processes.
+- Provide byte-exact replay alongside a UTF-8 preview, explicit retention gaps, bounded long polling and shell lifecycle/exit status; never retry mutating terminal input automatically.
+- Add an Origin-checked, first-frame-authenticated WebSocket invalidation stream that closes on session expiry or revocation and carries no resource values or output.
+- Refresh approval, run and terminal views on live changes, reconcile snapshots on reconnection, and replace frequent polling with a slow fallback for expiry and unavailable WebSockets.
+- Keep ordinary terminal output separate from credential-backed execution: no secret injection or general streaming redaction is claimed on this path.
+- Add real-shell MCP/native-IPC acceptance, client-isolation, expiry, protocol-boundary, realtime-authentication and Web reconnection tests. No dependencies were added.
+
 ### 0.1.0-alpha.23 · real persistent terminals
 
 - Replace the production synthetic PTY launcher with platform-aware real shells: PowerShell and CMD on Windows, Bash on Linux, and Zsh on macOS.

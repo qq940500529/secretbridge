@@ -18,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. The Web console provides reconnectable PowerShell/CMD, Bash or Zsh sessions and stores passwords and API tokens in the operating-system credential store. The MCP stdio service can request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. AI terminal control, general credential injection and more connectors are the next priorities.
+> This is a local prototype under active feature development. The Web console provides reconnectable PowerShell/CMD, Bash or Zsh sessions and stores passwords and API tokens in the operating-system credential store. The MCP stdio service can control ordinary terminals, request approvals, start approved single-use runs, inspect status/events and cancel an active run. Secrets have no read/export tool or API. General credential injection and more connectors are the next priorities.
 
 ## Why SecretBridge?
 
@@ -32,7 +32,7 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP exposes fixed tools without approval decisions, secret access, SQL, credential-injected commands, connection strings or terminal control. See the [feature-first roadmap](ROADMAP.md).
+One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser and MCP disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Web and MCP clients coordinate through input leases; approvals, runs and terminal lists refresh from live notifications. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP cannot decide approvals or read secrets. Ordinary terminals do not inject credentials or claim to sanitize arbitrary file or command output. See [AI terminals and realtime state](docs/AI终端与实时状态.md) and the [feature-first roadmap](ROADMAP.md).
 
 ## How it works
 
