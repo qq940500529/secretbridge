@@ -32,6 +32,11 @@ import { consumePairingToken } from "./pairing";
 const TerminalView = lazy(() =>
   import("./TerminalView").then((module) => ({ default: module.TerminalView })),
 );
+const DataMaintenanceView = lazy(() =>
+  import("./DataMaintenanceView").then((module) => ({
+    default: module.DataMaintenanceView,
+  })),
+);
 const CredentialReferencesView = lazy(() =>
   import("./CatalogView").then((module) => ({
     default: module.CredentialReferencesView,
@@ -390,6 +395,22 @@ export function App() {
             {activePage === "settings" ? (
               <>
                 <SettingsView text={text} status={serviceStatus} />
+                {sessionToken && (
+                  <Suspense
+                    fallback={
+                      <p>
+                        {language === "zh-CN"
+                          ? "加载数据维护…"
+                          : "Loading maintenance…"}
+                      </p>
+                    }
+                  >
+                    <DataMaintenanceView
+                      sessionToken={sessionToken}
+                      language={language}
+                    />
+                  </Suspense>
+                )}
                 {sessionToken && (
                   <div className="mt-6 border-t border-slate-200 pt-5">
                     <button

@@ -8,6 +8,8 @@ mod command;
 mod database_task;
 mod git_task;
 mod http_task;
+mod maintenance;
+mod maintenance_api;
 mod mcp;
 mod parameters;
 mod postgres;
@@ -18,6 +20,7 @@ mod ssh_task;
 mod terminal;
 mod terminal_control;
 
+pub use maintenance::{BackupReport, inspect_configuration_backup, restore_configuration_backup};
 pub use mcp::LocalMcpBridge;
 
 use std::{
@@ -606,6 +609,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/terminals/{id}", delete(delete_terminal))
         .route("/api/v1/terminals/{id}/attach", get(attach_terminal))
         .route("/api/v1/events", get(attach_events))
+        .merge(maintenance_api::routes(state.clone()))
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(
             state.clone(),

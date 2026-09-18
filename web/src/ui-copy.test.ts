@@ -26,6 +26,7 @@ const renderedViews = [
   "Workbench.tsx",
   "TaskWorkspace.tsx",
   "ConnectionRelations.tsx",
+  "DataMaintenanceView.tsx",
 ];
 
 describe("operator-facing copy", () => {
