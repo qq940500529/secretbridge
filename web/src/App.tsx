@@ -6,9 +6,7 @@ import {
   Activity,
   CheckCircle2,
   CircleAlert,
-  ClipboardCheck,
   FileClock,
-  Gauge,
   KeyRound,
   Languages,
   PanelLeftClose,
@@ -18,12 +16,17 @@ import {
   Settings,
   ShieldCheck,
   SquareTerminal,
-  Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import { getSession, getStatus, pair, type ServiceStatus } from "./api";
+import {
+  getSession,
+  getStatus,
+  pair,
+  revokePageSession,
+  type ServiceStatus,
+} from "./api";
 import { consumePairingToken } from "./pairing";
 
 const TerminalView = lazy(() =>
@@ -37,39 +40,37 @@ const CredentialReferencesView = lazy(() =>
 const TargetsView = lazy(() =>
   import("./CatalogView").then((module) => ({ default: module.TargetsView })),
 );
-const ApprovalView = lazy(() =>
-  import("./ApprovalView").then((module) => ({ default: module.ApprovalView })),
-);
-const ActionTemplatesView = lazy(() =>
-  import("./ActionTemplatesView").then((module) => ({
-    default: module.ActionTemplatesView,
+const TaskWorkspace = lazy(() =>
+  import("./TaskWorkspace").then((module) => ({
+    default: module.TaskWorkspace,
   })),
 );
-const OperationsView = lazy(() =>
-  import("./OperationsView").then((module) => ({ default: module.OperationsView })),
-);
-const AuditView = lazy(() =>
-  import("./AuditView").then((module) => ({ default: module.AuditView })),
+const HistoryWorkspace = lazy(() =>
+  import("./TaskWorkspace").then((module) => ({
+    default: module.HistoryWorkspace,
+  })),
 );
 
 type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
 type Authentication = "unpaired" | "pairing" | "paired" | "error";
+type Page =
+  | "credentials"
+  | "targets"
+  | "operations"
+  | "terminal"
+  | "audit"
+  | "settings";
 
 interface Copy {
-  dashboard: string;
   credentials: string;
   targets: string;
-  approvals: string;
   operations: string;
-  policies: string;
   terminal: string;
   audit: string;
   settings: string;
   overview: string;
   subtitle: string;
-  syntheticTitle: string;
-  syntheticBody: string;
   service: string;
   online: string;
   offline: string;
@@ -103,20 +104,14 @@ interface Copy {
 
 const copy: Record<Language, Copy> = {
   "zh-CN": {
-    dashboard: "总览",
     credentials: "凭据",
-    targets: "连接目标",
-    approvals: "审批中心",
-    operations: "运行任务",
-    policies: "执行策略",
+    targets: "连接",
+    operations: "任务",
     terminal: "终端",
-    audit: "审计记录",
-    settings: "系统设置",
-    overview: "任务与连接总览",
-    subtitle: "凭据留在本机，自动化只获得脱敏后的执行结果。",
-    syntheticTitle: "凭据任务可用",
-    syntheticBody:
-      "凭据保留在系统凭据库中。获批任务可执行固定程序并持续返回脱敏输出，或执行 PostgreSQL 只读连接检查；普通终端不会获得注入的凭据。",
+    audit: "历史",
+    settings: "设置",
+    overview: "服务与页面设置",
+    subtitle: "检查本机服务、存储方式和当前页面的配对状态。",
     service: "本地服务",
     online: "在线",
     offline: "未连接",
@@ -138,8 +133,9 @@ const copy: Record<Language, Copy> = {
     realCredentials: "凭据代用",
     disabled: "未启用",
     enabled: "已启用",
-    futureModule: "模块骨架已就绪",
-    futureBody: "此功能将在后续核心功能包中提供。",
+    futureModule: "请先配对本机服务",
+    futureBody:
+      "请使用后台服务启动时提供的一次性配对链接打开控制台。如果配对失败，请获取新的链接重试；刷新当前链接不会恢复已消费的令牌。",
     collapse: "收起导航",
     expand: "展开导航",
     skipContent: "跳到主要内容",
@@ -148,21 +144,15 @@ const copy: Record<Language, Copy> = {
     connectionStatus: "连接状态",
   },
   en: {
-    dashboard: "Overview",
     credentials: "Credentials",
-    targets: "Targets",
-    approvals: "Approvals",
-    operations: "Runs",
-    policies: "Policies",
+    targets: "Connections",
+    operations: "Tasks",
     terminal: "Terminal",
-    audit: "Audit log",
+    audit: "History",
     settings: "Settings",
-    overview: "Tasks and connections",
+    overview: "Service and page settings",
     subtitle:
-      "Credentials remain local while automation receives sanitized results.",
-    syntheticTitle: "Credential-backed tasks are available",
-    syntheticBody:
-      "Credentials remain in the system store. Approved tasks run fixed programs with filtered output or perform the PostgreSQL read-only check; ordinary terminals never receive injected credentials.",
+      "Inspect the local service, configuration storage and this page's pairing status.",
     service: "Local service",
     online: "Online",
     offline: "Disconnected",
@@ -184,8 +174,9 @@ const copy: Record<Language, Copy> = {
     realCredentials: "Credential use",
     disabled: "Disabled",
     enabled: "Enabled",
-    futureModule: "Module shell ready",
-    futureBody: "This capability will be delivered in a future core feature package.",
+    futureModule: "Pair with the local service",
+    futureBody:
+      "Open the console using the one-time pairing link from the running broker. If pairing fails, request a fresh link; reloading a consumed link cannot restore its token.",
     collapse: "Collapse navigation",
     expand: "Expand navigation",
     skipContent: "Skip to main content",
@@ -195,22 +186,16 @@ const copy: Record<Language, Copy> = {
   },
 };
 
-const navItems: Array<{ id: keyof Copy; icon: LucideIcon }> = [
-  { id: "dashboard", icon: Gauge },
+const navItems: Array<{ id: Page; icon: LucideIcon }> = [
   { id: "credentials", icon: KeyRound },
   { id: "targets", icon: ServerCog },
-  { id: "approvals", icon: ClipboardCheck },
   { id: "operations", icon: PlayCircle },
-  { id: "policies", icon: Workflow },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
   { id: "settings", icon: Settings },
 ];
 
-function stateLabel(
-  value: Connection | Authentication,
-  text: Copy,
-): string {
+function stateLabel(value: Connection | Authentication, text: Copy): string {
   return text[value === "error" ? "authError" : value];
 }
 
@@ -221,9 +206,17 @@ export function App() {
   const [connection, setConnection] = useState<Connection>("checking");
   const [authentication, setAuthentication] =
     useState<Authentication>("unpaired");
-  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(
+    null,
+  );
   const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [activePage, setActivePage] = useState<keyof Copy>("dashboard");
+  const [activePage, setActivePage] = useState<Page>("operations");
+  const [taskContext, setTaskContext] = useState<{
+    targetId?: string;
+    templateId?: string;
+  }>({});
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const text = copy[language];
 
@@ -274,7 +267,7 @@ export function App() {
           {text.skipContent}
         </a>
         <aside
-          className={`fixed inset-y-0 left-0 z-20 flex flex-col border-r border-slate-200 bg-slate-950 text-slate-200 shadow-xl transition-[width] duration-200 ${collapsed ? "w-20" : "w-20 md:w-64"}`}
+          className={`app-sidebar fixed inset-y-0 left-0 z-20 flex flex-col border-r border-slate-200 bg-slate-950 text-slate-200 shadow-xl transition-[width] duration-200 ${collapsed ? "w-20" : "w-20 md:w-64"}`}
         >
           <div className="flex h-20 items-center gap-3 border-b border-white/10 px-5">
             <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 shadow-lg shadow-cyan-950/40">
@@ -300,7 +293,10 @@ export function App() {
                 <button
                   key={id}
                   type="button"
-                  onClick={() => setActivePage(id)}
+                  onClick={() => {
+                    setActivePage(id);
+                    if (id === "operations") setTaskContext({});
+                  }}
                   className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition ${
                     selected
                       ? "bg-cyan-400/15 text-cyan-300 ring-1 ring-inset ring-cyan-400/20"
@@ -310,7 +306,9 @@ export function App() {
                   aria-label={text[id]}
                 >
                   <Icon className="size-5 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span className="hidden md:inline">{text[id]}</span>}
+                  {!collapsed && (
+                    <span className="hidden md:inline">{text[id]}</span>
+                  )}
                 </button>
               );
             })}
@@ -328,17 +326,19 @@ export function App() {
               ) : (
                 <PanelLeftClose className="size-5" aria-hidden="true" />
               )}
-              {!collapsed && <span className="hidden md:inline">{text.collapse}</span>}
+              {!collapsed && (
+                <span className="hidden md:inline">{text.collapse}</span>
+              )}
             </button>
           </div>
         </aside>
 
         <div
-          className={`min-h-screen transition-[margin] duration-200 ${collapsed ? "ml-20" : "ml-20 md:ml-64"}`}
+          className={`app-shell min-h-screen transition-[margin] duration-200 ${collapsed ? "ml-20" : "ml-20 md:ml-64"}`}
         >
           <header className="sticky top-0 z-10 flex min-h-20 flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 bg-white/85 px-4 py-3 backdrop-blur-xl sm:px-8">
             <div
-              className="flex items-center gap-3 text-sm"
+              className="flex flex-wrap items-center gap-3 text-sm"
               role="status"
               aria-live="polite"
               aria-label={text.connectionStatus}
@@ -387,8 +387,48 @@ export function App() {
             tabIndex={-1}
             className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10"
           >
-            {activePage === "dashboard" ? (
-              <Dashboard text={text} status={serviceStatus} />
+            {activePage === "settings" ? (
+              <>
+                <SettingsView text={text} status={serviceStatus} />
+                {sessionToken && (
+                  <div className="mt-6 border-t border-slate-200 pt-5">
+                    <button
+                      type="button"
+                      disabled={disconnecting}
+                      className="workbench-button"
+                      onClick={async () => {
+                        setDisconnecting(true);
+                        setDisconnectError(false);
+                        try {
+                          await revokePageSession(sessionToken);
+                          setSessionToken(null);
+                          setAuthentication("unpaired");
+                        } catch {
+                          setDisconnectError(true);
+                        } finally {
+                          setDisconnecting(false);
+                        }
+                      }}
+                    >
+                      {language === "zh-CN"
+                        ? "解除当前页面配对"
+                        : "Unpair this page"}
+                    </button>
+                    <p className="text-sm text-slate-500">
+                      {language === "zh-CN"
+                        ? "仅撤销当前页面会话，不停止后台服务或已存在的终端。"
+                        : "Revokes only this page session; the broker and existing terminals remain available."}
+                    </p>
+                    {disconnectError && (
+                      <p role="alert" className="text-sm text-rose-700">
+                        {language === "zh-CN"
+                          ? "撤销失败，请确认服务在线后重试。"
+                          : "Could not revoke the session. Check the service and retry."}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
             ) : activePage === "terminal" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <TerminalView language={language} sessionToken={sessionToken} />
@@ -402,29 +442,33 @@ export function App() {
               </Suspense>
             ) : activePage === "targets" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
-                <TargetsView language={language} sessionToken={sessionToken} />
-              </Suspense>
-            ) : activePage === "approvals" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <ApprovalView language={language} sessionToken={sessionToken} />
-              </Suspense>
-            ) : activePage === "policies" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <ActionTemplatesView
+                <TargetsView
                   language={language}
                   sessionToken={sessionToken}
+                  onTask={(targetId, templateId) => {
+                    setTaskContext({ targetId, templateId });
+                    setActivePage("operations");
+                  }}
                 />
               </Suspense>
             ) : activePage === "operations" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
-                <OperationsView language={language} sessionToken={sessionToken} />
+                <TaskWorkspace
+                  key={`${taskContext.targetId ?? ""}:${taskContext.templateId ?? ""}`}
+                  language={language}
+                  sessionToken={sessionToken}
+                  {...taskContext}
+                />
               </Suspense>
             ) : activePage === "audit" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
-                <AuditView language={language} sessionToken={sessionToken} />
+                <HistoryWorkspace
+                  language={language}
+                  sessionToken={sessionToken}
+                />
               </Suspense>
             ) : (
-              <ComingSoon text={text} page={text[activePage]} />
+              <PairingRequired text={text} page={text[activePage]} />
             )}
           </main>
         </div>
@@ -438,7 +482,9 @@ function TerminalLoading({ text }: { text: Copy }) {
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-slate-200 bg-white p-10 text-center shadow-sm">
       <div>
         <Activity className="mx-auto size-8 animate-pulse text-cyan-600" />
-        <p className="mb-0 mt-4 text-sm font-medium text-slate-600">{text.checking}</p>
+        <p className="mb-0 mt-4 text-sm font-medium text-slate-600">
+          {text.checking}
+        </p>
       </div>
     </section>
   );
@@ -470,7 +516,7 @@ function StatusPill({
   );
 }
 
-function Dashboard({
+function SettingsView({
   text,
   status,
 }: {
@@ -494,20 +540,6 @@ function Dashboard({
         </span>
       </div>
 
-      <section className="mb-6 border-l-4 border-amber-400 bg-amber-50 px-5 py-4">
-        <div className="flex items-start gap-3">
-          <CircleAlert className="mt-0.5 size-5 shrink-0 text-amber-700" aria-hidden="true" />
-          <div>
-            <h2 className="m-0 text-base font-semibold text-amber-950">
-              {text.syntheticTitle}
-            </h2>
-            <p className="mb-0 mt-1.5 max-w-4xl text-sm leading-6 text-amber-900/75">
-              {text.syntheticBody}
-            </p>
-          </div>
-        </div>
-      </section>
-
       <section className="enterprise-surface">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <h2 className="m-0 text-base font-semibold text-slate-900">
@@ -516,10 +548,21 @@ function Dashboard({
           <Activity className="size-5 text-cyan-600" aria-hidden="true" />
         </div>
         <dl className="divide-y divide-slate-200">
-          <StatusDatum label={text.apiVersion} value={status?.api_version ?? "—"} />
+          <StatusDatum
+            label={text.apiVersion}
+            value={status?.api_version ?? "—"}
+          />
           <StatusDatum
             label={text.runtimeMode}
-            value={status?.mode === "controlled_operations" ? text.controlledOperations : status?.mode === "credential_configuration" ? text.credentialConfiguration : status?.mode === "synthetic_only" ? text.syntheticOnly : "—"}
+            value={
+              status?.mode === "controlled_operations"
+                ? text.controlledOperations
+                : status?.mode === "credential_configuration"
+                  ? text.credentialConfiguration
+                  : status?.mode === "synthetic_only"
+                    ? text.syntheticOnly
+                    : "—"
+            }
           />
           <StatusDatum
             label={text.configurationStorage}
@@ -533,7 +576,9 @@ function Dashboard({
           />
           <StatusDatum
             label={text.realCredentials}
-            value={status?.real_credentials_enabled ? text.enabled : text.disabled}
+            value={
+              status?.real_credentials_enabled ? text.enabled : text.disabled
+            }
           />
         </dl>
       </section>
@@ -544,15 +589,13 @@ function Dashboard({
 function StatusDatum({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 px-5 py-3 sm:grid-cols-[14rem_1fr] sm:items-center">
-      <dt className="text-sm font-medium text-slate-500">
-        {label}
-      </dt>
+      <dt className="text-sm font-medium text-slate-500">{label}</dt>
       <dd className="m-0 text-sm font-semibold text-slate-900">{value}</dd>
     </div>
   );
 }
 
-function ComingSoon({ text, page }: { text: Copy; page: string }) {
+function PairingRequired({ text, page }: { text: Copy; page: string }) {
   return (
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-dashed border-slate-300 bg-white/65 p-10 text-center">
       <div className="max-w-lg">

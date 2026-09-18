@@ -68,6 +68,7 @@ try {
     else if (path === "/api/v1/credential-references")
       body = { items: credentials };
     else if (path === "/api/v1/targets") body = { items: targets };
+    else if (path === "/api/v1/runs" || path === "/api/v1/approvals") body = { items: [] };
     else if (path === "/api/v1/action-templates") {
       if (route.request().method() === "POST") {
         body = {
@@ -90,10 +91,9 @@ try {
   });
   await page.goto(`${url}/#pair=synthetic-bootstrap`);
   await page.getByText("已配对", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "执行策略", exact: true }).click();
-  await page.getByText("新建操作模板", { exact: true }).click();
+  await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("SFTP UI 验证");
-  await page.getByLabel("逻辑目标").selectOption("synthetic-target");
+  await page.getByLabel("连接分组").selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("sftp");
   await page.getByLabel("固定主机地址").fill("example.com");
@@ -119,13 +119,9 @@ try {
   assert.equal(items[0].command.slots[0].credential_id, "synthetic-password");
   assert.equal(items[0].command.ssh.remote_program, "");
 
-  const form = page
-    .locator("details")
-    .filter({ has: page.getByText("新建操作模板", { exact: true }) });
-  if (!(await form.evaluate((element) => element.open)))
-    await page.getByText("新建操作模板", { exact: true }).click();
+  await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("Git UI 验证");
-  await page.getByLabel("逻辑目标").selectOption("synthetic-target");
+  await page.getByLabel("连接分组").selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("git");
   await page.getByLabel("Git 操作").selectOption("fetch");
@@ -139,7 +135,7 @@ try {
   await page.getByLabel("令牌凭据引用").selectOption("synthetic-token");
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Git UI 验证", exact: true })
+    .getByRole("button", { name: /Git UI 验证/ })
     .waitFor();
   assert.equal(items.length, 2);
   assert.equal(items[1].command.git.operation, "fetch");
@@ -147,10 +143,9 @@ try {
   assert.equal(items[1].command.ssh, null);
   assert.deepEqual(items[1].command.parameters, []);
   assert.equal(items[1].command.slots[0].injection, "protocol");
-  if (!(await form.evaluate((element) => element.open)))
-    await page.getByText("新建操作模板", { exact: true }).click();
+  await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("Database UI 验证");
-  await page.getByLabel("逻辑目标").selectOption("synthetic-target");
+  await page.getByLabel("连接分组").selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("database");
   await page.getByLabel("数据库类型").selectOption("mysql");
@@ -165,7 +160,7 @@ try {
   await page.getByLabel("结果行数上限").fill("25");
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
   await page
-    .getByRole("heading", { name: "Database UI 验证", exact: true })
+    .getByRole("button", { name: /Database UI 验证/ })
     .waitFor();
   assert.equal(items.length, 3);
   assert.equal(items[2].command.database.engine, "mysql");
