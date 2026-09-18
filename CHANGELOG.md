@@ -5,6 +5,7 @@
 - Added native SSH credential tasks with mandatory SHA256 host-key pinning, password and Ed25519/ECDSA private-key authentication, including separate encrypted-key passphrase references.
 - Added fixed remote programs and independently POSIX-quoted literal/ordinary arguments, Web configuration and resolved approval review, MCP execution-kind summaries and cursor-based filtered stdout/stderr.
 - Closed the underlying SSH transport on completion, timeout and cancellation; retained actual remote exit codes and fixed failure codes without upstream exception text. Disconnecting does not guarantee remote process termination or rollback.
+- Restricted broker logs to application targets even when RUST_LOG enables global trace, keeping upstream raw protocol logs outside the normal diagnostic channel.
 - Added a real local SSH service fixture covering host rejection before authentication, key/password authentication, UTF-8/secret fragments, failures, timeout/cancel socket closure, Web/MCP workflows and SQLite reopen.
 - Locked the Apache-2.0 russh dependency with its ring-only backend and reviewed the additional fiat-crypto MIT license option. SSH file transfer and Git remain separate follow-up work.
 
