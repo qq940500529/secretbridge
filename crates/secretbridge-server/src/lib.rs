@@ -5,6 +5,7 @@
 
 mod catalog;
 mod command;
+mod database_task;
 mod git_task;
 mod http_task;
 mod mcp;

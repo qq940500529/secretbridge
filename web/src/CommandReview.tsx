@@ -25,6 +25,32 @@ export function CommandReview({
       </p>
     );
   const config = template.command;
+  if (config.database)
+    return (
+      <details className="mt-3 border-y border-slate-200 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
+          {zh
+            ? "查看数据库、查询与结果范围"
+            : "Review database, query and result scope"}
+        </summary>
+        <pre className="mt-3 overflow-auto whitespace-pre-wrap break-all text-xs">
+          {JSON.stringify(
+            {
+              ...config.database,
+              parameters,
+              credential_slots: config.slots.map((s) => s.name),
+            },
+            null,
+            2,
+          )}
+        </pre>
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "普通值使用参数绑定；仅执行登记的只读事务。只返回所选列，截断会在结果中标记。"
+            : "Values are bound parameters; registered queries run in read-only transactions. Only selected columns are returned, with explicit truncation."}
+        </p>
+      </details>
+    );
   if (config.git)
     return (
       <details className="mt-3 border-y border-slate-200 py-3">

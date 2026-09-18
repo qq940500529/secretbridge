@@ -24,6 +24,8 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 pub struct CommandConfig {
     #[serde(default)]
+    pub database: Option<crate::database_task::DatabaseConfig>,
+    #[serde(default)]
     pub http: Option<crate::http_task::HttpConfig>,
     #[serde(default)]
     pub ssh: Option<crate::ssh_task::SshConfig>,
@@ -62,9 +64,13 @@ impl CommandConfig {
         if usize::from(self.http.is_some())
             + usize::from(self.ssh.is_some())
             + usize::from(self.git.is_some())
+            + usize::from(self.database.is_some())
             > 1
         {
             return Err(CatalogError::Invalid);
+        }
+        if let Some(database) = &self.database {
+            return database.validate(self);
         }
         if let Some(git) = &self.git {
             return git.validate(self);
@@ -313,6 +319,20 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
+    if let Some(database) = &config.database {
+        crate::database_task::drive(
+            state,
+            id,
+            database,
+            &config,
+            &parameters,
+            &secrets,
+            cancellation,
+            limit,
+        )
+        .await;
+        return;
+    }
     if let Some(ssh) = &config.ssh {
         crate::ssh_task::drive(
             state,
@@ -724,6 +744,7 @@ pub(crate) mod tests {
             arguments.push("{{password}}".into());
         }
         CommandConfig {
+            database: None,
             http: None,
             ssh: None,
             git: None,

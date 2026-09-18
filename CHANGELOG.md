@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.30
+
+- Added native PostgreSQL/MySQL connection checks, version queries and registered read-only SELECT/WITH templates, using driver-bound string/integer/boolean values rather than SQL interpolation.
+- Added explicit selected columns, row/byte budgets, truncation reporting, NULL handling and text-based numeric results to preserve long integers and decimal precision in the browser.
+- Added bilingual database configuration, frozen approval review and table-shaped run results; reused Web/MCP authorization, idempotency, history and SQLite configuration persistence.
+- Added per-template verified TLS and private CA support, with plaintext limited to numeric loopback addresses, native interruption and bounded connection cleanup.
+- Added real native database, function-write rejection, TLS, Web/MCP and configuration-reopen tests; added a disposable Docker acceptance script and dedicated CI job with synthetic credentials.
+- Locked mysql_async 0.37.1 with minimal Rust/rustls/ring features; recorded runtime licenses, compression/hash dependencies and test-only server distribution boundaries.
+
 ## 0.1.0-alpha.29
 
 - Added native single-file SFTP upload/download through the existing pinned SSH password/private-key authentication, fixed paths, explicit replacement, size limits, temporary-file commit and bounded cleanup reporting.

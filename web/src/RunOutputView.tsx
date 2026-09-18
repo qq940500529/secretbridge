@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { readRunOutput, type RunOutput } from "./api";
 import { useServiceChanges } from "./service-events";
+import { DatabaseResultView, parseDatabaseResult } from "./DatabaseResultView";
 
 export function RunOutputView({
   id,
@@ -50,6 +51,9 @@ export function RunOutputView({
   }, [id, sessionToken]);
   useServiceChanges(sessionToken, () => void load());
   const zh = language === "zh-CN";
+  const databaseResult = gap
+    ? null
+    : parseDatabaseResult(chunks.map((c) => c.text).join(""));
   return (
     <section
       className="mt-4 border-t border-slate-200 pt-4"
@@ -75,20 +79,24 @@ export function RunOutputView({
             : "Output read failed; reconnect will retry."}
         </p>
       )}
-      <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100">
-        {chunks.length
-          ? chunks.map((chunk) => (
-              <span
-                key={chunk.sequence}
-                className={chunk.stream === "stderr" ? "text-amber-300" : ""}
-              >
-                {chunk.text}
-              </span>
-            ))
-          : zh
-            ? "等待任务输出…"
-            : "Waiting for task output…"}
-      </pre>
+      {databaseResult ? (
+        <DatabaseResultView result={databaseResult} zh={zh} />
+      ) : (
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-4 text-xs leading-6 text-slate-100">
+          {chunks.length
+            ? chunks.map((chunk) => (
+                <span
+                  key={chunk.sequence}
+                  className={chunk.stream === "stderr" ? "text-amber-300" : ""}
+                >
+                  {chunk.text}
+                </span>
+              ))
+            : zh
+              ? "等待任务输出…"
+              : "Waiting for task output…"}
+        </pre>
+      )}
     </section>
   );
 }

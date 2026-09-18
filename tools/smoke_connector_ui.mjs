@@ -101,9 +101,7 @@ try {
   await page
     .getByLabel("可信主机指纹（SHA256）")
     .fill("SHA256:synthetic-ui-only");
-  await page
-    .getByLabel("密码凭据引用")
-    .selectOption("synthetic-password");
+  await page.getByLabel("密码凭据引用").selectOption("synthetic-password");
   await page.getByLabel("传输方向").selectOption("download");
   await page.getByLabel("本机文件绝对路径").fill("/tmp/output.bin");
   await page.getByLabel("远程文件绝对路径").fill("/srv/input.bin");
@@ -149,9 +147,37 @@ try {
   assert.equal(items[1].command.ssh, null);
   assert.deepEqual(items[1].command.parameters, []);
   assert.equal(items[1].command.slots[0].injection, "protocol");
+  if (!(await form.evaluate((element) => element.open)))
+    await page.getByText("新建操作模板", { exact: true }).click();
+  await page.getByLabel("模板名称").fill("Database UI 验证");
+  await page.getByLabel("逻辑目标").selectOption("synthetic-target");
+  await page.getByLabel("内置受控操作").selectOption("command_execution");
+  await page.getByLabel("执行方式").selectOption("database");
+  await page.getByLabel("数据库类型").selectOption("mysql");
+  assert.equal(await page.getByLabel("数据库端口").inputValue(), "3306");
+  await page.getByLabel("数据库操作").selectOption("query");
+  await page.getByLabel("数据库主机").fill("db.example.com");
+  await page.getByLabel("数据库名称").fill("operations");
+  await page.getByLabel("数据库用户名").fill("reader");
+  await page.getByLabel("数据库密码引用").selectOption("synthetic-password");
+  await page.getByLabel("只读 SQL", { exact: true }).fill("SELECT 1 AS number");
+  await page.getByLabel("允许返回的列（每行一项）").fill("number");
+  await page.getByLabel("结果行数上限").fill("25");
+  await page.getByRole("button", { name: "添加模板", exact: true }).click();
+  await page
+    .getByRole("heading", { name: "Database UI 验证", exact: true })
+    .waitFor();
+  assert.equal(items.length, 3);
+  assert.equal(items[2].command.database.engine, "mysql");
+  assert.equal(items[2].command.database.operation, "query");
+  assert.equal(items[2].command.database.tls_mode, "verify_full");
+  assert.equal(items[2].command.database.max_rows, 25);
+  assert.deepEqual(items[2].command.database.columns, ["number"]);
+  assert.equal(items[2].command.git, null);
+  assert.equal(items[2].command.slots[0].injection, "protocol");
   assert.deepEqual(errors, []);
   console.log(
-    "Connector UI smoke passed: interactive SFTP and Git configuration and submitted payloads.",
+    "Connector UI smoke passed: interactive SFTP, Git and database configuration and submitted payloads.",
   );
 } finally {
   await browser.close();

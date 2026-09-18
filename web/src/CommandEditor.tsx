@@ -7,6 +7,7 @@ import { ParameterEditor } from "./ParameterEditor";
 import { HttpEditor, emptyHttp } from "./HttpEditor";
 import { SshEditor, emptySsh } from "./SshEditor";
 import { GitEditor, emptyGit } from "./GitEditor";
+import { DatabaseEditor, emptyDatabase } from "./DatabaseEditor";
 
 export const emptyCommand: CommandConfig = {
   program: "",
@@ -39,19 +40,22 @@ export function CommandEditor({
       {zh ? "执行方式" : "Execution method"}
       <select
         value={
-          value.git
-            ? "git"
-            : value.ssh?.transfer
-              ? "sftp"
-              : value.ssh
-                ? "ssh"
-                : value.http
-                  ? "http"
-                  : "program"
+          value.database
+            ? "database"
+            : value.git
+              ? "git"
+              : value.ssh?.transfer
+                ? "sftp"
+                : value.ssh
+                  ? "ssh"
+                  : value.http
+                    ? "http"
+                    : "program"
         }
         onChange={(e) =>
           onChange({
             ...value,
+            database: e.target.value === "database" ? emptyDatabase : null,
             http: e.target.value === "http" ? emptyHttp : null,
             ssh:
               e.target.value === "ssh"
@@ -85,9 +89,32 @@ export function CommandEditor({
           {zh ? "SFTP 文件传输" : "SFTP file transfer"}
         </option>
         <option value="git">Git HTTPS</option>
+        <option value="database">{zh ? "数据库查询" : "Database query"}</option>
       </select>
     </label>
   );
+  if (value.database)
+    return (
+      <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">
+        <legend className="px-1 text-sm font-semibold">
+          {zh ? "数据库查询" : "Database query"}
+        </legend>
+        {selector}
+        <DatabaseEditor
+          config={value}
+          onChange={onChange}
+          credentials={credentials}
+          zh={zh}
+        />
+        {value.database.operation === "query" && (
+          <ParameterEditor
+            value={value.parameters ?? []}
+            onChange={(parameters) => onChange({ ...value, parameters })}
+            zh={zh}
+          />
+        )}
+      </fieldset>
+    );
   if (value.git)
     return (
       <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">

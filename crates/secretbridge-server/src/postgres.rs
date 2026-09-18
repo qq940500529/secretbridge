@@ -98,7 +98,7 @@ async fn native_connection_check_with_ca(
     }
 }
 
-fn postgres_tls_config(ca_certificate: Option<&Path>) -> Result<ClientConfig, ()> {
+pub(crate) fn postgres_tls_config(ca_certificate: Option<&Path>) -> Result<ClientConfig, ()> {
     let Some(path) = ca_certificate else {
         return config_platform_verifier().map_err(|_| ());
     };

@@ -6,7 +6,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-alpha.29"
+version = "0.1.0-alpha.30"
 edition = "2024"
 rust-version = "1.98"
 license = "AGPL-3.0-or-later"
@@ -23,6 +23,7 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-n
 russh = { version = "=0.63.2", default-features = false, features = ["ring"] }
 russh-sftp = "=3.0.0"
 base64 = "=0.22.1"
+mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
 rand = "=0.10.2"
 rmcp = { version = "=3.3.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rusqlite = { version = "=0.40.2", features = ["bundled"], default-features = false }
