@@ -6,6 +6,7 @@
 mod catalog;
 mod command;
 mod mcp;
+mod parameters;
 mod postgres;
 mod redaction;
 mod secret_store;

@@ -16,3 +16,4 @@ while [ -n "$remaining" ]; do
 done
 printf '|stdout-marker|\n'
 printf '%s|stderr-marker|\n' "$value" >&2
+if [ -n "$3" ]; then printf '|parameter:%s|\n' "$3"; fi

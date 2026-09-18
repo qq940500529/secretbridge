@@ -148,6 +148,8 @@ impl McpBackend {
             Self::Local(state) => {
                 let catalog = state.catalog.clone();
                 let request = CreateApproval {
+                    parameters: params.parameters,
+                    authorization_mode: params.authorization_mode,
                     action_template_id: parse_uuid(&params.action_template_id)?,
                     reason: Some("Requested through MCP".to_owned()),
                     expires_in_seconds: params.expires_in_seconds,
@@ -418,7 +420,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_create_run",
-        description = "Consume one approved, unexpired approval to create its single controlled run. The tool accepts no SQL, command, operation parameters, target address, or credential."
+        description = "Create a run from an approved, unexpired authorization. Single-use approvals allow one run; time_window approvals allow repeats of the same frozen parameters. No commands, SQL, addresses or secrets are accepted."
     )]
     async fn create_run(
         &self,
@@ -1393,6 +1395,16 @@ struct IdentifierParams {
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RequestApprovalParams {
+    #[serde(default)]
+    #[schemars(
+        description = "Ordinary non-secret parameter values. Defaults are resolved and frozen in the approval."
+    )]
+    parameters: crate::parameters::ParameterValues,
+    #[serde(default)]
+    #[schemars(
+        description = "every_run/once consume one run; time_window allows repeated runs of exactly the same confirmed parameters until expiry"
+    )]
+    authorization_mode: crate::parameters::AuthorizationMode,
     #[schemars(description = "Action-template UUID")]
     action_template_id: String,
     #[schemars(description = "Approval lifetime in seconds, from 60 through 3600")]
@@ -1402,7 +1414,7 @@ struct RequestApprovalParams {
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CreateRunParams {
-    #[schemars(description = "Approved and unconsumed approval UUID")]
+    #[schemars(description = "Approved usable approval UUID")]
     approval_id: String,
     #[schemars(description = "Caller-generated idempotency key, 1 through 96 safe characters")]
     idempotency_key: String,
@@ -1424,6 +1436,7 @@ struct TemplateList {
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 struct TemplateSummary {
+    parameters: Vec<crate::parameters::ParameterDefinition>,
     credential_slots: Vec<SlotSummary>,
     id: String,
     name: String,
@@ -1437,6 +1450,10 @@ struct TemplateSummary {
 impl From<ActionTemplate> for TemplateSummary {
     fn from(template: ActionTemplate) -> Self {
         Self {
+            parameters: template
+                .command
+                .as_ref()
+                .map_or_else(Vec::new, |c| c.parameters.clone()),
             credential_slots: template.command.as_ref().map_or_else(Vec::new, |config| {
                 config
                     .slots
@@ -1499,6 +1516,8 @@ impl From<PolicyEvaluation> for PolicySummary {
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 struct ApprovalSummary {
+    parameters: crate::parameters::ParameterValues,
+    authorization_mode: crate::parameters::AuthorizationMode,
     id: String,
     action_template_id: Option<String>,
     operation: ApprovalOperation,
@@ -1511,6 +1530,8 @@ struct ApprovalSummary {
 impl From<Approval> for ApprovalSummary {
     fn from(approval: Approval) -> Self {
         Self {
+            parameters: approval.parameters,
+            authorization_mode: approval.authorization_mode,
             id: approval.id.to_string(),
             action_template_id: approval.action_template_id.map(|id| id.to_string()),
             operation: approval.operation,
@@ -1701,7 +1722,12 @@ mod tests {
             ("secretbridge_evaluate_policy", vec!["id"]),
             (
                 "secretbridge_request_approval",
-                vec!["action_template_id", "expires_in_seconds"],
+                vec![
+                    "action_template_id",
+                    "authorization_mode",
+                    "expires_in_seconds",
+                    "parameters",
+                ],
             ),
             ("secretbridge_get_approval", vec!["id"]),
             (
@@ -1764,6 +1790,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "native MCP parameter, approval and output acceptance is one lifecycle"
+    )]
     async fn native_mcp_reads_redacted_command_output_and_idempotent_runs() {
         let directory = std::env::temp_dir().join(format!(
             "sb-c-{}",
@@ -1773,7 +1803,16 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
         let (state, _) = AppState::new([]);
-        let (approval, _) = crate::command::tests::configure(&state, "stdin", 10);
+        let (_, credential) = crate::command::tests::configure(&state, "argument", 10);
+        let template = state.catalog.list_action_templates().unwrap().remove(0);
+        let mut config = crate::command::tests::fixture("argument", credential);
+        config.arguments.push("{{param:company}}".into());
+        config.parameters = serde_json::from_value(json!([{"name":"company","label":"公司","kind":"string","required":true,"default":"100","choices":["100","101"],"max_length":3}])).unwrap();
+        let update = serde_json::from_value(json!({"target_id":template.target_id,"name":template.name,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":10,"enabled":true,"expected_version":template.version,"command":config})).unwrap();
+        state
+            .catalog
+            .update_action_template(template.id, &update)
+            .unwrap();
         let bridge = LocalMcpBridge::bind(&directory, state.clone()).unwrap();
         let stop = CancellationToken::new();
         let broker_stop = stop.clone();
@@ -1796,6 +1835,22 @@ mod tests {
                 .is_none()
         );
         let key = Uuid::new_v4().to_string();
+        assert_eq!(templates["items"][0]["parameters"][0]["default"], "100");
+        let approval = terminal_tool(&client,"secretbridge_request_approval",json!({"action_template_id":template.id,"expires_in_seconds":60,"authorization_mode":"time_window","parameters":{"company":"101"}})).await;
+        assert_eq!(approval["state"], "pending");
+        assert_eq!(approval["parameters"]["company"], "101");
+        let approval = Uuid::parse_str(approval["id"].as_str().unwrap()).unwrap();
+        let current = state.catalog.get_approval(approval).unwrap();
+        state
+            .catalog
+            .approve_approval(
+                approval,
+                &DecideApproval {
+                    expected_version: current.version,
+                    note: None,
+                },
+            )
+            .unwrap();
         let request = json!({"approval_id":approval.to_string(),"idempotency_key":key});
         let run = terminal_tool(&client, "secretbridge_create_run", request.clone()).await;
         assert_eq!(run["execution_mode"], "credential_command");
@@ -1825,6 +1880,7 @@ mod tests {
         .await
         .unwrap();
         assert!(output.contains("[REDACTED]"));
+        assert!(output.contains("|parameter:101|"));
         assert!(!output.contains("Synthetic-SB-command_A&z"));
         assert!(
             client

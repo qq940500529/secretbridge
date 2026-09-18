@@ -18,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. It provides persistent terminals, an operating-system credential store, fixed program tasks and explicit single-use approvals. Named slots support stdin, child environment, arguments and temporary files; Web and MCP can read filtered run output incrementally. Secrets have no read/export tool or API. Ordinary terminals never receive injected credentials; output filtering is not a program sandbox. Parameterized templates and more connectors remain in development.
+> This is a local prototype under active feature development. It provides persistent terminals, an operating-system credential store, fixed program tasks and explicit single-use or time-window approvals. Named slots support stdin, child environment, arguments and temporary files; Web and MCP can read filtered run output incrementally. Secrets have no read/export tool or API. Ordinary terminals never receive injected credentials; output filtering is not a program sandbox. Ordinary parameters support types, required values, defaults, choices and length constraints; approval freezes the values, with optional time-limited repetition of the same task. More connectors remain in development.
 
 ## Why SecretBridge?
 
@@ -35,6 +35,8 @@ Giving an assistant a password also exposes that password to its surrounding con
 One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser and MCP disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Web and MCP clients coordinate through input leases; approvals, runs and terminal lists refresh from live notifications. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP cannot decide approvals or read secrets. Ordinary terminals do not inject credentials or claim to sanitize arbitrary file or command output. See [AI terminals and realtime state](docs/AI终端与实时状态.md) and the [feature-first roadmap](ROADMAP.md).
 
 ## How it works
+
+See [credential command tasks](docs/凭据命令任务.md) for execution and output, and [parameterized tasks and authorization](docs/参数化任务与授权.md) for defaults, confirmed values and repeated grants.
 
 ```mermaid
 flowchart LR

@@ -6,6 +6,14 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.26 · parameterized reusable tasks
+
+- Add ordinary text, integer and boolean parameters with required/default/choice/length validation, bounded payloads and whole-argument placeholders. Keep values separate from credential slots and never recursively expand supplied text.
+- Freeze resolved values and authorization mode at approval creation. Web and MCP share the same validation, explicit user decision and execution path.
+- Support per-run confirmation, current-run-only authorization and time-limited repetition of exactly the same confirmed values. Configuration drift, credential rotation, expiry and revocation continue to invalidate authorization.
+- Preserve idempotent retries; repeated time-window runs need distinct keys. Display confirmed values, resolved arguments, live elapsed time, exit status and cautious retry guidance in the Web console.
+- Upgrade SQLite to schema v14 while preserving events, retained output, exit codes and existing single-use grants. Add real-process parameter, native MCP, authorization-consumption and migration regression coverage without new application dependencies.
+
 ### 0.1.0-alpha.25 · credential command execution and streaming redaction
 
 - Extend existing templates, single-use approvals and idempotent runs with fixed local program tasks and named credential slots for stdin, child environment, arguments and temporary files.

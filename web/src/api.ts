@@ -171,10 +171,22 @@ export interface CredentialSlot {
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  parameters?: ParameterDefinition[];
   program: string;
   working_directory: string;
   arguments: string[];
   slots: CredentialSlot[];
+}
+export type AuthorizationMode = "every_run" | "once" | "time_window";
+export type ParameterValue = string | number | boolean;
+export interface ParameterDefinition {
+  name: string;
+  label: string;
+  kind: "string" | "integer" | "boolean";
+  required: boolean;
+  default: ParameterValue | null;
+  choices: ParameterValue[];
+  max_length: number | null;
 }
 export interface RunOutput {
   items: Array<{ sequence: number; stream: string; text: string }>;
@@ -196,6 +208,8 @@ export interface UpdateActionTemplate extends CreateActionTemplate {
 }
 
 export interface Approval {
+  authorization_mode: AuthorizationMode;
+  parameters: Record<string, ParameterValue>;
   id: string;
   action_template_id: string | null;
   action_template_version: number | null;
@@ -213,6 +227,8 @@ export interface Approval {
 }
 
 export interface CreateApproval {
+  authorization_mode?: AuthorizationMode;
+  parameters?: Record<string, ParameterValue>;
   action_template_id: string;
   reason?: string;
   expires_in_seconds: number;
@@ -245,6 +261,8 @@ export type PolicyReasonCode =
   | "credential_kind_unsupported"
   | "result_scope_unsupported";
 export type PolicyRequirement =
+  | "validated_parameters"
+  | "scoped_authorization"
   | "explicit_approval"
   | "no_parameters"
   | "single_use"
