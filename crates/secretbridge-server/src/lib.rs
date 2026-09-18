@@ -5,6 +5,7 @@
 
 mod catalog;
 mod command;
+mod http_task;
 mod mcp;
 mod parameters;
 mod postgres;
@@ -1689,6 +1690,9 @@ async fn terminal_socket(mut socket: WebSocket, state: AppState, terminal_id: Uu
             }
         }
     }
+    // Flush a closing frame after lag, revocation or process exit rather than
+    // dropping the upgraded socket with an unexpected protocol reset.
+    let _ = send_socket_message(&mut socket, Message::Close(None)).await;
 }
 
 struct PreparedTerminal {

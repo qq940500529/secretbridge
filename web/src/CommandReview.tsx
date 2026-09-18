@@ -24,6 +24,40 @@ export function CommandReview({
       </p>
     );
   const config = template.command;
+  if (config.http)
+    return (
+      <details className="mt-3 border-y border-slate-200 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
+          {zh ? "查看 HTTP 请求与插槽" : "Review HTTP request and slots"}
+        </summary>
+        <p className="mt-3 break-all font-mono text-xs">
+          {config.http.method} {config.http.url}
+        </p>
+        <pre className="mt-3 overflow-auto text-xs">
+          {JSON.stringify(
+            {
+              headers: config.http.headers,
+              query: config.http.query,
+              body: config.http.body,
+              response_fields: config.http.response_fields,
+              accepted_statuses: config.http.accepted_statuses,
+              parameters,
+              slots: config.slots.map((s) => ({
+                name: s.name,
+                injection: s.injection,
+              })),
+            },
+            null,
+            2,
+          )}
+        </pre>
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "不跟随重定向；未选择返回字段时只返回状态码。"
+            : "Redirects are disabled; no selected fields means status only."}
+        </p>
+      </details>
+    );
   return (
     <details className="mt-3 border-y border-slate-200 py-3">
       <summary className="cursor-pointer text-sm font-semibold text-cyan-800">

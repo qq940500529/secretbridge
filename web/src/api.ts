@@ -131,7 +131,10 @@ export type ApprovalOperation =
   | "synthetic_health_check"
   | "postgres_connection_check"
   | "command_execution";
-export type ApprovalResultScope = "status_only" | "metadata_summary" | "sanitized_output";
+export type ApprovalResultScope =
+  | "status_only"
+  | "metadata_summary"
+  | "sanitized_output";
 export type ApprovalState =
   | "pending"
   | "approved"
@@ -167,15 +170,33 @@ export interface CreateActionTemplate {
 export interface CredentialSlot {
   name: string;
   credential_id: string;
-  injection: "stdin" | "environment" | "argument" | "file";
+  injection: "stdin" | "environment" | "argument" | "file" | "protocol";
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  http?: HttpConfig | null;
   parameters?: ParameterDefinition[];
   program: string;
   working_directory: string;
   arguments: string[];
   slots: CredentialSlot[];
+}
+export type HttpValueSource =
+  | { kind: "literal"; value: string }
+  | { kind: "parameter"; name: string }
+  | { kind: "credential"; name: string; prefix: string };
+export interface HttpField {
+  name: string;
+  source: HttpValueSource;
+}
+export interface HttpConfig {
+  method: string;
+  url: string;
+  headers: HttpField[];
+  query: HttpField[];
+  body: HttpField[];
+  response_fields: { name: string; pointer: string }[];
+  accepted_statuses: number[];
 }
 export type AuthorizationMode = "every_run" | "once" | "time_window";
 export type ParameterValue = string | number | boolean;
@@ -198,8 +219,18 @@ export interface RunOutput {
   state: RunState;
 }
 
-export async function readRunOutput(token: string, id: string, cursor = 0): Promise<RunOutput> {
-  return readJson(await fetch(`/api/v1/runs/${encodeURIComponent(id)}/output`, {method: "POST", headers:sessionJsonHeaders(token), body: JSON.stringify({cursor,wait_ms:0})}));
+export async function readRunOutput(
+  token: string,
+  id: string,
+  cursor = 0,
+): Promise<RunOutput> {
+  return readJson(
+    await fetch(`/api/v1/runs/${encodeURIComponent(id)}/output`, {
+      method: "POST",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ cursor, wait_ms: 0 }),
+    }),
+  );
 }
 
 export interface UpdateActionTemplate extends CreateActionTemplate {
@@ -274,7 +305,10 @@ export type PolicyRequirement =
   | "redacted_output";
 
 export interface PolicyEvaluation {
-  policy_version: "synthetic-policy-v1" | "postgres-readonly-policy-v1" | "credential-command-policy-v1";
+  policy_version:
+    | "synthetic-policy-v1"
+    | "postgres-readonly-policy-v1"
+    | "credential-command-policy-v1";
   decision: PolicyDecision;
   reason_codes: PolicyReasonCode[];
   requirements: PolicyRequirement[];
@@ -286,7 +320,10 @@ export interface PolicyEvaluation {
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
-  execution_mode: "synthetic_simulation" | "controlled_postgres" | "credential_command";
+  execution_mode:
+    | "synthetic_simulation"
+    | "controlled_postgres"
+    | "credential_command";
 }
 
 export type RunState =
@@ -331,7 +368,10 @@ export interface SyntheticRunListResponse {
 export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
-  execution_mode: "synthetic_simulation" | "controlled_postgres" | "credential_command";
+  execution_mode:
+    | "synthetic_simulation"
+    | "controlled_postgres"
+    | "credential_command";
 }
 
 export type SafeEventKind =

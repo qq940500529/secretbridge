@@ -6,6 +6,15 @@ Changes affecting contributors, project scope and future users are recorded here
 
 ## Unreleased
 
+### 0.1.0-alpha.27 · native HTTP credential tasks
+
+- Add a native HTTP/HTTPS executor and structured Web request editor for fixed methods and destinations, named headers, encoded query parameters and flat JSON bodies. Credential slots are confined to headers and body; ordinary body parameters retain string, integer and boolean types.
+- Reuse template versioning, frozen approval parameters, explicit user approval, time-window grants, idempotency, four-task concurrency, cancellation and bounded run output. MCP template summaries identify HTTP execution without returning credentials or credential IDs.
+- Default to status-only results; optionally select JSON Pointer fields from responses bounded to 256 KiB. Filter selected output before persistence or return, and expose fixed error codes instead of transport errors or error bodies. HTTP status codes are not process exit codes.
+- Verify HTTPS with platform roots; disable redirects, environment proxies and TLS key logging. Add real loopback-server tests and native MCP/IPC acceptance. Private CA files, arbitrary response bodies, nested body templates, uploads and dynamic paths are not included.
+- Lock reqwest 0.13.5 under MIT OR Apache-2.0 with minimal features and the existing ring crypto provider; retain SQLite schema v14 and compatibility with existing program tasks.
+- Flush terminal WebSocket closing frames after lag or revocation, and make flood acceptance follow explicit lag/reconnect notifications rather than assume a fixed sleep guarantees completion.
+
 ### 0.1.0-alpha.26 · parameterized reusable tasks
 
 - Add ordinary text, integer and boolean parameters with required/default/choice/length validation, bounded payloads and whole-argument placeholders. Keep values separate from credential slots and never recursively expand supplied text.
@@ -13,6 +22,7 @@ Changes affecting contributors, project scope and future users are recorded here
 - Support per-run confirmation, current-run-only authorization and time-limited repetition of exactly the same confirmed values. Configuration drift, credential rotation, expiry and revocation continue to invalidate authorization.
 - Preserve idempotent retries; repeated time-window runs need distinct keys. Display confirmed values, resolved arguments, live elapsed time, exit status and cautious retry guidance in the Web console.
 - Upgrade SQLite to schema v14 while preserving events, retained output, exit codes and existing single-use grants. Add real-process parameter, native MCP, authorization-consumption and migration regression coverage without new application dependencies.
+- Commit process exit code and completion state in the same transaction, eliminating a client-visible race observed by the Windows native MCP test.
 
 ### 0.1.0-alpha.25 · credential command execution and streaming redaction
 

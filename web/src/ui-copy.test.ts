@@ -20,6 +20,7 @@ const renderedViews = [
   "RunOutputView.tsx",
   "ParameterEditor.tsx",
   "ParameterFields.tsx",
+  "HttpEditor.tsx",
 ];
 
 describe("operator-facing copy", () => {
