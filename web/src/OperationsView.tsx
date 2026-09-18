@@ -9,10 +9,11 @@ import {
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useServiceChanges } from "./service-events";
 import { RunOutputView } from "./RunOutputView";
 import { authorizationLabel, retryGuidance } from "./parameters";
+import { RunRequestKeys } from "./run-request";
 
 import {
   type ActionTemplate,
@@ -66,7 +67,9 @@ export function OperationsView({
           empty: "尚无运行记录。",
           loading: "正在读取运行状态…",
           loadError: "运行状态读取失败，请稍后重试。",
-          requestError: "运行请求失败，请检查审批是否仍有效。",
+          requestError:
+            "运行请求未完成或结果尚未确认，请检查运行记录；再次提交同一授权会复用请求键，不重复执行已受理请求。",
+          cancelError: "取消结果尚未确认，请查询运行状态后再决定是否重试。",
           consumed: "该审批已被使用；列表已经刷新。",
           conflict: "运行已发生变化，列表已经刷新。",
           policyDenied:
@@ -116,7 +119,9 @@ export function OperationsView({
           loading: "Loading run status…",
           loadError: "Run status could not be loaded. Try again later.",
           requestError:
-            "The run request failed. Check that the approval is still active.",
+            "The request did not complete or its outcome is unconfirmed. Check run records; resubmitting the same approval reuses its request key rather than repeating accepted work.",
+          cancelError:
+            "The cancellation outcome is unconfirmed. Check run status before retrying.",
           consumed:
             "That approval was already used. The list has been refreshed.",
           conflict: "The run changed. The list has been refreshed.",
@@ -164,6 +169,7 @@ export function OperationsView({
   const [templates, setTemplates] = useState<ActionTemplate[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [approvalId, setApprovalId] = useState("");
+  const requestKeys = useRef(new RunRequestKeys());
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<Record<string, SafeEvent[]>>({});
   const [loading, setLoading] = useState(true);
@@ -254,14 +260,15 @@ export function OperationsView({
       const response = await createSyntheticRun(
         sessionToken,
         approvalId,
-        crypto.randomUUID(),
+        requestKeys.current.forApproval(approvalId),
       );
+      requestKeys.current.acknowledge(approvalId);
       setRuns((current) => [
         response.run,
         ...current.filter((item) => item.id !== response.run.id),
       ]);
       setApprovalId("");
-      await refresh();
+      await refresh().catch(() => setError(text.loadError));
     } catch (caught) {
       if (
         caught instanceof SecretBridgeApiError &&
@@ -304,7 +311,7 @@ export function OperationsView({
         await refresh().catch(() => undefined);
         setError(text.conflict);
       } else {
-        setError(text.requestError);
+        setError(text.cancelError);
       }
     } finally {
       setBusy(false);
