@@ -23,6 +23,9 @@ const renderedViews = [
   "HttpEditor.tsx",
   "SshEditor.tsx",
   "CredentialSecretInput.tsx",
+  "Workbench.tsx",
+  "TaskWorkspace.tsx",
+  "ConnectionRelations.tsx",
 ];
 
 describe("operator-facing copy", () => {

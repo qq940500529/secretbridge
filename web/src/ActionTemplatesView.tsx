@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { Pencil, Plus, ShieldCheck, Trash2, X } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { EditorDialog, MasterDetail } from "./Workbench";
+import { CommandReview } from "./CommandReview";
 import {
   type FormEvent,
   type ReactNode,
@@ -32,14 +34,18 @@ type Language = "zh-CN" | "en";
 export function ActionTemplatesView({
   language,
   sessionToken,
+  initialTargetId,
+  onRequest,
 }: {
   language: Language;
   sessionToken: string;
+  initialTargetId?: string;
+  onRequest?: (id: string) => void;
 }) {
   const text =
     language === "zh-CN"
       ? {
-          title: "把授权约束固化为模板",
+          title: "任务模板",
           subtitle:
             "配置内置检查或固定程序任务，凭据通过命名插槽绑定。审批保存模板版本，修改模板后需重新授权。",
           safety:
@@ -48,7 +54,7 @@ export function ActionTemplatesView({
           formEdit: "编辑操作模板",
           name: "模板名称",
           namePlaceholder: "例如：测试目标元数据检查",
-          target: "逻辑目标",
+          target: "连接分组",
           choose: "请选择目标",
           operation: "内置受控操作",
           scope: "结果范围",
@@ -85,7 +91,7 @@ export function ActionTemplatesView({
           },
         }
       : {
-          title: "Make authorization constraints reusable",
+          title: "Task templates",
           subtitle:
             "Configure built-in checks or fixed program tasks with named credential slots. Approvals snapshot the template version; changes require new authorization.",
           safety:
@@ -94,7 +100,7 @@ export function ActionTemplatesView({
           formEdit: "Edit action template",
           name: "Template name",
           namePlaceholder: "Example: test-target metadata inspection",
-          target: "Logical target",
+          target: "Connection group",
           choose: "Choose a target",
           operation: "Built-in controlled operation",
           scope: "Result scope",
@@ -136,6 +142,7 @@ export function ActionTemplatesView({
           },
         };
   const [items, setItems] = useState<ActionTemplate[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [credentials, setCredentials] = useState<CredentialReference[]>([]);
   const [command, setCommand] = useState<CommandConfig>(emptyCommand);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -176,7 +183,12 @@ export function ActionTemplatesView({
         if (!active) return;
         setItems(templates.items);
         setTargets(targetResponse.items);
-        setTargetId(targetResponse.items[0]?.id ?? "");
+        setTargetId(
+          targetResponse.items.find((item) => item.id === initialTargetId)
+            ?.id ??
+            targetResponse.items[0]?.id ??
+            "",
+        );
       })
       .catch(() => {
         if (active) setError(text.loadError);
@@ -193,7 +205,12 @@ export function ActionTemplatesView({
     setCommand(emptyCommand);
     setEditing(null);
     setName("");
-    setTargetId(targets[0]?.id ?? "");
+    setEditorOpen(false);
+    setTargetId(
+      targets.find((item) => item.id === initialTargetId)?.id ??
+        targets[0]?.id ??
+        "",
+    );
     setOperation("inspect_metadata");
     setScope("metadata_summary");
     setDescription("");
@@ -202,6 +219,7 @@ export function ActionTemplatesView({
   }
 
   function edit(item: ActionTemplate) {
+    setEditorOpen(true);
     setCommand(item.command ?? emptyCommand);
     setEditing(item);
     setName(item.name);
@@ -287,21 +305,18 @@ export function ActionTemplatesView({
           {text.subtitle}
         </p>
       </header>
-      <div className="flex gap-3 border-l-4 border-cyan-500 bg-cyan-50 px-4 py-3 text-sm leading-6 text-cyan-900">
-        <ShieldCheck className="mt-0.5 size-5 shrink-0" />
-        <p className="m-0 font-medium">{text.safety}</p>
-      </div>
-      <details
-        className="enterprise-disclosure enterprise-surface"
-        open={editing ? true : undefined}
+      <EditorDialog
+        title={editing ? text.formEdit : text.formCreate}
+        open={editorOpen}
+        onOpen={() => setEditorOpen(true)}
+        onClose={reset}
+        busy={busy}
       >
-        <summary className="flex cursor-pointer items-center justify-between border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50">
-          <span className="inline-flex items-center gap-2">
-            <Plus className="size-4 text-cyan-700" />
-            {editing ? text.formEdit : text.formCreate}
-          </span>
-          <span className="text-slate-400">+</span>
-        </summary>
+        {error && (
+          <p role="alert" className="px-5 text-sm text-rose-700">
+            {error}
+          </p>
+        )}
         <form onSubmit={submit} className="max-w-5xl p-5">
           {!loading && targets.length === 0 && (
             <p className="mb-0 mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
@@ -443,7 +458,7 @@ export function ActionTemplatesView({
             </button>
           </div>
         </form>
-      </details>
+      </EditorDialog>
       <div>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="m-0 text-base font-semibold text-slate-950">
@@ -466,7 +481,14 @@ export function ActionTemplatesView({
         ) : items.length === 0 ? (
           <p className={emptyClass}>{text.empty}</p>
         ) : (
-          <div className="enterprise-surface enterprise-table">
+          <MasterDetail
+            language={language}
+            items={items.map((item) => ({
+              id: item.id,
+              name: item.name,
+              detail: `${targetNames.get(item.target_id) ?? item.target_id} · ${item.enabled ? text.active : text.inactive}`,
+            }))}
+          >
             {items.map((item) => (
               <article key={item.id} className="p-5">
                 <div className="flex items-start justify-between gap-4">
@@ -515,9 +537,27 @@ export function ActionTemplatesView({
                     </button>
                   </div>
                 </div>
+                {item.command && (
+                  <CommandReview
+                    template={item}
+                    expectedVersion={item.version}
+                    language={language}
+                  />
+                )}
+                {onRequest && item.enabled && (
+                  <button
+                    type="button"
+                    onClick={() => onRequest(item.id)}
+                    className="workbench-primary mt-4"
+                  >
+                    {language === "zh-CN"
+                      ? "申请授权"
+                      : "Request authorization"}
+                  </button>
+                )}
               </article>
             ))}
-          </div>
+          </MasterDetail>
         )}
       </div>
     </section>

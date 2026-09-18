@@ -36,6 +36,8 @@ One-time pairing, expiring/revocable page sessions and reconnectable real PTYs a
 
 ## How it works
 
+The browser workbench groups Credentials, Connections, Tasks, Terminal, History and Settings into searchable master-detail workflows with separate modal editors. Connection details link to task authorization and recent execution results. See the [workbench guide](docs/工作台使用说明.md).
+
 Native [HTTP credential tasks](docs/HTTP凭据任务.md) support fixed endpoints, authentication slots in headers or JSON bodies, ordinary parameters and selected response fields without exposing tokens to an assistant or requiring curl. HTTPS uses platform trust roots; status-only results are the default.
 
 [SSH credential tasks](docs/SSH凭据任务.md) support explicitly trusted host fingerprints, password or Ed25519/ECDSA private-key authentication, fixed POSIX remote commands and redacted streaming output. [File transfer and Git tasks](docs/文件传输与Git任务.md) add single-file SFTP upload/download with explicit replacement, and Git HTTPS token authentication for remote-branch inspection, fetch and non-forced push. [Database credential tasks](docs/数据库凭据任务.md) provide PostgreSQL/MySQL connection checks, server versions and registered read-only queries with bound values, selected columns and precision-preserving table results. Git over SSH and unrestricted SQL consoles are not included.

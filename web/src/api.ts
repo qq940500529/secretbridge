@@ -499,6 +499,11 @@ function sessionHeaders(sessionToken: string): HeadersInit {
   return { Authorization: `Bearer ${sessionToken}` };
 }
 
+export async function revokePageSession(token: string): Promise<void> {
+  const response = await fetch("/api/v1/session", { method: "DELETE", headers: sessionHeaders(token), credentials: "omit", cache: "no-store" });
+  if (!response.ok) throw new SecretBridgeApiError(response.status, "session_revoke_failed");
+}
+
 function sessionJsonHeaders(sessionToken: string): HeadersInit {
   return {
     ...sessionHeaders(sessionToken),

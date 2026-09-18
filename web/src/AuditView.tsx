@@ -21,7 +21,7 @@ type Language = "zh-CN" | "en";
 export function AuditView({ language, sessionToken }: { language: Language; sessionToken: string }) {
   const text = language === "zh-CN"
     ? {
-        title: "可审查的受控运行记录",
+        title: "事件记录",
         subtitle: "审计流只包含服务端生成的固定安全消息、状态、序号和关联标识，不接收终端输出、业务数据、请求参数或凭据。",
         policy: "当前载荷策略：仅允许固定安全消息。事件记录运行结果，但不会包含数据库错误原文、业务数据、参数或凭据。",
         all: "全部事件",
@@ -35,7 +35,7 @@ export function AuditView({ language, sessionToken }: { language: Language; sess
         kinds: { authorization_revoked: "授权或策略失效后安全停止", requested: "请求已接受", started: "受控运行已开始", succeeded: "受控运行已完成", failed: "受控运行未通过", cancelled: "运行已取消", interrupted: "服务重启导致中断" } satisfies Record<SafeEventKind, string>,
       }
     : {
-        title: "Reviewable controlled run history",
+        title: "Events",
         subtitle: "The audit stream contains only server-generated fixed safe messages, states, sequences and relationship identifiers. It accepts no terminal output, business data, request arguments or credentials.",
         policy: "Current payload policy: fixed safe messages only. Events record outcomes without exposing raw database errors, business data, arguments, or credentials.",
         all: "All events",

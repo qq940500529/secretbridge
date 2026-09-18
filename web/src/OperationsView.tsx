@@ -1,14 +1,8 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import {
-  Ban,
-  CircleDot,
-  Clock3,
-  PlayCircle,
-  RefreshCw,
-  ShieldCheck,
-} from "lucide-react";
+import { Ban, CircleDot, Clock3, PlayCircle, RefreshCw } from "lucide-react";
+import { EditorDialog, MasterDetail } from "./Workbench";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useServiceChanges } from "./service-events";
 import { RunOutputView } from "./RunOutputView";
@@ -45,9 +39,13 @@ const stateStyles: Record<RunState, string> = {
 export function OperationsView({
   language,
   sessionToken,
+  initialTemplateId,
+  historyOnly = false,
 }: {
   language: Language;
   sessionToken: string;
+  initialTemplateId?: string;
+  historyOnly?: boolean;
 }) {
   const text =
     language === "zh-CN"
@@ -165,6 +163,7 @@ export function OperationsView({
     return () => clearInterval(timer);
   }, []);
   const [runs, setRuns] = useState<SyntheticRun[]>([]);
+  const [requestOpen, setRequestOpen] = useState(false);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [templates, setTemplates] = useState<ActionTemplate[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -192,11 +191,14 @@ export function OperationsView({
       approvals.filter(
         (approval) =>
           approval.state === "approved" &&
+          approval.expires_at_unix_ms > now &&
+          (!initialTemplateId ||
+            approval.action_template_id === initialTemplateId) &&
           approval.action_template_id &&
           (approval.authorization_mode === "time_window" ||
             !usedApprovals.has(approval.id)),
       ),
-    [approvals, usedApprovals],
+    [approvals, usedApprovals, now, initialTemplateId],
   );
 
   const selectedApproval = availableApprovals.find((a) => a.id === approvalId);
@@ -219,12 +221,18 @@ export function OperationsView({
         (item) =>
           item.id === current &&
           item.state === "approved" &&
+          item.expires_at_unix_ms > Date.now() &&
+          (!initialTemplateId ||
+            item.action_template_id === initialTemplateId) &&
           (item.authorization_mode === "time_window" || !used.has(item.id)),
       )
         ? current
         : (approvalResponse.items.find(
             (item) =>
               item.state === "approved" &&
+              item.expires_at_unix_ms > Date.now() &&
+              (!initialTemplateId ||
+                item.action_template_id === initialTemplateId) &&
               item.action_template_id &&
               (item.authorization_mode === "time_window" || !used.has(item.id)),
           )?.id ?? ""),
@@ -253,7 +261,7 @@ export function OperationsView({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!approvalId) return;
+    if (!selectedApproval) return;
     setBusy(true);
     setError(null);
     try {
@@ -268,6 +276,9 @@ export function OperationsView({
         ...current.filter((item) => item.id !== response.run.id),
       ]);
       setApprovalId("");
+      setRequestOpen(false);
+      setExpandedRunId(response.run.id);
+      void loadEvents(response.run.id).catch(() => setError(text.loadError));
       await refresh().catch(() => setError(text.loadError));
     } catch (caught) {
       if (
@@ -340,71 +351,84 @@ export function OperationsView({
     <section className="space-y-6">
       <header>
         <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">
-          {text.title}
+          {historyOnly
+            ? language === "zh-CN"
+              ? "执行历史"
+              : "Run history"
+            : language === "zh-CN"
+              ? "执行与结果"
+              : "Execution & results"}
         </h1>
         <p className="mb-0 mt-3 max-w-3xl text-sm leading-6 text-slate-600">
           {text.subtitle}
         </p>
       </header>
-      <div className="flex gap-3 border-l-4 border-cyan-400 bg-cyan-50 px-5 py-4 text-sm leading-6 text-cyan-950">
-        <ShieldCheck className="mt-0.5 size-5 shrink-0" />
-        <p className="m-0 font-medium">{text.safety}</p>
-      </div>
-
-      <details className="enterprise-disclosure enterprise-surface">
-        <summary className="flex cursor-pointer items-center justify-between px-5 py-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
-          {text.request}
-          <span className="text-xs font-normal text-slate-500">＋</span>
-        </summary>
-        <form onSubmit={submit} className="border-t border-slate-200 px-5 py-5">
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <label className="flex-1 text-sm font-semibold text-slate-700">
-              <span className="mb-2 block">{text.approval}</span>
-              <select
-                required
-                value={approvalId}
-                onChange={(event) => setApprovalId(event.target.value)}
-                className={inputClass}
+      {!historyOnly && (
+        <EditorDialog
+          title={text.request}
+          open={requestOpen}
+          onOpen={() => setRequestOpen(true)}
+          onClose={() => setRequestOpen(false)}
+          busy={busy}
+        >
+          {error && (
+            <p role="alert" className="px-5 text-sm text-rose-700">
+              {error}
+            </p>
+          )}
+          <form
+            onSubmit={submit}
+            className="border-t border-slate-200 px-5 py-5"
+          >
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <label className="flex-1 text-sm font-semibold text-slate-700">
+                <span className="mb-2 block">{text.approval}</span>
+                <select
+                  required
+                  value={approvalId}
+                  onChange={(event) => setApprovalId(event.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">{text.choose}</option>
+                  {availableApprovals.map((approval) => (
+                    <option key={approval.id} value={approval.id}>
+                      {approval.action_template_id
+                        ? templateNames.get(approval.action_template_id)
+                        : approval.operation}{" "}
+                      · {targetNames.get(approval.target_id)} ·{" "}
+                      {text.approvalVersion} {approval.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="submit"
+                disabled={!selectedApproval || busy}
+                className="mt-auto inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
               >
-                <option value="">{text.choose}</option>
-                {availableApprovals.map((approval) => (
-                  <option key={approval.id} value={approval.id}>
-                    {approval.action_template_id
-                      ? templateNames.get(approval.action_template_id)
-                      : approval.operation}{" "}
-                    · {targetNames.get(approval.target_id)} ·{" "}
-                    {text.approvalVersion} {approval.version}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="submit"
-              disabled={!approvalId || busy}
-              className="mt-auto inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
-            >
-              <PlayCircle className="size-4" />
-              {busy ? text.submitting : text.submit}
-            </button>
-          </div>
-          {selectedApproval && (
-            <div className="mt-3 text-xs text-slate-600">
-              <p>
-                {authorizationLabel(
-                  selectedApproval.authorization_mode,
-                  language === "zh-CN",
-                )}
-              </p>
-              <pre className="whitespace-pre-wrap break-all">
-                {JSON.stringify(selectedApproval.parameters, null, 2)}
-              </pre>
+                <PlayCircle className="size-4" />
+                {busy ? text.submitting : text.submit}
+              </button>
             </div>
-          )}
-          {availableApprovals.length === 0 && !loading && (
-            <p className="mb-0 mt-3 text-sm text-amber-700">{text.none}</p>
-          )}
-        </form>
-      </details>
+            {selectedApproval && (
+              <div className="mt-3 text-xs text-slate-600">
+                <p>
+                  {authorizationLabel(
+                    selectedApproval.authorization_mode,
+                    language === "zh-CN",
+                  )}
+                </p>
+                <pre className="whitespace-pre-wrap break-all">
+                  {JSON.stringify(selectedApproval.parameters, null, 2)}
+                </pre>
+              </div>
+            )}
+            {availableApprovals.length === 0 && !loading && (
+              <p className="mb-0 mt-3 text-sm text-amber-700">{text.none}</p>
+            )}
+          </form>
+        </EditorDialog>
+      )}
 
       <div>
         <div className="mb-4 flex items-center justify-between">
@@ -413,7 +437,7 @@ export function OperationsView({
           </h2>
           <button
             type="button"
-            onClick={() => void refresh()}
+            onClick={() => void refresh().catch(() => setError(text.loadError))}
             className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
           >
             <RefreshCw className="size-3.5" />
@@ -433,7 +457,19 @@ export function OperationsView({
         ) : runs.length === 0 ? (
           <p className={emptyClass}>{text.empty}</p>
         ) : (
-          <div className="enterprise-surface enterprise-table">
+          <MasterDetail
+            language={language}
+            selectedId={expandedRunId ?? undefined}
+            onSelect={(id) => {
+              setExpandedRunId(id);
+              void loadEvents(id).catch(() => setError(text.loadError));
+            }}
+            items={runs.map((run) => ({
+              id: run.id,
+              name: templateNames.get(run.action_template_id) ?? run.operation,
+              detail: `${targetNames.get(run.target_id) ?? run.target_id} · ${text.states[run.state]}`,
+            }))}
+          >
             {runs.map((run) => (
               <article key={run.id} className="p-5">
                 <div className="flex flex-wrap items-start justify-between gap-4">
@@ -482,7 +518,7 @@ export function OperationsView({
                     )}
                     {run.result_status && (
                       <p className="mb-0 mt-2 text-sm font-medium text-slate-600">
-                        {text.results[run.result_status]}
+                        {text.results[run.result_status] ?? run.result_status}
                       </p>
                     )}
                   </div>
@@ -556,7 +592,7 @@ export function OperationsView({
                 )}
               </article>
             ))}
-          </div>
+          </MasterDetail>
         )}
       </div>
     </section>

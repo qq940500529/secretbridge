@@ -7,7 +7,6 @@ import {
   ClipboardCheck,
   Clock3,
   RotateCcw,
-  ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -18,6 +17,7 @@ import {
   useState,
 } from "react";
 import { useServiceChanges } from "./service-events";
+import { EditorDialog, MasterDetail } from "./Workbench";
 import { CommandReview } from "./CommandReview";
 import { ParameterFields } from "./ParameterFields";
 import { authorizationLabel } from "./parameters";
@@ -82,9 +82,11 @@ const stateStyles: Record<ApprovalState, string> = {
 export function ApprovalView({
   language,
   sessionToken,
+  initialTemplateId,
 }: {
   language: Language;
   sessionToken: string;
+  initialTemplateId?: string;
 }) {
   const text =
     language === "zh-CN"
@@ -230,6 +232,7 @@ export function ApprovalView({
   const [targets, setTargets] = useState<Target[]>([]);
   const [templates, setTemplates] = useState<ActionTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
+  const [requestOpen, setRequestOpen] = useState(Boolean(initialTemplateId));
   const [parameters, setParameters] = useState<Record<string, ParameterValue>>(
     {},
   );
@@ -298,8 +301,13 @@ export function ApprovalView({
         setTargets(targetsResponse.items);
         setTemplates(templatesResponse.items);
         setTemplateId(
-          templatesResponse.items.find((template) => template.enabled)?.id ??
-            "",
+          (initialTemplateId
+            ? templatesResponse.items.find(
+                (template) =>
+                  template.id === initialTemplateId && template.enabled,
+              )?.id
+            : templatesResponse.items.find((template) => template.enabled)
+                ?.id) ?? "",
         );
       })
       .catch(() => {
@@ -351,6 +359,7 @@ export function ApprovalView({
       });
       setItems((current) => [item, ...current]);
       setReason("");
+      setRequestOpen(false);
     } catch {
       setError(text.saveError);
     } finally {
@@ -414,16 +423,18 @@ export function ApprovalView({
         </p>
       </header>
 
-      <div className="flex gap-3 border-l-4 border-amber-400 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-900">
-        <ShieldAlert className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-        <p className="m-0 font-medium">{text.safety}</p>
-      </div>
-
-      <details className="enterprise-disclosure enterprise-surface">
-        <summary className="flex cursor-pointer items-center justify-between px-5 py-4 text-sm font-semibold text-slate-900 hover:bg-slate-50">
-          {text.create}
-          <span className="text-xs font-normal text-slate-500">＋</span>
-        </summary>
+      <EditorDialog
+        title={text.create}
+        open={requestOpen}
+        onOpen={() => setRequestOpen(true)}
+        onClose={() => setRequestOpen(false)}
+        busy={busyId !== null}
+      >
+        {error && (
+          <p role="alert" className="px-5 text-sm text-rose-700">
+            {error}
+          </p>
+        )}
         <form onSubmit={submit} className="border-t border-slate-200 px-5 py-5">
           {targets.length === 0 && !loading && (
             <p className="mb-0 mt-4 rounded-xl bg-cyan-50 p-3 text-sm text-cyan-800">
@@ -572,7 +583,7 @@ export function ApprovalView({
             </button>
           </div>
         </form>
-      </details>
+      </EditorDialog>
 
       <div>
         <div className="mb-4 flex items-center justify-between gap-4">
@@ -600,7 +611,17 @@ export function ApprovalView({
             {text.empty}
           </p>
         ) : (
-          <div className="enterprise-surface enterprise-table">
+          <MasterDetail
+            language={language}
+            items={items.map((item) => ({
+              id: item.id,
+              name:
+                (item.action_template_id &&
+                  templateNames.get(item.action_template_id)) ||
+                operationLabels[language][item.operation],
+              detail: `${targetNames.get(item.target_id) ?? item.target_id} · ${text.states[item.state]}`,
+            }))}
+          >
             {items.map((item) => (
               <article key={item.id} className="p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -725,7 +746,7 @@ export function ApprovalView({
                 )}
               </article>
             ))}
-          </div>
+          </MasterDetail>
         )}
       </div>
     </section>

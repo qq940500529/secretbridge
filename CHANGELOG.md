@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.31
+
+- Reorganized the console into Credentials, Connections, Tasks, Terminal, History and Settings, with task and history sub-navigation.
+- Added searchable master-detail workspaces and native modal creation/editing/authorization/run forms, preserving inputs after retryable failures and restoring keyboard focus.
+- Connected connection details to task credentials, available tasks, authorization requests and recent execution output; new runs reveal results automatically.
+- Filtered expired and unrelated approvals, added page-session unpairing through the existing API, and introduced narrow-screen bottom navigation.
+- Added workbench component and headless browser workflow tests; no new application dependencies or schema migration.
+
 ## 0.1.0-alpha.30
 
 - Added native PostgreSQL/MySQL connection checks, version queries and registered read-only SELECT/WITH templates, using driver-bound string/integer/boolean values rather than SQL interpolation.
