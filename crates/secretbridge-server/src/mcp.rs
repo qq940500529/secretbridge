@@ -207,6 +207,18 @@ impl McpBackend {
         }
     }
 
+    async fn read_output(
+        &self,
+        params: crate::command::OutputRequest,
+    ) -> Result<crate::command::OutputPage, ErrorData> {
+        match self {
+            Self::Local(state) => crate::command::read_output(state, params)
+                .await
+                .map_err(catalog_error),
+            Self::Remote(client) => client.call(OP_READ_OUTPUT, &params).await,
+        }
+    }
+
     async fn cancel_run(&self, params: CancelRunParams) -> Result<RunSummary, ErrorData> {
         match self {
             Self::Local(state) => {
@@ -244,6 +256,16 @@ impl McpBackend {
 
 #[tool_router]
 impl SecretBridgeMcp {
+    #[tool(
+        name = "secretbridge_read_run_output",
+        description = "Read sanitized stdout/stderr for an approved credential-backed command run. cursor is the last chunk sequence; continue with next_cursor. wait_ms=0..5000; retention gaps are explicit. Never re-execute a command to recover output."
+    )]
+    async fn read_run_output(
+        &self,
+        Parameters(params): Parameters<crate::command::OutputRequest>,
+    ) -> Result<McpJson<crate::command::OutputPage>, ErrorData> {
+        Ok(McpJson(self.backend.read_output(params).await?))
+    }
     #[tool(
         name = "secretbridge_terminal_capabilities",
         description = "Discover supported ordinary system shells and terminal limits. No credentials are injected."
@@ -505,6 +527,7 @@ const OP_REQUEST_APPROVAL: &str = "request_approval";
 const OP_GET_APPROVAL: &str = "get_approval";
 const OP_CREATE_RUN: &str = "create_run";
 const OP_GET_RUN: &str = "get_run";
+const OP_READ_OUTPUT: &str = "read_run_output";
 const OP_CANCEL_RUN: &str = "cancel_run";
 const OP_LIST_RUN_EVENTS: &str = "list_run_events";
 const OP_TERMINAL: &str = "terminal";
@@ -771,6 +794,7 @@ impl LocalMcpBridge {
                 return Err(error);
             }
         };
+        crate::command::cleanup_files(&state.command_directory)?;
         Ok(Self {
             listener,
             state,
@@ -1032,6 +1056,9 @@ async fn dispatch_bridge_request(
         }
         OP_GET_RUN => {
             serialize_bridge_payload(backend.get_run(parse_bridge_payload(payload)?).await?)
+        }
+        OP_READ_OUTPUT => {
+            serialize_bridge_payload(backend.read_output(parse_bridge_payload(payload)?).await?)
         }
         OP_CANCEL_RUN => {
             serialize_bridge_payload(backend.cancel_run(parse_bridge_payload(payload)?).await?)
@@ -1397,6 +1424,7 @@ struct TemplateList {
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 struct TemplateSummary {
+    credential_slots: Vec<SlotSummary>,
     id: String,
     name: String,
     operation: ApprovalOperation,
@@ -1409,6 +1437,16 @@ struct TemplateSummary {
 impl From<ActionTemplate> for TemplateSummary {
     fn from(template: ActionTemplate) -> Self {
         Self {
+            credential_slots: template.command.as_ref().map_or_else(Vec::new, |config| {
+                config
+                    .slots
+                    .iter()
+                    .map(|s| SlotSummary {
+                        name: s.name.clone(),
+                        injection: format!("{:?}", s.injection).to_lowercase(),
+                    })
+                    .collect()
+            }),
             id: template.id.to_string(),
             name: template.name,
             operation: template.operation,
@@ -1418,6 +1456,12 @@ impl From<ActionTemplate> for TemplateSummary {
             version: template.version,
         }
     }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+struct SlotSummary {
+    name: String,
+    injection: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -1637,6 +1681,7 @@ mod tests {
                 "secretbridge_get_run",
                 "secretbridge_list_action_templates",
                 "secretbridge_list_run_events",
+                "secretbridge_read_run_output",
                 "secretbridge_request_approval",
                 "secretbridge_terminal_attach",
                 "secretbridge_terminal_capabilities",
@@ -1669,6 +1714,10 @@ mod tests {
                 vec!["expected_version", "run_id"],
             ),
             ("secretbridge_list_run_events", vec!["id"]),
+            (
+                "secretbridge_read_run_output",
+                vec!["cursor", "id", "wait_ms"],
+            ),
             ("secretbridge_terminal_attach", vec!["id", "request_input"]),
             ("secretbridge_terminal_capabilities", vec![]),
             ("secretbridge_terminal_close", vec!["id"]),
@@ -1712,6 +1761,86 @@ mod tests {
 
         client.cancel().await.expect("stop MCP client");
         server_handle.await.expect("join MCP server");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn native_mcp_reads_redacted_command_output_and_idempotent_runs() {
+        let directory = std::env::temp_dir().join(format!(
+            "sb-c-{}",
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        fs::create_dir(&directory).expect("create test directory");
+        #[cfg(unix)]
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let (state, _) = AppState::new([]);
+        let (approval, _) = crate::command::tests::configure(&state, "stdin", 10);
+        let bridge = LocalMcpBridge::bind(&directory, state.clone()).unwrap();
+        let stop = CancellationToken::new();
+        let broker_stop = stop.clone();
+        let broker = tokio::spawn(async move {
+            bridge.serve(broker_stop).await.unwrap();
+        });
+        let (client, server) = connect_server(SecretBridgeMcp::new_remote(
+            BridgeClient::from_file(directory.join("mcp-bridge.json")),
+        ))
+        .await;
+        let templates =
+            terminal_tool(&client, "secretbridge_list_action_templates", json!({})).await;
+        assert_eq!(
+            templates["items"][0]["credential_slots"][0]["name"],
+            "password"
+        );
+        assert!(
+            templates["items"][0]["credential_slots"][0]
+                .get("credential_id")
+                .is_none()
+        );
+        let key = Uuid::new_v4().to_string();
+        let request = json!({"approval_id":approval.to_string(),"idempotency_key":key});
+        let run = terminal_tool(&client, "secretbridge_create_run", request.clone()).await;
+        assert_eq!(run["execution_mode"], "credential_command");
+        let replay = terminal_tool(&client, "secretbridge_create_run", request).await;
+        assert_eq!(replay["replayed"], true);
+        assert_eq!(run["run"]["id"], replay["run"]["id"]);
+        let mut cursor = 0;
+        let mut output = String::new();
+        time::timeout(Duration::from_secs(20), async {
+            loop {
+                let page = terminal_tool(
+                    &client,
+                    "secretbridge_read_run_output",
+                    json!({"id":run["run"]["id"],"cursor":cursor,"wait_ms":1000}),
+                )
+                .await;
+                cursor = page["next_cursor"].as_u64().unwrap();
+                for chunk in page["items"].as_array().unwrap() {
+                    output.push_str(chunk["text"].as_str().unwrap());
+                }
+                if page["state"] == "succeeded" && !page["has_more"].as_bool().unwrap() {
+                    assert_eq!(page["exit_code"], 0);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains("Synthetic-SB-command_A&z"));
+        assert!(
+            client
+                .call_tool(
+                    CallToolRequestParams::new("secretbridge_read_run_output").with_arguments(
+                        arguments(json!({"id":run["run"]["id"],"cursor":cursor,"wait_ms":5001}))
+                    )
+                )
+                .await
+                .is_err()
+        );
+        client.cancel().await.unwrap();
+        server.await.unwrap();
+        stop.cancel();
+        broker.await.unwrap();
+        fs::remove_dir(&directory).unwrap();
     }
 
     async fn terminal_tool(
@@ -2197,6 +2326,7 @@ mod tests {
         let template = state
             .catalog
             .create_action_template(&CreateActionTemplate {
+                command: None,
                 target_id: target.id,
                 name: "Inspect bounded metadata".to_owned(),
                 operation: ApprovalOperation::InspectMetadata,

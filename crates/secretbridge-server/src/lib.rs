@@ -4,8 +4,10 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod command;
 mod mcp;
 mod postgres;
+mod redaction;
 mod secret_store;
 mod terminal;
 mod terminal_control;
@@ -83,6 +85,8 @@ pub struct AppState {
     secret_store: Arc<dyn SecretStore>,
     terminals: TerminalManager,
     terminal_controls: terminal_control::TerminalControls,
+    command_directory: Arc<PathBuf>,
+    command_capacity: Arc<tokio::sync::Semaphore>,
     changes: broadcast::Sender<()>,
 }
 
@@ -133,14 +137,21 @@ impl AppState {
         catalog
             .recover_interrupted_runs()
             .map_err(|_| AppStateInitializationError(CatalogOpenError::Recovery))?;
-        Ok(Self::build(
+        let (mut state, token) = Self::build(
             trusted_origins,
             TerminalManager::system(),
             catalog,
             ConfigurationStorage::Sqlite,
             persistent_secret_store(),
             default_postgres_executor(),
-        ))
+        );
+        state.command_directory = Arc::new(
+            database_path
+                .parent()
+                .ok_or(AppStateInitializationError(CatalogOpenError::Recovery))?
+                .join("command-secrets"),
+        );
+        Ok((state, token))
     }
 
     #[doc(hidden)]
@@ -184,6 +195,10 @@ impl AppState {
             changes: terminals.change_notifier(),
             terminals,
             terminal_controls: terminal_control::TerminalControls::default(),
+            command_directory: Arc::new(
+                std::env::temp_dir().join(format!("secretbridge-command-{}", Uuid::new_v4())),
+            ),
+            command_capacity: Arc::new(tokio::sync::Semaphore::new(4)),
         };
         (state, bootstrap_token)
     }
@@ -572,6 +587,7 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}", get(get_synthetic_run))
         .route("/api/v1/runs/{id}/cancel", post(cancel_synthetic_run))
         .route("/api/v1/runs/{id}/events", get(list_run_safe_events))
+        .route("/api/v1/runs/{id}/output", post(get_run_output))
         .route("/api/v1/safe-events", get(list_safe_events))
         .route(
             "/api/v1/terminals",
@@ -592,15 +608,55 @@ fn api_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadRunOutput {
+    cursor: u64,
+    #[serde(default)]
+    wait_ms: u64,
+}
+
+async fn get_run_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<Uuid>,
+    Json(request): Json<ReadRunOutput>,
+) -> Result<Json<command::OutputPage>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    Ok(Json(
+        command::read_output(
+            &state,
+            command::OutputRequest {
+                id: id.to_string(),
+                cursor: request.cursor,
+                wait_ms: request.wait_ms,
+            },
+        )
+        .await
+        .map_err(map_catalog_error)?,
+    ))
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 async fn notify_mutations(
     State(state): State<AppState>,
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let mutation = !matches!(
-        *request.method(),
-        Method::GET | Method::HEAD | Method::OPTIONS
-    );
+    let mutation = !request.uri().path().ends_with("/output")
+        && !matches!(
+            *request.method(),
+            Method::GET | Method::HEAD | Method::OPTIONS
+        );
     let response = next.run(request).await;
     if mutation && response.status().is_success() {
         let _ = state.changes.send(());
@@ -1292,7 +1348,9 @@ async fn create_run_for_state(
 }
 
 const fn run_execution_mode(operation: catalog::ApprovalOperation) -> &'static str {
-    if matches!(
+    if matches!(operation, catalog::ApprovalOperation::CommandExecution) {
+        "credential_command"
+    } else if matches!(
         operation,
         catalog::ApprovalOperation::PostgresConnectionCheck
     ) {
@@ -1321,7 +1379,9 @@ async fn drive_run(state: AppState, run_id: Uuid, cancellation: CancellationToke
         _ => return,
     };
     let _ = state.changes.send(());
-    if started.operation == catalog::ApprovalOperation::PostgresConnectionCheck {
+    if started.operation == catalog::ApprovalOperation::CommandExecution {
+        command::drive(&state, run_id, &cancellation).await;
+    } else if started.operation == catalog::ApprovalOperation::PostgresConnectionCheck {
         drive_postgres_check(&state, run_id, &cancellation).await;
     } else {
         tokio::select! {

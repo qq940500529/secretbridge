@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
@@ -263,6 +263,7 @@ pub enum ApprovalOperation {
     InspectMetadata,
     SyntheticHealthCheck,
     PostgresConnectionCheck,
+    CommandExecution,
 }
 
 impl ApprovalOperation {
@@ -271,6 +272,7 @@ impl ApprovalOperation {
             Self::InspectMetadata => "inspect_metadata",
             Self::SyntheticHealthCheck => "synthetic_health_check",
             Self::PostgresConnectionCheck => "postgres_connection_check",
+            Self::CommandExecution => "command_execution",
         }
     }
 
@@ -279,6 +281,7 @@ impl ApprovalOperation {
             "inspect_metadata" => Ok(Self::InspectMetadata),
             "synthetic_health_check" => Ok(Self::SyntheticHealthCheck),
             "postgres_connection_check" => Ok(Self::PostgresConnectionCheck),
+            "command_execution" => Ok(Self::CommandExecution),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -289,6 +292,7 @@ impl ApprovalOperation {
 pub enum ApprovalResultScope {
     StatusOnly,
     MetadataSummary,
+    SanitizedOutput,
 }
 
 impl ApprovalResultScope {
@@ -296,6 +300,7 @@ impl ApprovalResultScope {
         match self {
             Self::StatusOnly => "status_only",
             Self::MetadataSummary => "metadata_summary",
+            Self::SanitizedOutput => "sanitized_output",
         }
     }
 
@@ -303,6 +308,7 @@ impl ApprovalResultScope {
         match value {
             "status_only" => Ok(Self::StatusOnly),
             "metadata_summary" => Ok(Self::MetadataSummary),
+            "sanitized_output" => Ok(Self::SanitizedOutput),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -320,6 +326,7 @@ pub enum ApprovalState {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ActionTemplate {
+    pub command: Option<crate::command::CommandConfig>,
     pub id: Uuid,
     pub target_id: Uuid,
     pub name: String,
@@ -336,6 +343,8 @@ pub struct ActionTemplate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateActionTemplate {
+    #[serde(default)]
+    pub(crate) command: Option<crate::command::CommandConfig>,
     pub(crate) target_id: Uuid,
     pub(crate) name: String,
     pub(crate) operation: ApprovalOperation,
@@ -347,6 +356,8 @@ pub struct CreateActionTemplate {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateActionTemplate {
+    #[serde(default)]
+    command: Option<crate::command::CommandConfig>,
     target_id: Uuid,
     name: String,
     operation: ApprovalOperation,
@@ -369,6 +380,7 @@ pub enum PolicyDecision {
 pub enum PolicyReasonCode {
     FixedSyntheticScope,
     FixedPostgresConnectionCheck,
+    FixedCommandTemplate,
     TemplateDisabled,
     TargetIncompatible,
     PostgresConfigurationMissing,
@@ -389,6 +401,7 @@ pub enum PolicyRequirement {
     TlsVerifyFull,
     ReadOnlyTransaction,
     StructuredStatusOnly,
+    RedactedOutput,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -689,8 +702,8 @@ impl Catalog {
                     id TEXT PRIMARY KEY NOT NULL,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     description TEXT CHECK (description IS NULL OR length(description) <= 240),
                     timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -705,8 +718,8 @@ impl Catalog {
                     action_template_version INTEGER,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
                     state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'revoked', 'expired')),
                     decision_note TEXT CHECK (decision_note IS NULL OR length(decision_note) <= 240),
@@ -724,10 +737,10 @@ impl Catalog {
                     action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
-                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
+                    result_status TEXT CHECK (result_status IS NULL OR result_status IN ('command_ok', 'command_failed', 'command_cleanup_failed', 'synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
                     created_at_unix_ms INTEGER NOT NULL,
                     updated_at_unix_ms INTEGER NOT NULL,
                     started_at_unix_ms INTEGER,
@@ -741,7 +754,7 @@ impl Catalog {
                     sequence INTEGER NOT NULL CHECK (sequence >= 1),
                     kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'failed', 'cancelled', 'interrupted', 'authorization_revoked')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+                    message TEXT NOT NULL CHECK (message IN ('command run started', 'command run succeeded', 'command run failed', 'request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
                     created_at_unix_ms INTEGER NOT NULL,
                     UNIQUE(run_id, sequence)
                  );
@@ -759,7 +772,7 @@ impl Catalog {
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     description TEXT CHECK (description IS NULL OR length(description) <= 240),
                     timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -775,7 +788,7 @@ impl Catalog {
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
                     state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'revoked', 'expired')),
                     decision_note TEXT CHECK (decision_note IS NULL OR length(decision_note) <= 240),
@@ -794,7 +807,7 @@ impl Catalog {
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     target_version INTEGER NOT NULL CHECK (target_version >= 1),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
                     result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
                     created_at_unix_ms INTEGER NOT NULL,
@@ -810,7 +823,7 @@ impl Catalog {
                     sequence INTEGER NOT NULL CHECK (sequence >= 1),
                     kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
                     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-                    message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+                    message TEXT NOT NULL CHECK (message IN ('command run started', 'command run succeeded', 'command run failed', 'request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
                     created_at_unix_ms INTEGER NOT NULL,
                     UNIQUE(run_id, sequence)
                  );
@@ -828,7 +841,7 @@ impl Catalog {
                     target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
                     name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
                     operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
-                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+                    result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
                     description TEXT CHECK (description IS NULL OR length(description) <= 240),
                     timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
                     enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -857,6 +870,22 @@ impl Catalog {
         }
         if (1..=11).contains(&version) {
             migrate_remove_obsolete_governance(&connection)?;
+        }
+        if version < 13 {
+            // Rebuild constrained tables with the expanded operation/result enums.
+            migrate_controlled_postgres_schema(&connection)?;
+            connection.execute_batch("BEGIN IMMEDIATE;
+                ALTER TABLE action_templates ADD COLUMN command_json TEXT;
+                ALTER TABLE synthetic_runs ADD COLUMN exit_code INTEGER;
+                CREATE TABLE command_slots (
+                    template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE CASCADE,
+                    credential_id TEXT NOT NULL REFERENCES credential_references(id) ON DELETE RESTRICT,
+                    PRIMARY KEY(template_id, credential_id));
+                CREATE TABLE run_output (
+                    run_id TEXT NOT NULL REFERENCES synthetic_runs(id) ON DELETE RESTRICT,
+                    sequence INTEGER NOT NULL, stream TEXT NOT NULL, text TEXT NOT NULL,
+                    PRIMARY KEY(run_id, sequence));
+                PRAGMA user_version = 13; COMMIT;")?;
         }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -997,6 +1026,7 @@ impl Catalog {
                 params![now, id.to_string()],
             )
             .map_err(|_| CatalogError::Storage)?;
+        transaction.execute("UPDATE action_templates SET updated_at_unix_ms=?1, version=version+1 WHERE id IN (SELECT template_id FROM command_slots WHERE credential_id=?2)", params![now,id.to_string()]).map_err(|_|CatalogError::Storage)?;
         transaction.commit().map_err(|_| CatalogError::Storage)?;
         credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
@@ -1005,7 +1035,7 @@ impl Catalog {
         let connection = self.lock();
         let references = connection
             .query_row(
-                "SELECT COUNT(*) FROM targets WHERE credential_reference_id = ?1",
+                "SELECT (SELECT COUNT(*) FROM targets WHERE credential_reference_id = ?1) + (SELECT COUNT(*) FROM command_slots WHERE credential_id = ?1)",
                 [id.to_string()],
                 |row| row.get::<_, i64>(0),
             )
@@ -1132,7 +1162,7 @@ impl Catalog {
             .prepare(
                 "SELECT id, target_id, name, operation, result_scope, description,
                         timeout_seconds, enabled, created_at_unix_ms,
-                        updated_at_unix_ms, version
+                        updated_at_unix_ms, version, command_json
                    FROM action_templates
                   ORDER BY created_at_unix_ms, id",
             )
@@ -1163,17 +1193,21 @@ impl Catalog {
             return Err(CatalogError::Invalid);
         }
         let connection = self.lock();
+        validate_command(&connection, request.operation, request.command.as_ref())?;
         ensure_capacity(&connection, "action_templates", MAX_ACTION_TEMPLATES)?;
         ensure_target_exists(&connection, request.target_id)?;
         let id = Uuid::new_v4();
         let now = now_unix_ms_i64()?;
-        connection
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
             .execute(
                 "INSERT INTO action_templates
                     (id, target_id, name, operation, result_scope, description,
                      timeout_seconds, enabled, created_at_unix_ms,
-                     updated_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, 1)",
+                     updated_at_unix_ms, version, command_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, 1, ?9)",
                 params![
                     id.to_string(),
                     request.target_id.to_string(),
@@ -1182,10 +1216,18 @@ impl Catalog {
                     request.result_scope.as_storage(),
                     description,
                     i64::try_from(request.timeout_seconds).map_err(|_| CatalogError::Invalid)?,
-                    now
+                    now,
+                    request
+                        .command
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|_| CatalogError::Invalid)?
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
+        save_command_slots(&transaction, id, request.command.as_ref())?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
         action_template_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
@@ -1201,13 +1243,17 @@ impl Catalog {
             return Err(CatalogError::Invalid);
         }
         let connection = self.lock();
+        validate_command(&connection, request.operation, request.command.as_ref())?;
         ensure_target_exists(&connection, request.target_id)?;
-        let changed = connection
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        let changed = transaction
             .execute(
                 "UPDATE action_templates
                     SET target_id = ?1, name = ?2, operation = ?3, result_scope = ?4,
                         description = ?5, timeout_seconds = ?6, enabled = ?7,
-                        updated_at_unix_ms = ?8, version = version + 1
+                        updated_at_unix_ms = ?8, version = version + 1, command_json = ?11
                   WHERE id = ?9 AND version = ?10",
                 params![
                     request.target_id.to_string(),
@@ -1219,7 +1265,13 @@ impl Catalog {
                     request.enabled,
                     now_unix_ms_i64()?,
                     id.to_string(),
-                    i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?
+                    i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?,
+                    request
+                        .command
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|_| CatalogError::Invalid)?
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -1230,6 +1282,8 @@ impl Catalog {
                 Err(CatalogError::NotFound)
             };
         }
+        save_command_slots(&transaction, id, request.command.as_ref())?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
         action_template_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
@@ -1496,7 +1550,9 @@ impl Catalog {
 
     pub fn start_run(&self, id: Uuid) -> Result<SyntheticRun, CatalogError> {
         let current = self.get_synthetic_run(id)?;
-        let message = if current.operation == ApprovalOperation::PostgresConnectionCheck {
+        let message = if current.operation == ApprovalOperation::CommandExecution {
+            "command run started"
+        } else if current.operation == ApprovalOperation::PostgresConnectionCheck {
             "postgres connection check started"
         } else {
             "synthetic run started"
@@ -1559,6 +1615,46 @@ impl Catalog {
             },
             true,
         )
+    }
+
+    pub fn complete_command_run(
+        &self,
+        id: Uuid,
+        status: &str,
+        exit_code: Option<i32>,
+    ) -> Result<SyntheticRun, CatalogError> {
+        let succeeded = status == "command_ok";
+        let run = self.transition_run(
+            id,
+            None,
+            &[RunState::Running],
+            if status == "cancelled" {
+                RunState::Cancelled
+            } else if succeeded {
+                RunState::Succeeded
+            } else {
+                RunState::Failed
+            },
+            Some(status),
+            if succeeded {
+                SafeEventKind::Succeeded
+            } else {
+                SafeEventKind::Failed
+            },
+            if succeeded {
+                "command run succeeded"
+            } else {
+                "command run failed"
+            },
+            false,
+        )?;
+        self.lock()
+            .execute(
+                "UPDATE synthetic_runs SET exit_code=?1 WHERE id=?2",
+                params![exit_code, id.to_string()],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(run)
     }
 
     pub fn run_execution_context(&self, id: Uuid) -> Result<RunExecutionContext, CatalogError> {
@@ -1783,7 +1879,7 @@ impl Catalog {
         (changed > 0).then_some(()).ok_or(CatalogError::NotFound)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1800,7 +1896,7 @@ fn create_run_schema(connection: &Connection) -> rusqlite::Result<()> {
             action_template_id TEXT NOT NULL REFERENCES action_templates(id) ON DELETE RESTRICT,
             target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
             operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check')),
-            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
             state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
             result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'cancelled', 'service_restarted', 'authorization_revoked')),
             created_at_unix_ms INTEGER NOT NULL,
@@ -1816,7 +1912,7 @@ fn create_run_schema(connection: &Connection) -> rusqlite::Result<()> {
             sequence INTEGER NOT NULL CHECK (sequence >= 1),
             kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'cancelled', 'interrupted', 'authorization_revoked')),
             state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-            message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+            message TEXT NOT NULL CHECK (message IN ('command run started', 'command run succeeded', 'command run failed', 'request accepted', 'synthetic run started', 'synthetic run completed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
             created_at_unix_ms INTEGER NOT NULL,
             UNIQUE(run_id, sequence)
          );
@@ -1899,8 +1995,8 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
             id TEXT PRIMARY KEY NOT NULL,
             target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
             name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
             description TEXT CHECK (description IS NULL OR length(description) <= 240),
             timeout_seconds INTEGER NOT NULL CHECK (timeout_seconds BETWEEN 1 AND 300),
             enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
@@ -1920,8 +2016,8 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
             action_template_version INTEGER,
             target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
             target_version INTEGER NOT NULL CHECK (target_version >= 1),
-            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
             reason TEXT CHECK (reason IS NULL OR length(reason) <= 240),
             state TEXT NOT NULL CHECK (state IN ('pending', 'approved', 'denied', 'revoked', 'expired')),
             decision_note TEXT CHECK (decision_note IS NULL OR length(decision_note) <= 240),
@@ -1945,10 +2041,10 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
             action_template_id TEXT NOT NULL REFERENCES action_templates_v7(id) ON DELETE RESTRICT,
             target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
             target_version INTEGER NOT NULL CHECK (target_version >= 1),
-            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check')),
-            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary')),
+            operation TEXT NOT NULL CHECK (operation IN ('inspect_metadata', 'synthetic_health_check', 'postgres_connection_check', 'command_execution')),
+            result_scope TEXT NOT NULL CHECK (result_scope IN ('status_only', 'metadata_summary', 'sanitized_output')),
             state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-            result_status TEXT CHECK (result_status IS NULL OR result_status IN ('synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
+            result_status TEXT CHECK (result_status IS NULL OR result_status IN ('command_ok', 'command_failed', 'command_cleanup_failed', 'synthetic_ok', 'postgres_connection_ok', 'postgres_connection_failed', 'postgres_configuration_invalid', 'credential_unavailable', 'timed_out', 'cancelled', 'service_restarted', 'authorization_revoked')),
             created_at_unix_ms INTEGER NOT NULL,
             updated_at_unix_ms INTEGER NOT NULL,
             started_at_unix_ms INTEGER,
@@ -1971,7 +2067,7 @@ fn migrate_controlled_postgres_schema(connection: &Connection) -> rusqlite::Resu
             sequence INTEGER NOT NULL CHECK (sequence >= 1),
             kind TEXT NOT NULL CHECK (kind IN ('requested', 'started', 'succeeded', 'failed', 'cancelled', 'interrupted', 'authorization_revoked')),
             state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'cancelled', 'failed')),
-            message TEXT NOT NULL CHECK (message IN ('request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
+            message TEXT NOT NULL CHECK (message IN ('command run started', 'command run succeeded', 'command run failed', 'request accepted', 'synthetic run started', 'synthetic run completed', 'postgres connection check started', 'postgres connection check succeeded', 'postgres connection check failed', 'run cancelled', 'service restarted before completion', 'authorization no longer active')),
             created_at_unix_ms INTEGER NOT NULL,
             UNIQUE(run_id, sequence)
          );
@@ -2035,17 +2131,88 @@ fn column_exists(
     connection.query_row(&query, [column], |row| row.get(0))
 }
 
+fn validate_command(
+    connection: &Connection,
+    operation: ApprovalOperation,
+    config: Option<&crate::command::CommandConfig>,
+) -> Result<(), CatalogError> {
+    if (operation == ApprovalOperation::CommandExecution) != config.is_some() {
+        return Err(CatalogError::Invalid);
+    }
+    if let Some(config) = config {
+        config.validate()?;
+        for slot in &config.slots {
+            if credential_by_id(connection, slot.credential_id)?.is_none() {
+                return Err(CatalogError::CredentialReferenceNotFound);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn save_command_slots(
+    connection: &Connection,
+    id: Uuid,
+    config: Option<&crate::command::CommandConfig>,
+) -> Result<(), CatalogError> {
+    connection
+        .execute(
+            "DELETE FROM command_slots WHERE template_id=?1",
+            [id.to_string()],
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    if let Some(config) = config {
+        for slot in &config.slots {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO command_slots(template_id,credential_id) VALUES (?1,?2)",
+                    params![id.to_string(), slot.credential_id.to_string()],
+                )
+                .map_err(|_| CatalogError::Storage)?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "operation-specific policy rules are reviewed together"
+)]
 fn policy_evaluation(
     connection: &Connection,
     template: &ActionTemplate,
     target: &Target,
 ) -> Result<PolicyEvaluation, CatalogError> {
     let postgres = template.operation == ApprovalOperation::PostgresConnectionCheck;
+    let command = template.operation == ApprovalOperation::CommandExecution;
     let mut reasons = Vec::new();
+    if (template.result_scope == ApprovalResultScope::SanitizedOutput) != command {
+        reasons.push(PolicyReasonCode::ResultScopeUnsupported);
+    }
     if !template.enabled {
         reasons.push(PolicyReasonCode::TemplateDisabled);
     }
-    if postgres {
+    if command {
+        if let Some(config) = &template.command {
+            if config.validate().is_err() {
+                reasons.push(PolicyReasonCode::TargetIncompatible);
+            }
+            for slot in &config.slots {
+                match credential_by_id(connection, slot.credential_id)? {
+                    None => reasons.push(PolicyReasonCode::CredentialMissing),
+                    Some(credential) if credential.secret_state != SecretState::Available => {
+                        reasons.push(PolicyReasonCode::CredentialNotConfigured);
+                    }
+                    Some(_) => {}
+                }
+            }
+        } else {
+            reasons.push(PolicyReasonCode::TargetIncompatible);
+        }
+        if reasons.is_empty() {
+            reasons.push(PolicyReasonCode::FixedCommandTemplate);
+        }
+    } else if postgres {
         if target.kind != TargetKind::Database {
             reasons.push(PolicyReasonCode::TargetIncompatible);
         }
@@ -2080,11 +2247,15 @@ fn policy_evaluation(
     let eligible = reasons.iter().all(|reason| {
         matches!(
             reason,
-            PolicyReasonCode::FixedSyntheticScope | PolicyReasonCode::FixedPostgresConnectionCheck
+            PolicyReasonCode::FixedSyntheticScope
+                | PolicyReasonCode::FixedPostgresConnectionCheck
+                | PolicyReasonCode::FixedCommandTemplate
         )
     });
     Ok(PolicyEvaluation {
-        policy_version: if postgres {
+        policy_version: if command {
+            "credential-command-policy-v1"
+        } else if postgres {
             POSTGRES_POLICY_VERSION
         } else {
             SYNTHETIC_POLICY_VERSION
@@ -2095,7 +2266,15 @@ fn policy_evaluation(
             PolicyDecision::Denied
         },
         reason_codes: reasons,
-        requirements: if postgres {
+        requirements: if command {
+            vec![
+                PolicyRequirement::ExplicitApproval,
+                PolicyRequirement::NoParameters,
+                PolicyRequirement::SingleUse,
+                PolicyRequirement::TransitionRevalidation,
+                PolicyRequirement::RedactedOutput,
+            ]
+        } else if postgres {
             vec![
                 PolicyRequirement::ExplicitApproval,
                 PolicyRequirement::NoParameters,
@@ -2122,7 +2301,9 @@ fn policy_evaluation(
         operation: template.operation,
         result_scope: template.result_scope,
         timeout_seconds: template.timeout_seconds,
-        execution_mode: if postgres {
+        execution_mode: if command {
+            "credential_command"
+        } else if postgres {
             "controlled_postgres"
         } else {
             "synthetic_simulation"
@@ -2256,7 +2437,7 @@ fn action_template_by_id(
         .query_row(
             "SELECT id, target_id, name, operation, result_scope, description,
                     timeout_seconds, enabled, created_at_unix_ms,
-                    updated_at_unix_ms, version
+                    updated_at_unix_ms, version, command_json
                FROM action_templates WHERE id = ?1",
             [id.to_string()],
             action_template_from_row,
@@ -2267,6 +2448,10 @@ fn action_template_by_id(
 
 fn action_template_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionTemplate> {
     Ok(ActionTemplate {
+        command: row
+            .get::<_, Option<String>>(11)?
+            .map(|json| serde_json::from_str(&json).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?,
         id: uuid_from_row(row, 0)?,
         target_id: uuid_from_row(row, 1)?,
         name: row.get(2)?,
@@ -2791,6 +2976,7 @@ mod tests {
             .expect("PostgreSQL target");
         let template = catalog
             .create_action_template(&CreateActionTemplate {
+                command: None,
                 target_id: target.id,
                 name: "PostgreSQL connection check".to_owned(),
                 operation: ApprovalOperation::PostgresConnectionCheck,
@@ -2966,7 +3152,52 @@ mod tests {
             .lock()
             .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
             .expect("schema version");
-        assert_eq!(version, 12);
+        assert_eq!(version, super::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn version_twelve_database_preserves_workflow_on_command_upgrade() {
+        let database = TemporaryDatabase::new();
+        let run_id = {
+            let catalog = Catalog::open(&database.path).unwrap();
+            let approval = create_approved_workflow(&catalog);
+            catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: "v12-command-upgrade".into(),
+                })
+                .unwrap()
+                .run
+                .id
+        };
+        let connection = rusqlite::Connection::open(&database.path).unwrap();
+        connection
+            .execute_batch(
+                "DROP TABLE command_slots; DROP TABLE run_output;
+            ALTER TABLE action_templates DROP COLUMN command_json;
+            ALTER TABLE synthetic_runs DROP COLUMN exit_code;
+            PRAGMA user_version=12;",
+            )
+            .unwrap();
+        drop(connection);
+        let catalog = Catalog::open(&database.path).unwrap();
+        assert_eq!(
+            catalog.get_synthetic_run(run_id).unwrap().state,
+            RunState::Queued
+        );
+        assert!(
+            catalog.list_action_templates().unwrap()[0]
+                .command
+                .is_none()
+        );
+        assert!(catalog.output(run_id, 0).unwrap().items.is_empty());
+        assert_eq!(
+            catalog
+                .lock()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            super::SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -3026,7 +3257,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            12
+            super::SCHEMA_VERSION
         );
     }
 
@@ -3038,7 +3269,8 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "DROP TABLE safe_events;
+                    "DROP TABLE command_slots; DROP TABLE run_output;
+                     DROP TABLE safe_events;
                      DROP TABLE synthetic_runs;
                      PRAGMA user_version = 3;",
                 )
@@ -3060,7 +3292,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            12
+            super::SCHEMA_VERSION
         );
     }
 
@@ -3083,7 +3315,8 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "ALTER TABLE synthetic_runs DROP COLUMN target_version;
+                    "DROP TABLE command_slots; DROP TABLE run_output;
+                     ALTER TABLE synthetic_runs DROP COLUMN target_version;
                      ALTER TABLE approvals DROP COLUMN target_version;
                      PRAGMA user_version = 4;",
                 )
@@ -3098,7 +3331,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            12
+            super::SCHEMA_VERSION
         );
     }
 
@@ -3110,7 +3343,8 @@ mod tests {
             let connection = rusqlite::Connection::open(&database.path).expect("open database");
             connection
                 .execute_batch(
-                    "CREATE TABLE security_validation_runs (id TEXT PRIMARY KEY);
+                    "DROP TABLE command_slots; DROP TABLE run_output;
+                     CREATE TABLE security_validation_runs (id TEXT PRIMARY KEY);
                      CREATE TABLE security_validation_checks (id TEXT PRIMARY KEY);
                      CREATE TABLE pilot_readiness_snapshots (id TEXT PRIMARY KEY);
                      CREATE TABLE pilot_readiness_checks (id TEXT PRIMARY KEY);
@@ -3157,7 +3391,7 @@ mod tests {
                 .lock()
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .expect("schema version"),
-            12
+            super::SCHEMA_VERSION
         );
     }
 
@@ -3339,6 +3573,7 @@ mod tests {
             .update_action_template(
                 template.id,
                 &UpdateActionTemplate {
+                    command: None,
                     target_id: target.id,
                     name: template.name.clone(),
                     operation: ApprovalOperation::SyntheticHealthCheck,
@@ -3441,6 +3676,7 @@ mod tests {
             .update_action_template(
                 second_template.id,
                 &UpdateActionTemplate {
+                    command: None,
                     target_id: second_target.id,
                     name: second_template.name.clone(),
                     operation: second_template.operation,
@@ -3492,6 +3728,7 @@ mod tests {
     fn create_action_template(catalog: &Catalog, target_id: Uuid) -> super::ActionTemplate {
         catalog
             .create_action_template(&CreateActionTemplate {
+                command: None,
                 target_id,
                 name: "Inspect synthetic target metadata".to_owned(),
                 operation: ApprovalOperation::InspectMetadata,

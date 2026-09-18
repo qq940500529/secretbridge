@@ -129,8 +129,9 @@ export interface CatalogListResponse<T> {
 export type ApprovalOperation =
   | "inspect_metadata"
   | "synthetic_health_check"
-  | "postgres_connection_check";
-export type ApprovalResultScope = "status_only" | "metadata_summary";
+  | "postgres_connection_check"
+  | "command_execution";
+export type ApprovalResultScope = "status_only" | "metadata_summary" | "sanitized_output";
 export type ApprovalState =
   | "pending"
   | "approved"
@@ -139,6 +140,7 @@ export type ApprovalState =
   | "expired";
 
 export interface ActionTemplate {
+  command?: CommandConfig | null;
   id: string;
   target_id: string;
   name: string;
@@ -153,12 +155,39 @@ export interface ActionTemplate {
 }
 
 export interface CreateActionTemplate {
+  command?: CommandConfig;
   target_id: string;
   name: string;
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   description?: string;
   timeout_seconds: number;
+}
+
+export interface CredentialSlot {
+  name: string;
+  credential_id: string;
+  injection: "stdin" | "environment" | "argument" | "file";
+  environment_variable: string | null;
+}
+export interface CommandConfig {
+  program: string;
+  working_directory: string;
+  arguments: string[];
+  slots: CredentialSlot[];
+}
+export interface RunOutput {
+  items: Array<{ sequence: number; stream: string; text: string }>;
+  next_cursor: number;
+  oldest_cursor: number;
+  truncated: boolean;
+  has_more: boolean;
+  exit_code: number | null;
+  state: RunState;
+}
+
+export async function readRunOutput(token: string, id: string, cursor = 0): Promise<RunOutput> {
+  return readJson(await fetch(`/api/v1/runs/${encodeURIComponent(id)}/output`, {method: "POST", headers:sessionJsonHeaders(token), body: JSON.stringify({cursor,wait_ms:0})}));
 }
 
 export interface UpdateActionTemplate extends CreateActionTemplate {
@@ -207,6 +236,7 @@ export type PolicyDecision = "eligible_for_approval" | "denied";
 export type PolicyReasonCode =
   | "fixed_synthetic_scope"
   | "fixed_postgres_connection_check"
+  | "fixed_command_template"
   | "template_disabled"
   | "target_incompatible"
   | "postgres_configuration_missing"
@@ -222,10 +252,11 @@ export type PolicyRequirement =
   | "transition_revalidation"
   | "tls_verify_full"
   | "read_only_transaction"
-  | "structured_status_only";
+  | "structured_status_only"
+  | "redacted_output";
 
 export interface PolicyEvaluation {
-  policy_version: "synthetic-policy-v1" | "postgres-readonly-policy-v1";
+  policy_version: "synthetic-policy-v1" | "postgres-readonly-policy-v1" | "credential-command-policy-v1";
   decision: PolicyDecision;
   reason_codes: PolicyReasonCode[];
   requirements: PolicyRequirement[];
@@ -237,7 +268,7 @@ export interface PolicyEvaluation {
   operation: ApprovalOperation;
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
-  execution_mode: "synthetic_simulation" | "controlled_postgres";
+  execution_mode: "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type RunState =
@@ -282,7 +313,7 @@ export interface SyntheticRunListResponse {
 export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
-  execution_mode: "synthetic_simulation" | "controlled_postgres";
+  execution_mode: "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type SafeEventKind =

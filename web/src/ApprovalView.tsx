@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useServiceChanges } from "./service-events";
+import { CommandReview } from "./CommandReview";
 
 import {
   type Approval,
@@ -38,17 +39,19 @@ const operationLabels: Record<Language, Record<ApprovalOperation, string>> = {
     inspect_metadata: "查看非秘密元数据",
     synthetic_health_check: "合成健康检查",
     postgres_connection_check: "PostgreSQL 只读连接检查",
+    command_execution: "凭据命令任务",
   },
   en: {
     inspect_metadata: "Inspect non-secret metadata",
     synthetic_health_check: "Synthetic health check",
     postgres_connection_check: "PostgreSQL read-only connection check",
+    command_execution: "Credential command task",
   },
 };
 
 const scopeLabels: Record<Language, Record<ApprovalResultScope, string>> = {
-  "zh-CN": { status_only: "仅状态", metadata_summary: "元数据摘要" },
-  en: { status_only: "Status only", metadata_summary: "Metadata summary" },
+  "zh-CN": { status_only: "仅状态", metadata_summary: "元数据摘要", sanitized_output: "脱敏输出" },
+  en: { status_only: "Status only", metadata_summary: "Metadata summary", sanitized_output: "Sanitized output" },
 };
 
 const stateStyles: Record<ApprovalState, string> = {
@@ -109,6 +112,7 @@ export function ApprovalView({
           tls_verify_full: "强制验证证书与主机名",
           read_only_transaction: "只读事务",
           structured_status_only: "仅结构化状态",
+          redacted_output: "仅返回脱敏输出",
         } satisfies Record<PolicyRequirement, string>,
         approve: "批准",
         deny: "拒绝",
@@ -169,6 +173,7 @@ export function ApprovalView({
           tls_verify_full: "Verify certificate and hostname",
           read_only_transaction: "Read-only transaction",
           structured_status_only: "Structured status only",
+          redacted_output: "Sanitized output only",
         } satisfies Record<PolicyRequirement, string>,
         approve: "Approve",
         deny: "Deny",
@@ -392,6 +397,7 @@ export function ApprovalView({
                   <p className="mb-0 mt-3 inline-flex items-center gap-2 text-xs text-slate-500"><Clock3 className="size-3.5" />{text.expires} · {new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(item.expires_at_unix_ms)}</p>
                   {(item.state === "pending" || item.state === "approved") && (
                     <div className="mt-4 border-t border-slate-100 pt-4">
+                      <CommandReview template={templates.find(template=>template.id===item.action_template_id)} expectedVersion={item.action_template_version} language={language}/>
                       <label htmlFor={`approval-note-${item.id}`} className="text-xs font-semibold text-slate-600">{text.note}</label>
                       <input id={`approval-note-${item.id}`} maxLength={240} value={notes[item.id] ?? ""} onChange={(event) => setNotes((current) => ({ ...current, [item.id]: event.target.value }))} placeholder={text.notePlaceholder} className={`${inputClass} mt-2`} />
                       <div className="mt-3 flex flex-wrap gap-2">

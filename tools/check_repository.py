@@ -29,7 +29,7 @@ SPECIAL_NAMES = {
 }
 TEXT_SUFFIXES = {
     ".css", ".html", ".json", ".md", ".py", ".rs", ".toml",
-    ".ts", ".tsx", ".yml", ".yaml",
+    ".ts", ".tsx", ".yml", ".yaml", ".ps1", ".sh",
 }
 SKIP_PARTS = {".git", "__pycache__", "dist", "node_modules", "target"}
 PATTERNS = {
