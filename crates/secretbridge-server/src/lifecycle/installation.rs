@@ -311,6 +311,10 @@ pub(super) async fn install(package: &Path) -> Result<()> {
     }
     manifest(&release, true)?;
     if old.active.as_ref() == Some(&id) {
+        let status = super::start(false).await?;
+        if status.version != verified.version {
+            return Err("installed_version_mismatch");
+        }
         println!(
             "{}",
             serde_json::json!({"installed":true,"version":verified.version,"replayed":true})

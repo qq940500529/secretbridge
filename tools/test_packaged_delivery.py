@@ -84,6 +84,9 @@ def accept(archive: Path) -> None:
 
             run("install", package)
             assert run("install", package)["replayed"]
+            run("stop")
+            assert run("install", package)["replayed"]
+            assert run("status")["running"]
             original = run("status")["installation"]["active_release"]
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
@@ -100,8 +103,8 @@ def accept(archive: Path) -> None:
                 assert any(b"Terminal=false" in raw for raw in saved_startup.values())
 
             # Ownership protection must reject modified startup files without deleting them.
-            modified = Path(next(iter(saved_startup)))
-            original_contents = saved_startup[str(modified)]
+            original_path, original_contents = next(iter(saved_startup.items()))
+            modified = Path(original_path)
             modified.write_bytes(original_contents + b"\nmodified by user\n")
             run("autostart", "off", success=False)
             assert modified.read_bytes().endswith(b"modified by user\n")
