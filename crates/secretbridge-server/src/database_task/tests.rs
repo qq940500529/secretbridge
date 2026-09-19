@@ -506,6 +506,22 @@ async fn real_mysql_limits_failures_timeout_and_api_cancellation() {
     failures_limits_and_cancel(DatabaseEngine::Mysql).await;
 }
 
+#[test]
+fn mysql_server_timeout_is_normalized_across_supported_versions() {
+    let timeout = mysql_async::Error::Server(mysql_async::ServerError {
+        code: 3024,
+        message: "fixture timeout".into(),
+        state: "HY000".into(),
+    });
+    let ordinary = mysql_async::Error::Server(mysql_async::ServerError {
+        code: 1064,
+        message: "fixture syntax error".into(),
+        state: "42000".into(),
+    });
+    assert_eq!(mysql_query_error(&timeout), "timed_out");
+    assert_eq!(mysql_query_error(&ordinary), "query_failed");
+}
+
 async fn service_restart(engine: DatabaseEngine) {
     let container = std::env::var(match engine {
         DatabaseEngine::Postgres => "SECRETBRIDGE_TEST_PG_CONTAINER",
