@@ -6,6 +6,8 @@ if ($Mode -eq 'sleep') { Start-Sleep -Seconds 15; exit 0 }
 if ($Mode -eq 'stdin') { $Value = [Console]::In.ReadToEnd() }
 if ($Mode -eq 'environment') { $Value = $env:SB_TEST_SECRET }
 if ($Mode -eq 'file') { $Value = [System.IO.File]::ReadAllText($Value) }
+if ($Mode -eq 'file_sleep') { $Value = [System.IO.File]::ReadAllText($Value); Start-Sleep -Seconds 15 }
+[Console]::Out.WriteLine('|length:' + $Value.Length + '|')
 for ($i = 0; $i -lt $Value.Length; $i++) {
     [Console]::Out.Write($Value[$i]); [Console]::Out.Flush()
     Start-Sleep -Milliseconds 2

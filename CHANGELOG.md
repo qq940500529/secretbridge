@@ -2,6 +2,8 @@
 
 ## 0.2.0-beta.2
 
+- Added a centralized synthetic credential canary matrix that scans normal APIs, filtered output, events, configuration export, diagnostics and SQLite backups across all four fixed-program injection modes, including cancellation and timeout cleanup of temporary credential files.
+- Added a Windows CI acceptance step that writes, reads and deletes a disposable Credential Manager entry without inspecting existing user credentials.
 - Added a read-only `verify-package` command that checks the package manifest, every payload digest, the Web/schema metadata contract and the bundled CycloneDX SBOM without executing package content. Executable version is checked by the trusted build and activation paths.
 - Added a deterministic package writer and source snapshot using the source commit timestamp or `SOURCE_DATE_EPOCH`; independent packaging runs now produce byte-identical ZIP or tar.gz archives and checksum sidecars.
 - Added a CycloneDX 1.6 SBOM for the target-specific resolved Cargo graph and production Web dependency graph, with source commit, platform and architecture metadata.
