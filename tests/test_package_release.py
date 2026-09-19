@@ -77,6 +77,16 @@ class PackageReleaseTests(unittest.TestCase):
                 side_effect=[URLError("temporary reset"), Response()],
             ) as request,
             patch.object(package_release.time, "sleep") as sleep,
+            patch.object(
+                Response,
+                "read",
+                return_value=json.dumps(
+                    {
+                        "encoding": "base64",
+                        "content": "bGljZW5zZSBmaXh0dXJl",
+                    }
+                ).encode(),
+            ),
         ):
             notice = package_release.upstream_license(
                 "https://github.com/example/project", "a" * 40

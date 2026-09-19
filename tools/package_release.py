@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -318,9 +319,17 @@ def upstream_license(repository: str, commit: str) -> str:
                 raise ValueError("Unsupported upstream license encoding")
             raw = base64.b64decode(content["content"])
         else:
-            raw = download_upstream_license(url)
-            if raw is None:
+            api_url = (
+                f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}/contents/"
+                f"{quote(name)}?ref={commit}"
+            )
+            payload = download_upstream_license(api_url)
+            if payload is None:
                 continue
+            content = json.loads(payload)
+            if content.get("encoding") != "base64":
+                raise ValueError("Unsupported upstream license encoding")
+            raw = base64.b64decode(content["content"])
         if len(raw) > 1024 * 1024:
             raise ValueError("Upstream license file exceeds size limit")
         text = raw.decode("utf-8")
@@ -529,4 +538,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        print(f"package_release: error: {error}", file=sys.stderr)
+        raise SystemExit(1) from None
