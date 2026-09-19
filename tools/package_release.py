@@ -47,7 +47,7 @@ def source_snapshot(target: Path, allow_dirty: bool) -> dict:
     with tarfile.open(target, "w:gz", format=tarfile.PAX_FORMAT) as archive:
         for name in sorted(set(names.split("\0")) - {""}):
             path = ROOT / name
-            if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(ROOT):
+            if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
                 raise ValueError("Source snapshot contains a missing or unsupported file")
             archive.add(path, arcname=f"secretbridge-source/{name}", recursive=False)
     return {"repository": "https://github.com/qq940500529/secretbridge", "base_commit": commit,
