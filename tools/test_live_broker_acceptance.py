@@ -68,12 +68,25 @@ def main(pairing_url: str) -> dict[str, object]:
         request = Request(origin + path, data=data, headers=headers, method=method)
         try:
             response = opener.open(request, timeout=15)
-            status, raw, response_headers = response.status, response.read(), dict(response.headers)
+            status, raw, response_headers = (
+                response.status,
+                response.read(),
+                {key.lower(): value for key, value in response.headers.items()},
+            )
         except HTTPError as error:
-            status, raw, response_headers = error.code, error.read(), dict(error.headers)
+            status, raw, response_headers = (
+                error.code,
+                error.read(),
+                {key.lower(): value for key, value in error.headers.items()},
+            )
         expected_codes = (expected,) if isinstance(expected, int) else expected
         require(status in expected_codes, f"{method} {path} returned unexpected status {status}")
-        body = json.loads(raw) if raw else None
+        require(generated_secret.encode() not in raw, "a non-JSON response exposed the credential")
+        body = (
+            json.loads(raw)
+            if raw and "application/json" in response_headers.get("content-type", "")
+            else None
+        )
         if body is not None:
             observed.append(body)
             require(
@@ -86,7 +99,7 @@ def main(pairing_url: str) -> dict[str, object]:
         _, status, headers = call("GET", "/api/v1/status")
         require(status["mode"] == "controlled_operations", "unexpected broker mode")
         require(status["configuration_storage"] == "sqlite", "broker is not using SQLite")
-        require(headers.get("X-Frame-Options") == "DENY", "security headers are incomplete")
+        require(headers.get("x-frame-options") == "DENY", "security headers are incomplete")
         checks.append("loopback page and safe status")
 
         call(
