@@ -16,6 +16,8 @@ mod postgres;
 mod redaction;
 mod runtime;
 mod secret_store;
+#[cfg(test)]
+mod security_acceptance;
 mod sftp_task;
 mod ssh_task;
 mod terminal;

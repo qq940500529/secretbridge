@@ -6,6 +6,8 @@ if [ "$mode" = sleep ]; then sleep 15; exit 0; fi
 if [ "$mode" = stdin ]; then value=$(cat); fi
 if [ "$mode" = environment ]; then value=$SB_TEST_SECRET; fi
 if [ "$mode" = file ]; then value=$(cat "$value"); fi
+if [ "$mode" = file_sleep ]; then value=$(cat "$value"); sleep 15; fi
+printf '|length:%s|\n' "${#value}"
 # Byte-by-byte writes exercise streaming filters even if the pipe coalesces reads.
 remaining=$value
 while [ -n "$remaining" ]; do

@@ -740,7 +740,7 @@ pub(crate) mod tests {
                 ],
             )
         };
-        if matches!(mode, "argument" | "file") {
+        if matches!(mode, "argument" | "file" | "file_sleep") {
             arguments.push("{{password}}".into());
         }
         CommandConfig {
@@ -758,7 +758,7 @@ pub(crate) mod tests {
                 injection: match mode {
                     "environment" => Injection::Environment,
                     "argument" => Injection::Argument,
-                    "file" => Injection::File,
+                    "file" | "file_sleep" => Injection::File,
                     _ => Injection::Stdin,
                 },
                 environment_variable: (mode == "environment").then(|| "SB_TEST_SECRET".into()),

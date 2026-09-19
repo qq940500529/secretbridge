@@ -18,7 +18,7 @@ REQUIRED = (
     "COPYRIGHT.md", "LICENSING.md", "COMMERCIAL_LICENSE.md",
     "docs/README.md", "docs/使用指南.md", "docs/开发者入门.md",
     "docs/依赖许可风险评估.md", "docs/贡献与再许可.md",
-    "docs/发行物验证与SBOM.md",
+    "docs/发行物验证与SBOM.md", "docs/自动化安全验收.md",
     "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml",
     "pnpm-workspace.yaml", "rust-toolchain.toml",
     "tools/check_dependency_licenses.py",
