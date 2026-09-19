@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Stability soak
+
+on:
+  schedule:
+    - cron: "23 18 * * 6"
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Parallel cancellation repetitions
+        required: true
+        default: "20"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stability-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bounded-soak:
+    name: Connector and terminal soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      STABILITY_ITERATIONS: ${{ inputs.iterations || '20' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned
+        with:
+          persist-credentials: false
+      - name: Run bounded stability acceptance
+        run: python tools/test_stability_acceptance.py --profile soak --iterations "$STABILITY_ITERATIONS"

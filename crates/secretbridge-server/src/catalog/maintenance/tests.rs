@@ -53,6 +53,7 @@ fn invalid_bundle_never_partially_writes_and_rejects_unknown_secret_fields() {
     json["credentials"][0]["secret"] = "never accepted".into();
     assert!(serde_json::from_value::<ConfigurationBundle>(json).is_err());
 }
+
 #[test]
 fn sqlite_backup_round_trips_and_rejects_foreign_schema() {
     let catalog = source();

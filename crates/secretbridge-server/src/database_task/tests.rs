@@ -214,6 +214,45 @@ fn selected_columns_are_identifier_quoted_and_result_filter_precedes_json_encodi
     assert!(mysql_value(mysql_async::Value::Bytes(vec![255])).is_err());
 }
 
+#[tokio::test]
+async fn refused_loopback_database_connections_have_fixed_bounded_errors() {
+    for engine in [DatabaseEngine::Postgres, DatabaseEngine::Mysql] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let mut command = config(engine, port, Uuid::new_v4());
+        command.parameters.clear();
+        let database = command.database.as_mut().unwrap();
+        database.operation = DatabaseOperation::Check;
+        database.query.clear();
+        database.columns.clear();
+        let mut sessions = Sessions::default();
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            request(
+                command.database.as_ref().unwrap(),
+                &command,
+                &ParameterValues::new(),
+                &[Zeroizing::new(PASSWORD.into())],
+                &mut sessions,
+                Duration::from_secs(2),
+            ),
+        )
+        .await
+        .expect("connection refusal is bounded");
+        assert_eq!(result.unwrap_err(), "connection_failed");
+        assert!(
+            cleanup(
+                &mut sessions,
+                command.database.as_ref().unwrap(),
+                &[Zeroizing::new(PASSWORD.into())],
+                true
+            )
+            .await
+        );
+    }
+}
+
 async fn roundtrip(engine: DatabaseEngine) {
     let (state, _) = AppState::new([]);
     let mut command = config(engine, port(engine), Uuid::nil());
@@ -465,6 +504,115 @@ async fn real_postgres_limits_failures_timeout_and_api_cancellation() {
 #[ignore = "requires explicitly provisioned local MySQL fixture"]
 async fn real_mysql_limits_failures_timeout_and_api_cancellation() {
     failures_limits_and_cancel(DatabaseEngine::Mysql).await;
+}
+
+async fn service_restart(engine: DatabaseEngine) {
+    let container = std::env::var(match engine {
+        DatabaseEngine::Postgres => "SECRETBRIDGE_TEST_PG_CONTAINER",
+        DatabaseEngine::Mysql => "SECRETBRIDGE_TEST_MYSQL_CONTAINER",
+    })
+    .expect("disposable database container name is required");
+    let (state, _) = AppState::new([]);
+    let mut command = config(engine, port(engine), Uuid::nil());
+    command.parameters.clear();
+    command.database.as_mut().unwrap().query = match engine {
+        DatabaseEngine::Postgres => "SELECT pg_sleep(30) AS n",
+        DatabaseEngine::Mysql => "SELECT SLEEP(30) AS n",
+    }
+    .into();
+    command.database.as_mut().unwrap().columns = vec!["n".into()];
+    let template = configured(&state, &mut command, 20);
+    let approval = approve(&state, template, &ParameterValues::new());
+    let run = crate::create_run_for_state(
+        &state,
+        CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (killed, started) = tokio::task::spawn_blocking(move || {
+        let killed = std::process::Command::new("docker")
+            .args(["kill", &container])
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        let started = std::process::Command::new("docker")
+            .args(["start", &container])
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        Ok::<_, std::io::Error>((killed, started))
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(killed.success() && started.success());
+    let output = wait(&state, run.run.id).await;
+    assert_eq!(
+        state.catalog.get_synthetic_run(run.run.id).unwrap().state,
+        RunState::Failed,
+        "{output}"
+    );
+    assert_eq!(output["error_code"], "query_failed");
+    assert!(!output.to_string().contains(PASSWORD));
+
+    let mut probe = config(engine, port(engine), Uuid::new_v4());
+    probe.parameters.clear();
+    let database = probe.database.as_mut().unwrap();
+    database.operation = DatabaseOperation::Check;
+    database.query.clear();
+    database.columns.clear();
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let mut sessions = Sessions::default();
+            let connected = request(
+                probe.database.as_ref().unwrap(),
+                &probe,
+                &ParameterValues::new(),
+                &[Zeroizing::new(PASSWORD.into())],
+                &mut sessions,
+                Duration::from_secs(3),
+            )
+            .await
+            .is_ok();
+            if connected {
+                assert!(
+                    cleanup(
+                        &mut sessions,
+                        probe.database.as_ref().unwrap(),
+                        &[Zeroizing::new(PASSWORD.into())],
+                        false,
+                    )
+                    .await
+                );
+                break;
+            }
+            let _ = cleanup(
+                &mut sessions,
+                probe.database.as_ref().unwrap(),
+                &[Zeroizing::new(PASSWORD.into())],
+                true,
+            )
+            .await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("database fixture becomes healthy after restart");
+    assert_eq!(state.command_capacity.available_permits(), 4);
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly provisioned disposable PostgreSQL container"]
+async fn real_postgres_service_restart_returns_a_bounded_failure_and_recovers() {
+    service_restart(DatabaseEngine::Postgres).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an explicitly provisioned disposable MySQL container"]
+async fn real_mysql_service_restart_returns_a_bounded_failure_and_recovers() {
+    service_restart(DatabaseEngine::Mysql).await;
 }
 
 #[test]

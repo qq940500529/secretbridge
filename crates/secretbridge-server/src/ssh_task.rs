@@ -465,10 +465,18 @@ pub(crate) mod tests {
         pub auth_hits: Arc<AtomicUsize>,
         pub commands: Arc<Mutex<Vec<String>>>,
         disconnected: Arc<AtomicUsize>,
+        shutdown: CancellationToken,
         listener: tokio::task::JoinHandle<()>,
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
+            self.shutdown.cancel();
+            self.listener.abort();
+        }
+    }
+    impl Fixture {
+        pub(crate) fn shutdown(&self) {
+            self.shutdown.cancel();
             self.listener.abort();
         }
     }
@@ -616,6 +624,8 @@ pub(crate) mod tests {
         let remote = files.clone();
         let slow = slow_writes.clone();
         let writes = write_hits.clone();
+        let shutdown = CancellationToken::new();
+        let listener_shutdown = shutdown.clone();
         let listener = tokio::spawn(async move {
             let mut sessions = tokio::task::JoinSet::new();
             loop {
@@ -624,7 +634,12 @@ pub(crate) mod tests {
                         let (stream, _) = accepted.unwrap();
                         let handler = Server { channels: std::collections::HashMap::new(), files: remote.clone(), slow_writes: slow.clone(), write_hits: writes.clone(), key: public_key.clone(), auth_hits: hits.clone(), commands: executed.clone(), disconnected: closed.clone() };
                         let config = config.clone();
+                        let transport_stop = listener_shutdown.clone();
                         sessions.spawn(async move {
+                            let stream = Transport {
+                                stream,
+                                cancelled: Box::pin(transport_stop.cancelled_owned()),
+                            };
                             if let Ok(session) = server::run_stream(config, stream, handler).await { let _ = session.await; }
                         });
                     }
@@ -642,6 +657,7 @@ pub(crate) mod tests {
             auth_hits,
             commands,
             disconnected,
+            shutdown,
             listener,
         }
     }
@@ -914,6 +930,62 @@ pub(crate) mod tests {
             assert_eq!(page.exit_code, exit);
             assert!(text(&page).contains(expected));
         }
+    }
+    #[tokio::test]
+    async fn refusal_and_service_interruption_are_bounded_and_release_the_transport() {
+        let fixture = server().await;
+        let (state, _) = AppState::new([]);
+        let template = configure(&state, &fixture, 5);
+        fixture.shutdown();
+        let run = crate::create_run_for_state(
+            &state,
+            CreateSyntheticRun {
+                approval_id: approve(&state, template),
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let page = wait(&state, run.run.id).await;
+        assert_eq!(page.state, RunState::Failed);
+        assert!(text(&page).contains("connection_failed"));
+        assert!(!text(&page).contains(SECRET));
+
+        let fixture = server().await;
+        let (state, _) = AppState::new([]);
+        let template = configure(&state, &fixture, 10);
+        update(&state, |command| {
+            command.ssh.as_mut().unwrap().remote_program = "/wait".into();
+        });
+        let run = crate::create_run_for_state(
+            &state,
+            CreateSyntheticRun {
+                approval_id: approve(&state, template),
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.commands.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        fixture.shutdown();
+        let page = wait(&state, run.run.id).await;
+        assert_eq!(page.state, RunState::Failed);
+        assert!(text(&page).contains("exit_status_missing"));
+        assert!(!text(&page).contains(SECRET));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !state.run_cancellations.active.lock().await.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(state.command_capacity.available_permits(), 4);
     }
     #[tokio::test]
     async fn timeout_and_cancel_close_the_actual_ssh_transport() {

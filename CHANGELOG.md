@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0-beta.3
+
+- Added deterministic refusal, response truncation and live transport interruption tests for HTTP, SSH, SFTP and Git, with fixed sanitized errors and bounded cleanup.
+- Extended the disposable PostgreSQL/MySQL acceptance environment to restart each real database during an in-flight query, verify a bounded failed result, and confirm the connector can reconnect afterward.
+- Added an eight-run concurrency acceptance that saturates the four-task personal-use budget, keeps catalog operations responsive, cancels queued and active work, verifies every permit is released, and executes a successful follow-up request.
+- Added simulated credential-file and SQLite transaction write failures to verify no secret file, partial template change, stale credential link or false success remains.
+- Added quick and repeated soak profiles for connector contracts, terminal output flooding, reconnect, cancellation and real persistent shells, plus a weekly and manually dispatchable Ubuntu soak workflow.
+- Documented the stable error, cleanup, reporting and manual-observation boundaries for the open-source single-user product.
+
 ## 0.2.0-beta.2
 
 - Added a fail-closed dependency vulnerability gate using exact `cargo-audit 0.22.2` and `pnpm 11.23.0` versions for Rust and production Web lockfiles, with tested, exact-match exceptions limited to 90 days.

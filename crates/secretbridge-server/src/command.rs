@@ -985,6 +985,111 @@ pub(crate) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn credential_file_storage_failure_is_atomic_and_releases_capacity() {
+        let blocker = std::env::temp_dir().join(format!(
+            "secretbridge-command-storage-failure-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let (mut state, _) = AppState::new([]);
+        state.command_directory = std::sync::Arc::new(blocker.clone());
+        let (approval, _) = configure(&state, "file", 10);
+        let result = crate::create_run_for_state(
+            &state,
+            CreateSyntheticRun {
+                approval_id: approval,
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let page = wait(&state, result.run.id).await;
+        assert_eq!(page.state, RunState::Failed);
+        assert_eq!(page.exit_code, None);
+        assert_eq!(
+            state
+                .catalog
+                .get_synthetic_run(result.run.id)
+                .unwrap()
+                .result_status
+                .as_deref(),
+            Some("command_failed")
+        );
+        assert!(
+            page.items
+                .iter()
+                .all(|item| !item.text.contains("Synthetic-SB-command_A&z"))
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.command_capacity.available_permits() != 4
+                || !state.run_cancellations.active.lock().await.is_empty()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(&blocker).unwrap(), b"not a directory");
+        std::fs::remove_file(blocker).unwrap();
+    }
+
+    #[test]
+    fn template_storage_failure_rolls_back_definition_and_credential_links() {
+        let (state, _) = AppState::new([]);
+        configure(&state, "file", 10);
+        let before = state.catalog.list_action_templates().unwrap().remove(0);
+        state
+            .catalog
+            .lock()
+            .execute_batch(
+                "CREATE TEMP TRIGGER reject_command_slot_write
+                 BEFORE INSERT ON command_slots
+                 BEGIN SELECT RAISE(ABORT, 'simulated storage failure'); END;",
+            )
+            .unwrap();
+        let command = before.command.clone().unwrap();
+        let update = serde_json::from_value(serde_json::json!({
+            "target_id": before.target_id,
+            "name": "must roll back",
+            "operation": "command_execution",
+            "result_scope": "sanitized_output",
+            "timeout_seconds": 20,
+            "enabled": true,
+            "expected_version": before.version,
+            "command": command
+        }))
+        .unwrap();
+        assert!(matches!(
+            state.catalog.update_action_template(before.id, &update),
+            Err(CatalogError::Storage)
+        ));
+        let after = state
+            .catalog
+            .list_action_templates()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == before.id)
+            .unwrap();
+        assert_eq!(after.name, before.name);
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.timeout_seconds, before.timeout_seconds);
+        assert_eq!(
+            after.command.unwrap().working_directory,
+            before.command.unwrap().working_directory
+        );
+        let linked: i64 = state
+            .catalog
+            .lock()
+            .query_row(
+                "SELECT COUNT(*) FROM command_slots WHERE template_id=?1",
+                [before.id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(linked, 1);
+    }
+
     #[test]
     fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
         let mut config = fixture("argument", Uuid::new_v4());
