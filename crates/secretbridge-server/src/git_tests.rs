@@ -44,6 +44,11 @@ impl Drop for Fixture {
         self.server.abort();
     }
 }
+impl Fixture {
+    fn shutdown(&self) {
+        self.server.abort();
+    }
+}
 pub(crate) fn executable() -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|p| p.join(if cfg!(windows) { "git.exe" } else { "git" }))
@@ -441,6 +446,37 @@ async fn git_redirect_error_timeout_and_cancel_have_bounded_results() {
             Some(if cancelling { "cancelled" } else { "timed_out" })
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn git_service_interruption_returns_a_bounded_sanitized_failure() {
+    let fixture = server().await;
+    let (state, _) = AppState::new([]);
+    let url = fixture.url.replace("repo.git", "slow.git");
+    let template = configure(&state, &fixture, Operation::Inspect, &url, 10);
+    let id = start(&state, template).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.hits.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.shutdown();
+    let page = wait(&state, id).await;
+    assert_eq!(page.state, RunState::Failed);
+    let text = output(&page);
+    assert!(text.contains("git_failed"), "{text}");
+    assert!(!text.contains(TOKEN));
+    assert!(!text.contains(&STANDARD.encode(format!("{USER}:{TOKEN}"))));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !state.run_cancellations.active.lock().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(state.command_capacity.available_permits(), 4);
 }
 
 #[tokio::test]

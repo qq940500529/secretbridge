@@ -45,5 +45,7 @@ SECRETBRIDGE_TEST_PG_PORT=$(docker port "$task_pg" 5432/tcp | awk -F: '{print $N
 export SECRETBRIDGE_TEST_MYSQL_PORT
 SECRETBRIDGE_TEST_MYSQL_PORT=$(docker port "$task_mysql" 3306/tcp | awk -F: '{print $NF}')
 export SECRETBRIDGE_TEST_DB_CA="$task_tmp/ca.pem"
-cargo test -p secretbridge-server database_task::tests::real_ -- --ignored
+export SECRETBRIDGE_TEST_PG_CONTAINER="$task_pg"
+export SECRETBRIDGE_TEST_MYSQL_CONTAINER="$task_mysql"
+RUST_TEST_THREADS=1 cargo test -p secretbridge-server database_task::tests::real_ -- --ignored
 cargo test -p secretbridge-server native_mcp_executes_real_databases -- --ignored

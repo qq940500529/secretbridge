@@ -401,6 +401,45 @@ async fn real_sftp_timeout_and_cancel_clean_partial_upload_without_replacing_des
 }
 
 #[tokio::test]
+async fn interrupted_sftp_transport_preserves_destination_and_releases_capacity() {
+    let fixture = server().await;
+    fixture.slow_writes.store(true, Ordering::SeqCst);
+    fixture
+        .files
+        .lock()
+        .unwrap()
+        .insert("/fixture.bin".into(), b"preserved".to_vec());
+    let directory = LocalDirectory::new();
+    let source = directory.0.join("source.bin");
+    std::fs::write(&source, vec![7u8; 1_048_576]).unwrap();
+    let (state, _) = AppState::new([]);
+    let template = configure(&state, &fixture, &source, Direction::Upload, true, 10);
+    let id = start(&state, template).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fixture.write_hits.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    fixture.shutdown();
+    let page = wait(&state, id).await;
+    assert_eq!(page.state, RunState::Failed);
+    let text = output(&page);
+    assert!(text.contains("remote_write_failed"), "{text}");
+    assert!(!text.contains(SECRET));
+    assert_eq!(fixture.files.lock().unwrap()["/fixture.bin"], b"preserved");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !state.run_cancellations.active.lock().await.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(state.command_capacity.available_permits(), 4);
+}
+
+#[tokio::test]
 async fn sftp_size_limit_and_missing_source_leave_no_download_file() {
     let fixture = server().await;
     fixture

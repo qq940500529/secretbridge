@@ -657,6 +657,76 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn refused_connection_and_interrupted_response_use_fixed_bounded_errors() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let closed_url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let mut command = config(&closed_url, Uuid::new_v4());
+        command.slots.clear();
+        command.parameters.clear();
+        let http = command.http.as_mut().unwrap();
+        http.method = "GET".into();
+        http.headers.clear();
+        http.query.clear();
+        http.body.clear();
+        http.response_fields.clear();
+        let refused = tokio::time::timeout(
+            Duration::from_secs(3),
+            request(
+                command.http.as_ref().unwrap(),
+                &command,
+                &ParameterValues::new(),
+                &[],
+            ),
+        )
+        .await
+        .expect("connection refusal is bounded");
+        assert_eq!(refused.unwrap_err(), "connection_failed");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let interrupted_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 128\r\nConnection: close\r\n\r\n{\"data\":",
+                )
+                .await
+                .unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        command.http.as_mut().unwrap().url = interrupted_url;
+        command.http.as_mut().unwrap().response_fields = vec![ResponseField {
+            name: "data".into(),
+            pointer: "/data".into(),
+        }];
+        let interrupted = tokio::time::timeout(
+            Duration::from_secs(3),
+            request(
+                command.http.as_ref().unwrap(),
+                &command,
+                &ParameterValues::new(),
+                &[],
+            ),
+        )
+        .await
+        .expect("interrupted response is bounded");
+        assert_eq!(interrupted.unwrap_err(), "response_read_failed");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn web_configure_approve_execute_and_read_http_output() {
         use crate::command::tests::web_request;
         let fixture = server().await;
