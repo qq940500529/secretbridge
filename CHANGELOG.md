@@ -5,7 +5,8 @@
 - Added a read-only `verify-package` command that checks the package manifest, every payload digest, the Web/schema metadata contract and the bundled CycloneDX SBOM without executing package content. Executable version is checked by the trusted build and activation paths.
 - Added a deterministic package writer and source snapshot using the source commit timestamp or `SOURCE_DATE_EPOCH`; independent packaging runs now produce byte-identical ZIP or tar.gz archives and checksum sidecars.
 - Added a CycloneDX 1.6 SBOM for the target-specific resolved Cargo graph and production Web dependency graph, with source commit, platform and architecture metadata.
-- Added CI dual-package comparison, SBOM tamper rejection and native lifecycle coverage for offline verification. This validates packaging reproducibility for the same compiled inputs; independent compiler-build reproducibility and platform signing remain separate release work.
+- Added CI dual-package comparison, SBOM tamper rejection and native lifecycle coverage for offline verification. This validates packaging reproducibility for the same compiled inputs; independent compiler-build reproducibility and platform signing are not open-source 1.0 release gates.
+- Clarified the dual product strategy: the public open-source edition serves individual, local use as a complete product, while future organizational governance and managed deployment belong to a separately planned proprietary enterprise edition.
 
 ## 0.2.0-beta.1
 
@@ -15,7 +16,7 @@
 - Added explicit per-user login startup controls for Windows, Linux desktop sessions and macOS, ownership-checked startup files and transactional restoration on write failures.
 - Added manifest-scoped uninstall with default data retention and an explicit catalog-removal option; operating-system credentials and unknown files remain untouched.
 - Added native package generation with corresponding source snapshots, third-party license texts and SHA-256 sidecars, three-platform isolated lifecycle acceptance and an unsigned release-build workflow.
-- Desktop login/reboot observation, signing and clean-machine usability acceptance remain separate from process-level CI tests.
+- Desktop login/reboot observation and clean-machine usability acceptance remain separate from process-level CI tests. The open-source edition uses unsigned packages.
 
 ## 0.1.0-alpha.32
 

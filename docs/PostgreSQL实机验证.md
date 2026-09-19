@@ -84,4 +84,4 @@ cargo test -p secretbridge-server \
 
 ---
 
-[使用指南](使用指南.md) · [安全模型与验收](安全模型与验收.md) · [功能优先路线图](../ROADMAP.md)
+[使用指南](使用指南.md) · [安全模型与验收](安全模型与验收.md) · [开源版路线图](../ROADMAP.md)

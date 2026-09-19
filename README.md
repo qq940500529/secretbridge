@@ -32,7 +32,9 @@ Giving an assistant a password also exposes that password to its surrounding con
 | Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
 | Cross-platform experience | A consistent browser console with native credential and process backends. |
 
-One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser and MCP disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Web and MCP clients coordinate through input leases; approvals, runs and terminal lists refresh from live notifications. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP cannot decide approvals or read secrets. Ordinary terminals do not inject credentials or claim to sanitize arbitrary file or command output. See [AI terminals and realtime state](docs/AI终端与实时状态.md) and the [feature-first roadmap](ROADMAP.md).
+This public repository delivers the complete open-source edition for individual, single-machine use. A future proprietary enterprise edition will separately address organizational identity, centralized policy, managed nodes, multi-party approval and centralized audit; it is not a prerequisite for the open-source 1.0 release. See the [open-source and enterprise edition boundary](docs/开源版与企业版.md) (Chinese).
+
+One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser and MCP disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Web and MCP clients coordinate through input leases; approvals, runs and terminal lists refresh from live notifications. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP cannot decide approvals or read secrets. Ordinary terminals do not inject credentials or claim to sanitize arbitrary file or command output. See [AI terminals and realtime state](docs/AI终端与实时状态.md) and the [open-source roadmap](ROADMAP.md).
 
 ## How it works
 
@@ -67,6 +69,7 @@ Configuration migration, private SQLite backups and concise diagnostics are avai
 | Your goal | Start here |
 | :--- | :--- |
 | Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
+| Compare the open-source and future enterprise editions | [Edition boundary](docs/开源版与企业版.md) — Chinese |
 | Reproduce the native PostgreSQL TLS adapter test | [PostgreSQL live validation](docs/PostgreSQL实机验证.md) — Chinese |
 | Understand the complete future product | [Mature architecture and feature specification](docs/成熟态软件架构与功能说明.md) — Chinese |
 | Find the right technical document | [Documentation hub](docs/README.md) |

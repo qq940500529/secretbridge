@@ -22,16 +22,16 @@
 
 | 能力 | Windows | Linux | macOS |
 |---|---|---|---|
-| 首轮测试目标 | Windows 11 x64 | Ubuntu 24.04 x64，GNOME/KDE | macOS 14+，arm64/x64 |
-| 管理界面 | 当前版Edge／Chrome／Firefox | 当前版Chrome／Firefox | 当前版Safari／Chrome／Firefox |
+| 首轮测试目标 | Windows 11 x64 | Ubuntu 24.04 x64，GNOME或KDE | macOS 14+，Apple Silicon |
+| 管理界面 | Chromium主路径，Firefox关键流程 | Chromium主路径，Firefox关键流程 | Chromium主路径，Safari关键流程 |
 | PTY | ConPTY | POSIX PTY | POSIX PTY |
 | 本地IPC | Named Pipe＋显式DACL＋身份检查 | Unix socket＋文件权限＋peer credential | Unix socket＋权限＋平台peer身份验证 |
 | 凭据后端 | Credential Manager／用户范围DPAPI | Secret Service兼容服务 | Keychain Services |
-| 后台生命周期 | 独立代理，受控部署可用专用身份服务 | 用户服务／专用身份systemd服务 | launchd代理／经授权的受控服务 |
+| 后台生命周期 | 当前用户独立代理和登录启动项 | 当前用户独立代理和登录启动项 | 当前用户独立代理和登录启动项 |
 | 子进程回收 | Job Object及受限令牌 | 进程组＋可用的cgroup/systemd管理 | 进程组＋launchd管理，单独验证逃逸子进程 |
-| 发布目标 | 签名服务安装包＋本机Web管理端 | 明确发行版的软件包＋本机Web管理端 | 签名、公证的服务包＋本机Web管理端 |
+| 发布目标 | 未签名ZIP＋校验值＋本机Web管理端 | 未签名tar.gz＋校验值＋本机Web管理端 | 未签名tar.gz＋校验值＋本机Web管理端 |
 
-以上为项目测试范围提案，不是各组件最低版本或完整兼容保证。Windows/Linux arm64与其他发行版标记实验性直到有独立证据；macOS两架构分别构建验证。不能把GitHub托管runner测试当作原生凭据库与浏览器交互验收。
+以上为开源版首轮正式支持目标，不是各组件最低版本或完整兼容保证。Windows/Linux arm64、macOS Intel 与其他发行版标记实验性，直到获得独立设备证据。不能把 GitHub 托管 runner 测试当作原生凭据库与浏览器交互验收。
 
 <a name="section-2"></a>
 
