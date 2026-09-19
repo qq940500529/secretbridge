@@ -67,6 +67,11 @@ def accept(archive: Path) -> None:
                 time.sleep(0.05)
 
         try:
+            verification = run("verify-package", package)
+            assert verification["valid"] and verification["sbom"] == "CycloneDX 1.6"
+            assert verification["executable_digest_verified"]
+            assert verification["executable_version_check"] == "activation"
+            assert verification["platform"] in ("windows", "linux", "macos")
             # Detached launch survives return of the command, reuses its broker and persists data.
             first = run("start", "--no-open")
             assert first["version"] == json.loads((package / "secretbridge-package.json").read_text())["version"]
@@ -129,6 +134,17 @@ def accept(archive: Path) -> None:
             run("install", traversal, success=False)
             assert run("status")["runtime"]["process_id"] == pid
 
+            invalid_sbom = workspace / "invalid-sbom"
+            shutil.copytree(package, invalid_sbom)
+            sbom_path = invalid_sbom / "SBOM.cdx.json"
+            sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+            sbom["metadata"]["component"]["version"] = "0.0.0-invalid"
+            sbom_path.write_text(json.dumps(sbom), encoding="utf-8")
+            rehash(invalid_sbom)
+            run("verify-package", invalid_sbom, success=False)
+            run("install", invalid_sbom, success=False)
+            assert run("status")["runtime"]["process_id"] == pid
+
             # A checksum-valid package with mismatching Web version fails activation and restarts old release.
             broken = workspace / "broken-build"
             shutil.copytree(package, broken)
@@ -175,7 +191,7 @@ def accept(archive: Path) -> None:
             result = run("uninstall", "--remove-configuration")
             assert result["system_credentials_retained"] and not result["data_retained"]
             assert not database.exists() and (data / "user-note.txt").exists()
-            print("Package acceptance passed: detached lifecycle, repeat install, checksum rejection, upgrade failure recovery, startup descriptors, upgrade/rollback, restart, retained data, explicit catalog removal.")
+            print("Package acceptance passed: offline verification, SBOM validation, detached lifecycle, repeat install, checksum rejection, upgrade failure recovery, startup descriptors, upgrade/rollback, restart, retained data, explicit catalog removal.")
         finally:
             # Never target another user profile or terminate a process using a recorded PID.
             subprocess.run([str(binary), "stop"], env=env, capture_output=True, timeout=30)

@@ -34,24 +34,26 @@ jobs:
           python tools/check_dependency_licenses.py
       - name: Build native application
         run: cargo build --release --locked
-      - name: Package executable, Web assets and corresponding source
+      - name: Package executable, Web assets, SBOM and corresponding source twice
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           executable=target/release/secretbridge-server
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          python tools/package_release.py --binary "$executable" --output dist/packages
+          python tools/package_release.py --binary "$executable" --output dist/packages-a
+          python tools/package_release.py --binary "$executable" --output dist/packages-b
+          python tools/verify_reproducible_packages.py dist/packages-a dist/packages-b
       - name: Verify native package
         shell: bash
         run: |
-          for archive in dist/packages/*.zip dist/packages/*.tar.gz; do
+          for archive in dist/packages-a/*.zip dist/packages-a/*.tar.gz; do
             if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
           done
       - name: Retain unsigned native packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: secretbridge-${{ runner.os }}-${{ runner.arch }}
-          path: dist/packages/*
+          path: dist/packages-a/*
           if-no-files-found: error
           retention-days: 30

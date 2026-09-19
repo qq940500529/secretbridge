@@ -197,6 +197,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
                     "README.md",
                     "SOURCE.json",
                     "SOURCE.tar.gz",
+                    "SBOM.cdx.json",
                     "THIRD_PARTY_LICENSES.txt",
                 ]
                 .contains(&file.path.as_str()))
@@ -229,13 +230,54 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
         "COPYRIGHT.md",
         "SOURCE.json",
         "SOURCE.tar.gz",
+        "SBOM.cdx.json",
         "THIRD_PARTY_LICENSES.txt",
     ] {
         if !seen.contains(required) {
             return Err("package_file_missing");
         }
     }
+    if check_files {
+        validate_sbom(root, &manifest)?;
+    }
     Ok(manifest)
+}
+
+fn validate_sbom(root: &Path, manifest: &Manifest) -> Result<()> {
+    let sbom: serde_json::Value = read_json(&root.join("SBOM.cdx.json"), 16 * 1024 * 1024)?;
+    let component = sbom
+        .pointer("/metadata/component")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("package_sbom_invalid")?;
+    if sbom.get("bomFormat").and_then(serde_json::Value::as_str) != Some("CycloneDX")
+        || sbom.get("specVersion").and_then(serde_json::Value::as_str) != Some("1.6")
+        || sbom.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+        || component.get("name").and_then(serde_json::Value::as_str) != Some("SecretBridge")
+        || component.get("version").and_then(serde_json::Value::as_str)
+            != Some(manifest.version.as_str())
+        || !sbom
+            .get("components")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| !items.is_empty() && items.len() <= 8192)
+    {
+        return Err("package_sbom_invalid");
+    }
+    let properties = sbom
+        .pointer("/metadata/properties")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("package_sbom_invalid")?;
+    for (name, expected) in [
+        ("secretbridge:platform", manifest.platform.as_str()),
+        ("secretbridge:architecture", manifest.architecture.as_str()),
+    ] {
+        if !properties.iter().any(|property| {
+            property.get("name").and_then(serde_json::Value::as_str) == Some(name)
+                && property.get("value").and_then(serde_json::Value::as_str) == Some(expected)
+        }) {
+            return Err("package_sbom_invalid");
+        }
+    }
+    Ok(())
 }
 fn checksum(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path).map_err(|_| "package_file_missing")?;
@@ -268,6 +310,25 @@ pub(super) fn summary() -> Result<serde_json::Value> {
     Ok(
         serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
     )
+}
+
+pub(super) fn verify(package: &Path) -> Result<serde_json::Value> {
+    let package = fs::canonicalize(package).map_err(|_| "package_unavailable")?;
+    let verified = manifest(&package, true)?;
+    super::validate_web_build_for(&package.join("web"), &verified.version)?;
+    let bytes = verified.files.iter().map(|file| file.bytes).sum::<u64>();
+    Ok(serde_json::json!({
+        "valid": true,
+        "version": verified.version,
+        "platform": verified.platform,
+        "architecture": verified.architecture,
+        "schema_version": verified.schema_version,
+        "files": verified.files.len(),
+        "bytes": bytes,
+        "sbom": "CycloneDX 1.6",
+        "executable_digest_verified": true,
+        "executable_version_check": "activation"
+    }))
 }
 
 pub(super) async fn install(package: &Path) -> Result<()> {
@@ -565,6 +626,49 @@ mod tests {
         );
         assert!(release_id("release-0123456789abcdef"));
         assert!(!release_id("release-../outside"));
+    }
+
+    #[test]
+    fn sbom_must_match_package_version_and_target() {
+        let root = std::env::temp_dir().join(format!("secretbridge-sbom-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let manifest = Manifest {
+            format: "secretbridge-package".into(),
+            format_version: 1,
+            version: env!("CARGO_PKG_VERSION").into(),
+            platform: env::consts::OS.into(),
+            architecture: env::consts::ARCH.into(),
+            schema_version: 15,
+            files: Vec::new(),
+        };
+        let mut sbom = serde_json::json!({
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "version": 1,
+            "metadata": {
+                "component": {"name": "SecretBridge", "version": manifest.version.clone()},
+                "properties": [
+                    {"name": "secretbridge:platform", "value": manifest.platform.clone()},
+                    {"name": "secretbridge:architecture", "value": manifest.architecture.clone()}
+                ]
+            },
+            "components": [{"type": "library", "name": "fixture", "version": "1"}]
+        });
+        fs::write(
+            root.join("SBOM.cdx.json"),
+            serde_json::to_vec(&sbom).unwrap(),
+        )
+        .unwrap();
+        assert!(validate_sbom(&root, &manifest).is_ok());
+        sbom["metadata"]["component"]["version"] = serde_json::json!("wrong");
+        fs::write(
+            root.join("SBOM.cdx.json"),
+            serde_json::to_vec(&sbom).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(validate_sbom(&root, &manifest), Err("package_sbom_invalid"));
+        fs::remove_file(root.join("SBOM.cdx.json")).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 
     #[tokio::test]

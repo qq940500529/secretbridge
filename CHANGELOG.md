@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0-beta.2
+
+- Added a read-only `verify-package` command that checks the package manifest, every payload digest, the Web/schema metadata contract and the bundled CycloneDX SBOM without executing package content. Executable version is checked by the trusted build and activation paths.
+- Added a deterministic package writer and source snapshot using the source commit timestamp or `SOURCE_DATE_EPOCH`; independent packaging runs now produce byte-identical ZIP or tar.gz archives and checksum sidecars.
+- Added a CycloneDX 1.6 SBOM for the target-specific resolved Cargo graph and production Web dependency graph, with source commit, platform and architecture metadata.
+- Added CI dual-package comparison, SBOM tamper rejection and native lifecycle coverage for offline verification. This validates packaging reproducibility for the same compiled inputs; independent compiler-build reproducibility and platform signing remain separate release work.
+
 ## 0.2.0-beta.1
 
 - Added detached native start/open/status/stop commands using the authenticated local IPC channel. Closing the launcher no longer owns the broker lifetime, and pairing tokens stay out of CLI results.
