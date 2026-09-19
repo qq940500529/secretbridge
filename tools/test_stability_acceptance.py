@@ -5,22 +5,20 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import platform
 import subprocess
 import sys
 import time
-
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = ROOT / "dist" / "stability-acceptance.json"
 PARALLEL_FILTER = (
-    "stability_acceptance::"
-    "parallel_cancellation_releases_capacity_and_follow_up_work_succeeds"
+    "stability_acceptance::parallel_cancellation_releases_capacity_and_follow_up_work_succeeds"
 )
 
 
@@ -148,7 +146,7 @@ def main() -> int:
         plan = build_plan(args.profile, args.iterations, args.with_databases)
     except ValueError as error:
         parser.error(str(error))
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     started = time.monotonic()
     results, passed = run_plan(plan)
     report = args.report.resolve()

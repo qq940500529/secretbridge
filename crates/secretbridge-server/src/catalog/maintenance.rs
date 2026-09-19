@@ -321,7 +321,7 @@ pub(crate) fn inspect_backup(bytes: &[u8]) -> Result<(BackupReport, Catalog), Ca
     storage(connection.pragma_update(None, "trusted_schema", false))?;
     let schema_version: i64 =
         storage(connection.query_row("PRAGMA user_version", [], |row| row.get(0)))?;
-    if !(14..=SCHEMA_VERSION).contains(&schema_version) {
+    if schema_version != SCHEMA_VERSION {
         return Err(CatalogError::Invalid);
     }
     let integrity: String =

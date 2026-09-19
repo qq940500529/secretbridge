@@ -5,22 +5,25 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import date
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "security" / "dependency-vulnerability-policy.json"
 ADVISORY_PATTERNS = {
     "cargo": re.compile(r"^RUSTSEC-\d{4}-\d{4}$"),
-    "npm": re.compile(r"^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$", re.IGNORECASE),
+    "npm": re.compile(
+        r"^GHSA-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}-[23456789cfghjmpqrvwx]{4}$",
+        re.IGNORECASE,
+    ),
 }
 PACKAGE_PATTERN = re.compile(r"[A-Za-z0-9@._/+:-]{1,160}")
 
@@ -52,7 +55,8 @@ def report_text(value: Any, fallback: str) -> str:
     return normalized or fallback
 
 
-def command_text(command: list[str], accepted_codes: set[int] = {0}) -> str:
+def command_text(command: list[str], accepted_codes: set[int] | None = None) -> str:
+    accepted_codes = {0} if accepted_codes is None else accepted_codes
     command_name = Path(command[0]).name
     try:
         result = subprocess.run(
@@ -76,7 +80,9 @@ def command_json(command: list[str]) -> Any:
     try:
         return json.loads(output)
     except json.JSONDecodeError as error:
-        raise RuntimeError(f"scanner returned no valid JSON report: {Path(command[0]).name}") from error
+        raise RuntimeError(
+            f"scanner returned no valid JSON report: {Path(command[0]).name}"
+        ) from error
 
 
 def load_policy(path: Path, today: date) -> dict[str, Any]:
@@ -92,11 +98,17 @@ def load_policy(path: Path, today: date) -> dict[str, Any]:
 
     exceptions = policy.get("exceptions")
     if not isinstance(exceptions, list):
-        raise ValueError("dependency policy exceptions must be a list")
+        raise TypeError("dependency policy exceptions must be a list")
     seen: set[tuple[str, str, str]] = set()
     required = {
-        "ecosystem", "advisoryId", "package", "decision", "scope",
-        "reason", "reviewedOn", "expiresOn",
+        "ecosystem",
+        "advisoryId",
+        "package",
+        "decision",
+        "scope",
+        "reason",
+        "reviewedOn",
+        "expiresOn",
     }
     for index, exception in enumerate(exceptions):
         label = f"exception {index + 1}"
@@ -107,7 +119,9 @@ def load_policy(path: Path, today: date) -> dict[str, Any]:
         package = exception["package"]
         if ecosystem not in ADVISORY_PATTERNS:
             raise ValueError(f"{label} has an unsupported ecosystem")
-        if not isinstance(advisory_id, str) or not ADVISORY_PATTERNS[ecosystem].fullmatch(advisory_id):
+        if not isinstance(advisory_id, str) or not ADVISORY_PATTERNS[ecosystem].fullmatch(
+            advisory_id
+        ):
             raise ValueError(f"{label} has an invalid advisoryId")
         if not isinstance(package, str) or not PACKAGE_PATTERN.fullmatch(package):
             raise ValueError(f"{label} has an invalid package")
@@ -136,10 +150,10 @@ def load_policy(path: Path, today: date) -> dict[str, Any]:
 
 def rust_findings(report: Any) -> list[Finding]:
     if not isinstance(report, dict) or not isinstance(report.get("vulnerabilities"), dict):
-        raise ValueError("cargo-audit report is missing vulnerabilities")
+        raise TypeError("cargo-audit report is missing vulnerabilities")
     entries = report["vulnerabilities"].get("list")
     if not isinstance(entries, list):
-        raise ValueError("cargo-audit vulnerability list is invalid")
+        raise TypeError("cargo-audit vulnerability list is invalid")
     findings = []
     for entry in entries:
         advisory = entry.get("advisory", {}) if isinstance(entry, dict) else {}
@@ -161,7 +175,9 @@ def rust_findings(report: Any) -> list[Finding]:
 
 def _ghsa_id(key: str, advisory: dict[str, Any]) -> str | None:
     for candidate in (
-        advisory.get("github_advisory_id"), advisory.get("id"), key,
+        advisory.get("github_advisory_id"),
+        advisory.get("id"),
+        key,
         str(advisory.get("url", "")).rstrip("/").rsplit("/", 1)[-1],
     ):
         if isinstance(candidate, str) and ADVISORY_PATTERNS["npm"].fullmatch(candidate):
@@ -171,16 +187,25 @@ def _ghsa_id(key: str, advisory: dict[str, Any]) -> str | None:
 
 def npm_findings(report: Any) -> list[Finding]:
     if not isinstance(report, dict) or not isinstance(report.get("advisories"), dict):
-        raise ValueError("pnpm audit report is missing advisories")
+        raise TypeError("pnpm audit report is missing advisories")
     if not isinstance(report.get("metadata"), dict):
-        raise ValueError("pnpm audit report is missing metadata")
+        raise TypeError("pnpm audit report is missing metadata")
     findings = []
     for key, value in report["advisories"].items():
         if not isinstance(value, dict):
-            raise ValueError("pnpm advisory entry is invalid")
+            raise TypeError("pnpm advisory entry is invalid")
         advisory_id = _ghsa_id(str(key), value)
-        package = value.get("module_name") or value.get("moduleName") or value.get("package_name") or value.get("name")
-        if advisory_id is None or not isinstance(package, str) or not PACKAGE_PATTERN.fullmatch(package):
+        package = (
+            value.get("module_name")
+            or value.get("moduleName")
+            or value.get("package_name")
+            or value.get("name")
+        )
+        if (
+            advisory_id is None
+            or not isinstance(package, str)
+            or not PACKAGE_PATTERN.fullmatch(package)
+        ):
             raise ValueError("pnpm advisory identity is invalid")
         severity = report_text(value.get("severity"), "unspecified")
         title = report_text(value.get("title"), "npm advisory")
@@ -200,7 +225,9 @@ def scanner_versions(policy: dict[str, Any]) -> tuple[str, str]:
         raise RuntimeError(f"cargo-audit must be exactly {policy['scanners']['cargo-audit']}")
     if pnpm_output != policy["scanners"]["pnpm"]:
         raise RuntimeError(f"pnpm must be exactly {policy['scanners']['pnpm']}")
-    package_manager = json.loads((ROOT / "package.json").read_text(encoding="utf-8")).get("packageManager")
+    package_manager = json.loads((ROOT / "package.json").read_text(encoding="utf-8")).get(
+        "packageManager"
+    )
     if package_manager != f"pnpm@{policy['scanners']['pnpm']}":
         raise ValueError("package.json and vulnerability policy pin different pnpm versions")
     return cargo, pnpm
@@ -212,23 +239,41 @@ def current_rustsec_report(cargo: str) -> Any:
         raise RuntimeError("dependency scan requires git to retrieve the RustSec database")
     with tempfile.TemporaryDirectory(prefix="secretbridge-rustsec-") as temporary:
         database = Path(temporary) / "advisory-db"
-        command_text([
-            git, "clone", "--quiet", "--depth", "1",
-            "https://github.com/RustSec/advisory-db.git", str(database),
-        ])
-        return command_json([
-            cargo, "audit", "--db", str(database), "--no-fetch", "--json",
-        ])
+        command_text(
+            [
+                git,
+                "clone",
+                "--quiet",
+                "--depth",
+                "1",
+                "https://github.com/RustSec/advisory-db.git",
+                str(database),
+            ]
+        )
+        return command_json(
+            [
+                cargo,
+                "audit",
+                "--db",
+                str(database),
+                "--no-fetch",
+                "--json",
+            ]
+        )
 
 
-def evaluate(findings: list[Finding], policy: dict[str, Any]) -> tuple[list[Finding], list[tuple[Finding, dict[str, Any]]], list[dict[str, Any]]]:
+def evaluate(
+    findings: list[Finding], policy: dict[str, Any]
+) -> tuple[list[Finding], list[tuple[Finding, dict[str, Any]]], list[dict[str, Any]]]:
     observed = {finding.key: finding for finding in findings}
     exceptions = {
         (item["ecosystem"], item["advisoryId"].upper(), item["package"]): item
         for item in policy["exceptions"]
     }
     blocked = [finding for key, finding in observed.items() if key not in exceptions]
-    accepted = [(finding, exceptions[key]) for key, finding in observed.items() if key in exceptions]
+    accepted = [
+        (finding, exceptions[key]) for key, finding in observed.items() if key in exceptions
+    ]
     unused = [item for key, item in exceptions.items() if key not in observed]
     return sorted(blocked), sorted(accepted, key=lambda item: item[0]), unused
 
@@ -238,7 +283,12 @@ def main() -> int:
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--cargo-report", type=Path)
     parser.add_argument("--npm-report", type=Path)
-    parser.add_argument("--today", type=date.fromisoformat, default=date.today(), help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--today",
+        type=date.fromisoformat,
+        default=datetime.now(UTC).date(),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--print-scanner-version", choices=("cargo-audit", "pnpm"))
     args = parser.parse_args()
     try:
@@ -247,13 +297,23 @@ def main() -> int:
             print(policy["scanners"][args.print_scanner_version])
             return 0
         cargo, pnpm = scanner_versions(policy)
-        rust_report = read_json(args.cargo_report.resolve()) if args.cargo_report else current_rustsec_report(cargo)
-        npm_report = read_json(args.npm_report.resolve()) if args.npm_report else command_json([pnpm, "audit", "--prod", "--json"])
+        rust_report = (
+            read_json(args.cargo_report.resolve())
+            if args.cargo_report
+            else current_rustsec_report(cargo)
+        )
+        npm_report = (
+            read_json(args.npm_report.resolve())
+            if args.npm_report
+            else command_json([pnpm, "audit", "--prod", "--json"])
+        )
         findings = rust_findings(rust_report) + npm_findings(npm_report)
         blocked, accepted, unused = evaluate(findings, policy)
         if unused:
             for item in unused:
-                print(f"Stale exception: {item['ecosystem']} {item['advisoryId']} {item['package']}")
+                print(
+                    f"Stale exception: {item['ecosystem']} {item['advisoryId']} {item['package']}"
+                )
             return 1
         for finding, exception in accepted:
             print(
@@ -263,7 +323,9 @@ def main() -> int:
         if blocked:
             print("Dependency vulnerability policy failed:")
             for finding in blocked:
-                print(f"- {finding.ecosystem} {finding.advisory_id} {finding.package} [{finding.severity}] {finding.title}")
+                print(
+                    f"- {finding.ecosystem} {finding.advisory_id} {finding.package} [{finding.severity}] {finding.title}"
+                )
             return 1
         print(
             "Dependency vulnerability policy passed "

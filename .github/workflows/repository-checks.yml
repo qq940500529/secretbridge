@@ -6,6 +6,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 19 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -27,7 +29,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, pinned
         with:
-          node-version: 24
+          node-version-file: .node-version
       - name: Install locked dependency scanners
         shell: bash
         run: |
@@ -38,14 +40,25 @@ jobs:
       - name: Check Rust and production Web dependencies
         run: python tools/check_dependency_vulnerabilities.py
   database-connectors:
-    name: Real PostgreSQL and MySQL connectors
+    name: Real databases (${{ matrix.postgresql }}, ${{ matrix.mysql }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgresql: postgres:14
+            mysql: mysql:8.0
+          - postgresql: postgres:17
+            mysql: mysql:8.4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - name: Test disposable native database connectors
+        env:
+          SECRETBRIDGE_TEST_PG_IMAGE: ${{ matrix.postgresql }}
+          SECRETBRIDGE_TEST_MYSQL_IMAGE: ${{ matrix.mysql }}
         run: bash tools/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
@@ -62,13 +75,23 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, pinned
         with:
-          node-version: 24
+          node-version-file: .node-version
       - name: Enable pnpm
         run: corepack enable
       - name: Install Web dependencies
         run: pnpm install --frozen-lockfile
       - name: Check public repository contents
         run: python tools/check_repository.py
+      - name: Check project metadata
+        run: python tools/check_project_metadata.py
+      - name: Install pinned Python development tools
+        run: python -m pip install --disable-pip-version-check -r tools/requirements-dev.txt
+      - name: Check Python formatting
+        run: python -m ruff format --check tools tests
+      - name: Lint Python tools and tests
+        run: python -m ruff check tools tests
+      - name: Check Web formatting
+        run: pnpm format:web:check
       - name: Test repository checker
         run: python -m unittest discover -s tests -v
       - name: Check Web types
@@ -111,3 +134,16 @@ jobs:
           for archive in dist/acceptance/*.zip dist/acceptance/*.tar.gz; do
             if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
           done
+      - name: Record toolchain metadata
+        if: always()
+        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
+      - name: Retain sanitized check reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repository-checks-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist/ci-metadata.json
+            dist/personal-scale.json
+          if-no-files-found: warn
+          retention-days: 14

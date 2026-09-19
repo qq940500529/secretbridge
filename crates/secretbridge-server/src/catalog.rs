@@ -18,14 +18,14 @@ use uuid::Uuid;
 
 pub(crate) mod maintenance;
 
-pub(crate) const SCHEMA_VERSION: i64 = 15;
+pub(crate) const SCHEMA_VERSION: i64 = 16;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
 const POSTGRES_POLICY_VERSION: &str = "postgres-readonly-policy-v1";
 const MAX_CREDENTIAL_REFERENCES: i64 = 128;
 const MAX_TARGETS: i64 = 128;
-const MAX_APPROVALS: i64 = 512;
+const MAX_ACTIVE_APPROVALS: i64 = 512;
 const MAX_ACTION_TEMPLATES: i64 = 256;
-const MAX_RUNS: i64 = 1_024;
+const MAX_ACTIVE_RUNS: i64 = 1_024;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
@@ -910,6 +910,9 @@ impl Catalog {
                 ); PRAGMA user_version = 15; COMMIT;",
             )?;
         }
+        if version < 16 {
+            connection.pragma_update(None, "user_version", 16_i64)?;
+        }
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -1054,18 +1057,71 @@ impl Catalog {
         credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
-    pub fn delete_credential_reference(&self, id: Uuid) -> Result<(), CatalogError> {
-        let connection = self.lock();
-        let references = connection
-            .query_row(
-                "SELECT (SELECT COUNT(*) FROM targets WHERE credential_reference_id = ?1) + (SELECT COUNT(*) FROM command_slots WHERE credential_id = ?1)",
-                [id.to_string()],
-                |row| row.get::<_, i64>(0),
+    /// Fails closed before an external secret-store mutation. Claiming the mutation advances the
+    /// public version so a concurrent writer cannot race the operating-system store operation;
+    /// linked targets and templates are versioned immediately so existing approvals become unusable.
+    pub fn begin_credential_secret_mutation(
+        &self,
+        id: Uuid,
+        expected_version: u64,
+    ) -> Result<CredentialReference, CatalogError> {
+        let mut connection = self.lock();
+        let now = now_unix_ms_i64()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        let changed = transaction
+            .execute(
+                "UPDATE credential_references
+                    SET secret_configured = 0,
+                        updated_at_unix_ms = ?1,
+                        version = version + 1
+                  WHERE id = ?2 AND version = ?3",
+                params![
+                    now,
+                    id.to_string(),
+                    i64::try_from(expected_version).map_err(|_| CatalogError::Invalid)?
+                ],
             )
             .map_err(|_| CatalogError::Storage)?;
-        if references > 0 {
-            return Err(CatalogError::ResourceInUse);
+        if changed == 0 {
+            return if credential_by_id(&transaction, id)?.is_some() {
+                Err(CatalogError::VersionConflict)
+            } else {
+                Err(CatalogError::NotFound)
+            };
         }
+        transaction
+            .execute(
+                "UPDATE targets
+                    SET updated_at_unix_ms = ?1, version = version + 1
+                  WHERE credential_reference_id = ?2",
+                params![now, id.to_string()],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        transaction
+            .execute(
+                "UPDATE action_templates
+                    SET updated_at_unix_ms = ?1, version = version + 1
+                  WHERE id IN (SELECT template_id FROM command_slots WHERE credential_id = ?2)",
+                params![now, id.to_string()],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
+        credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
+    }
+
+    pub fn ensure_credential_reference_deletable(&self, id: Uuid) -> Result<(), CatalogError> {
+        let connection = self.lock();
+        if credential_by_id(&connection, id)?.is_none() {
+            return Err(CatalogError::NotFound);
+        }
+        ensure_credential_reference_unlinked(&connection, id)
+    }
+
+    pub fn delete_credential_reference(&self, id: Uuid) -> Result<(), CatalogError> {
+        let connection = self.lock();
+        ensure_credential_reference_unlinked(&connection, id)?;
         let changed = connection
             .execute(
                 "DELETE FROM credential_references WHERE id = ?1",
@@ -1365,7 +1421,7 @@ impl Catalog {
         }
         let reason = normalize_optional(request.reason.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let connection = self.lock();
-        ensure_capacity(&connection, "approvals", MAX_APPROVALS)?;
+        ensure_capacity(&connection, "approvals", MAX_ACTIVE_APPROVALS)?;
         let template = action_template_by_id(&connection, request.action_template_id)?
             .filter(|template| template.enabled)
             .ok_or(CatalogError::NotFound)?;
@@ -1543,7 +1599,7 @@ impl Catalog {
         let template_id = approval
             .action_template_id
             .ok_or(CatalogError::ApprovalNotUsable)?;
-        ensure_capacity(&connection, "synthetic_runs", MAX_RUNS)?;
+        ensure_capacity(&connection, "synthetic_runs", MAX_ACTIVE_RUNS)?;
         let id = Uuid::new_v4();
         let transaction = connection
             .transaction()
@@ -1900,21 +1956,17 @@ impl Catalog {
         };
         let mut recovered = 0;
         for id in ids {
-            if self
-                .transition_run(
-                    id,
-                    None,
-                    &[RunState::Queued, RunState::Running],
-                    RunState::Failed,
-                    Some("service_restarted"),
-                    SafeEventKind::Interrupted,
-                    "service restarted before completion",
-                    false,
-                )
-                .is_ok()
-            {
-                recovered += 1;
-            }
+            self.transition_run(
+                id,
+                None,
+                &[RunState::Queued, RunState::Running],
+                RunState::Failed,
+                Some("service_restarted"),
+                SafeEventKind::Interrupted,
+                "service restarted before completion",
+                false,
+            )?;
+            recovered += 1;
         }
         Ok(recovered)
     }
@@ -2748,9 +2800,16 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
     let statement = match table {
         "credential_references" => "SELECT COUNT(*) FROM credential_references",
         "targets" => "SELECT COUNT(*) FROM targets",
-        "approvals" => "SELECT COUNT(*) FROM approvals",
+        "approvals" => "SELECT COUNT(*) FROM approvals
+            WHERE state = 'pending'
+               OR (state = 'approved' AND (
+                    authorization_mode = '\"time_window\"'
+                    OR NOT EXISTS (
+                        SELECT 1 FROM synthetic_runs WHERE synthetic_runs.approval_id = approvals.id
+                    )
+               ))",
         "action_templates" => "SELECT COUNT(*) FROM action_templates",
-        "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs",
+        "synthetic_runs" => "SELECT COUNT(*) FROM synthetic_runs WHERE state IN ('queued', 'running')",
         "configuration_imports" => "SELECT COUNT(*) FROM configuration_imports",
         _ => return Err(CatalogError::Storage),
     };
@@ -2760,6 +2819,23 @@ fn ensure_capacity(connection: &Connection, table: &str, maximum: i64) -> Result
     (count < maximum)
         .then_some(())
         .ok_or(CatalogError::Capacity)
+}
+
+fn ensure_credential_reference_unlinked(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<(), CatalogError> {
+    let references = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM targets WHERE credential_reference_id = ?1) +
+                    (SELECT COUNT(*) FROM command_slots WHERE credential_id = ?1)",
+            [id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|_| CatalogError::Storage)?;
+    (references == 0)
+        .then_some(())
+        .ok_or(CatalogError::ResourceInUse)
 }
 
 fn normalize_idempotency_key(value: &str) -> Result<String, CatalogError> {
@@ -2883,7 +2959,7 @@ mod tests {
         PolicyDecision, PolicyReasonCode, PolicyRequirement, PostgresRunResult,
         PostgresTargetConfig, PostgresTlsMode, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind,
         SecretState, TargetEnvironment, TargetKind, UpdateActionTemplate,
-        UpdateCredentialReference, UpdateTarget,
+        UpdateCredentialReference, UpdateTarget, MAX_ACTIVE_APPROVALS, MAX_ACTIVE_RUNS,
     };
 
     #[test]
@@ -3006,6 +3082,160 @@ mod tests {
             catalog.set_credential_secret_state(credential.id, 1, false),
             Err(CatalogError::VersionConflict)
         ));
+    }
+
+    #[test]
+    fn credential_mutation_fails_closed_before_external_storage_changes() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        let configured = catalog
+            .set_credential_secret_state(credential.id, 1, true)
+            .expect("mark configured");
+        let target = create_target(&catalog, credential.id);
+        let template = create_action_template(&catalog, target.id);
+        let approval = create_approval(&catalog, template.id);
+        let approval = catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: None,
+                },
+            )
+            .expect("approve before mutation");
+
+        let pending = catalog
+            .begin_credential_secret_mutation(credential.id, configured.version)
+            .expect("begin mutation");
+        assert_eq!(pending.secret_state, SecretState::NotConfigured);
+        assert_eq!(pending.version, configured.version + 1);
+        assert_eq!(
+            catalog.begin_credential_secret_mutation(credential.id, configured.version),
+            Err(CatalogError::VersionConflict)
+        );
+        assert!(matches!(
+            catalog.create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "mutation-invalidates-approval".to_owned(),
+            }),
+            Err(CatalogError::PolicyDenied)
+        ));
+
+        let repaired = catalog
+            .set_credential_secret_state(credential.id, pending.version, true)
+            .expect("finish mutation");
+        assert_eq!(repaired.secret_state, SecretState::Available);
+        assert_eq!(repaired.version, configured.version + 2);
+    }
+
+    #[test]
+    fn terminal_history_does_not_consume_active_capacity() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let credential = create_credential(&catalog);
+        catalog
+            .set_credential_secret_state(credential.id, 1, true)
+            .expect("configure credential");
+        let target = create_target(&catalog, credential.id);
+        let template = create_action_template(&catalog, target.id);
+
+        for index in 0..MAX_ACTIVE_APPROVALS {
+            let approval = create_approval(&catalog, template.id);
+            catalog
+                .deny_approval(
+                    approval.id,
+                    &DecideApproval {
+                        expected_version: approval.version,
+                        note: Some(format!("terminal history {index}")),
+                    },
+                )
+                .expect("deny approval");
+        }
+        let approval = create_approval(&catalog, template.id);
+        catalog
+            .deny_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: None,
+                },
+            )
+            .expect("deny post-boundary approval");
+
+        let catalog = Catalog::in_memory().expect("second in-memory catalog");
+        let credential = create_credential(&catalog);
+        catalog
+            .set_credential_secret_state(credential.id, 1, true)
+            .expect("configure second credential");
+        let target = create_target(&catalog, credential.id);
+        let template = create_action_template(&catalog, target.id);
+
+        for index in 0..MAX_ACTIVE_RUNS {
+            let approval = create_approval(&catalog, template.id);
+            let approval = catalog
+                .approve_approval(
+                    approval.id,
+                    &DecideApproval {
+                        expected_version: approval.version,
+                        note: None,
+                    },
+                )
+                .expect("approve history run");
+            let run = catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: format!("history-{index}"),
+                })
+                .expect("create history run")
+                .run;
+            catalog.start_run(run.id).expect("start history run");
+            catalog
+                .complete_synthetic_run(run.id)
+                .expect("complete history run");
+        }
+        let approval = create_approval(&catalog, template.id);
+        let approval = catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: None,
+                },
+            )
+            .expect("approve post-boundary run");
+        assert!(
+            catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: "post-boundary".to_owned(),
+                })
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn interrupted_run_recovery_propagates_storage_failure() {
+        let catalog = Catalog::in_memory().expect("in-memory catalog");
+        let approval = create_approved_workflow(&catalog);
+        let run = catalog
+            .create_synthetic_run(&CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: "recovery-write-failure".to_owned(),
+            })
+            .expect("create run")
+            .run;
+        catalog
+            .lock()
+            .execute_batch(&format!(
+                "CREATE TRIGGER reject_recovery BEFORE UPDATE OF state ON synthetic_runs
+                 WHEN OLD.id = '{}' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;",
+                run.id
+            ))
+            .expect("install failure trigger");
+
+        assert_eq!(
+            catalog.recover_interrupted_runs(),
+            Err(CatalogError::Storage)
+        );
     }
 
     #[test]

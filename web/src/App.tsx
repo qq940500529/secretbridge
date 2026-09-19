@@ -61,12 +61,7 @@ type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
 type Authentication = "unpaired" | "pairing" | "paired" | "error";
 type Page =
-  | "credentials"
-  | "targets"
-  | "operations"
-  | "terminal"
-  | "audit"
-  | "settings";
+  "credentials" | "targets" | "operations" | "terminal" | "audit" | "settings";
 
 interface Copy {
   credentials: string;

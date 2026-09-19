@@ -15,9 +15,11 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { CredentialSecretInput } from "./CredentialSecretInput";
@@ -188,6 +190,7 @@ export function CredentialReferencesView({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const editorReturnFocus = useRef<HTMLElement | null>(null);
   const [secretDrafts, setSecretDrafts] = useState<Record<string, string>>({});
   const [secretBusyId, setSecretBusyId] = useState<string | null>(null);
 
@@ -337,7 +340,8 @@ export function CredentialReferencesView({
     }
   }
 
-  function beginEdit(item: CredentialReference) {
+  function beginEdit(item: CredentialReference, trigger: HTMLElement) {
+    editorReturnFocus.current = trigger;
     setEditorOpen(true);
     setEditingId(item.id);
     setEditingVersion(item.version);
@@ -368,9 +372,11 @@ export function CredentialReferencesView({
         title={editingId ? common.edit : text.formTitle}
         open={editorOpen}
         onOpen={() => {
+          editorReturnFocus.current = null;
           setError(null);
           setEditorOpen(true);
         }}
+        returnFocusTarget={editorReturnFocus.current}
         onClose={resetForm}
         error={error}
         onSubmit={submit}
@@ -461,7 +467,10 @@ export function CredentialReferencesView({
                 )}
               </div>
               <div className="flex shrink-0 gap-2">
-                <IconButton label={common.edit} onClick={() => beginEdit(item)}>
+                <IconButton
+                  label={common.edit}
+                  onClick={(event) => beginEdit(item, event.currentTarget)}
+                >
                   <Pencil className="size-4" />
                 </IconButton>
                 <DeleteButton
@@ -599,6 +608,7 @@ export function TargetsView({
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const editorReturnFocus = useRef<HTMLElement | null>(null);
   const credentialNames = useMemo(
     () => new Map(credentials.map((item) => [item.id, item.name])),
     [credentials],
@@ -704,7 +714,8 @@ export function TargetsView({
     }
   }
 
-  function beginEdit(item: Target) {
+  function beginEdit(item: Target, trigger: HTMLElement) {
+    editorReturnFocus.current = trigger;
     setEditorOpen(true);
     setEditingId(item.id);
     setEditingVersion(item.version);
@@ -747,9 +758,11 @@ export function TargetsView({
         title={editingId ? common.edit : text.formTitle}
         open={editorOpen}
         onOpen={() => {
+          editorReturnFocus.current = null;
           setError(null);
           setEditorOpen(true);
         }}
+        returnFocusTarget={editorReturnFocus.current}
         onClose={resetForm}
         error={error}
         onSubmit={submit}
@@ -953,7 +966,10 @@ export function TargetsView({
                 )}
               </div>
               <div className="flex shrink-0 gap-2">
-                <IconButton label={common.edit} onClick={() => beginEdit(item)}>
+                <IconButton
+                  label={common.edit}
+                  onClick={(event) => beginEdit(item, event.currentTarget)}
+                >
                   <Pencil className="size-4" />
                 </IconButton>
                 <DeleteButton
@@ -1042,6 +1058,7 @@ function CatalogForm({
   cancelLabel,
   children,
   error,
+  returnFocusTarget,
 }: {
   title: string;
   open: boolean;
@@ -1055,6 +1072,7 @@ function CatalogForm({
   cancelLabel: string;
   children: ReactNode;
   error: string | null;
+  returnFocusTarget?: HTMLElement | null;
 }) {
   return (
     <EditorDialog
@@ -1063,6 +1081,7 @@ function CatalogForm({
       onOpen={onOpen}
       onClose={onClose}
       busy={busy}
+      returnFocusTarget={returnFocusTarget}
     >
       {error && (
         <p role="alert" className="px-5 text-sm text-rose-700">
@@ -1204,7 +1223,7 @@ function IconButton({
   children,
 }: {
   label: string;
-  onClick: () => void;
+  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
 }) {
   return (

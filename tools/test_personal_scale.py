@@ -5,16 +5,16 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import json
 import os
-from pathlib import Path
 import socket
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
+from pathlib import Path
 from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,24 +123,21 @@ def measure(binary: Path, web_root: Path, rounds: int) -> dict[str, object]:
 
 
 def evaluate(metrics: dict[str, object], limits: dict[str, float]) -> list[str]:
-    return [
-        key
-        for key, limit in limits.items()
-        if float(metrics[key]) > limit
-    ]
+    return [key for key, limit in limits.items() if float(metrics[key]) > limit]
 
 
 def main() -> int:
-    default_binary = ROOT / "target" / "debug" / (
-        "secretbridge-server.exe" if os.name == "nt" else "secretbridge-server"
+    default_binary = (
+        ROOT
+        / "target"
+        / "debug"
+        / ("secretbridge-server.exe" if os.name == "nt" else "secretbridge-server")
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=default_binary)
     parser.add_argument("--web-root", type=Path, default=ROOT / "web" / "dist")
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument(
-        "--output", type=Path, default=ROOT / "dist" / "personal-scale.json"
-    )
+    parser.add_argument("--output", type=Path, default=ROOT / "dist" / "personal-scale.json")
     args = parser.parse_args()
     if not args.binary.is_file() or not (args.web_root / "index.html").is_file():
         print("Build the broker and Web application before measuring.", file=sys.stderr)

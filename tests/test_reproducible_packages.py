@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import importlib.util
-from pathlib import Path
 import tempfile
 import unittest
-
+from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
     "verify_reproducible_packages",
@@ -31,9 +30,7 @@ class ReproduciblePackageTests(unittest.TestCase):
                 archive = directory / name
                 archive.write_bytes(b"stable package")
                 checksum = verify.digest(archive)
-                (directory / f"{name}.sha256").write_text(
-                    f"{checksum}  {name}\n", encoding="ascii"
-                )
+                (directory / f"{name}.sha256").write_text(f"{checksum}  {name}\n", encoding="ascii")
             self.assertEqual(verify.compare(first, second)[0], name)
 
     def test_changed_bytes_or_sidecar_fail(self):

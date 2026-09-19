@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from pathlib import Path
 import sys
+from pathlib import Path
 
 
 def digest(path: Path) -> str:
@@ -38,7 +38,10 @@ def compare(first: Path, second: Path) -> tuple[str, str]:
         raise ValueError("Package bytes differ between builds")
     for directory, expected in ((first, first_digest), (second, second_digest)):
         sidecar = directory / f"{name}.sha256"
-        if not sidecar.is_file() or sidecar.read_text(encoding="ascii").strip() != f"{expected}  {name}":
+        if (
+            not sidecar.is_file()
+            or sidecar.read_text(encoding="ascii").strip() != f"{expected}  {name}"
+        ):
             raise ValueError("Package checksum sidecar is missing or inconsistent")
     return name, first_digest
 

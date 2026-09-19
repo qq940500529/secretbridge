@@ -18,7 +18,7 @@
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. It provides persistent terminals, an operating-system credential store, fixed program tasks and explicit single-use or time-window approvals. Named slots support stdin, child environment, arguments and temporary files; Web and MCP can read filtered run output incrementally. Secrets have no read/export tool or API. Ordinary terminals never receive injected credentials; output filtering is not a program sandbox. Ordinary parameters support types, required values, defaults, choices and length constraints; approval freezes the values, with optional time-limited repetition of the same task. More connectors remain in development.
+> SecretBridge is prerelease software for individual, single-machine use. It has real broker, Web, terminal, credential-store, connector and package-lifecycle implementations, but no public GitHub Release has been published. Use synthetic credentials while evaluating a source build. Secrets have no read/export tool or API; ordinary terminals never receive injected credentials, and output filtering is not a sandbox.
 
 ## Why SecretBridge?
 
@@ -79,7 +79,9 @@ Configuration migration, private SQLite backups and concise diagnostics are avai
 
 The English and Chinese homepages cover the same product scope. Detailed engineering documents are currently in Simplified Chinese; English translations are welcome.
 
-## Run the development prototype
+## Build and deploy a development candidate
+
+For first-time deployment, we recommend a trusted local AI coding assistant that can show every command and pause for permission. Use the [AI-assisted deployment guide](docs/AI辅助部署.md) for a copyable prompt, a machine-readable runbook and a complete manual alternative. The assistant must not receive real secrets or bypass a failed quality gate.
 
 The launcher starts a detached broker. Use `start --no-open`, `open`, `status` and `stop` for explicit control, or `--serve` for foreground debugging. Native versioned installation, upgrade/rollback, per-user login startup and data-retaining uninstall are described in the [delivery guide](docs/后台运行与安装交付.md). Portable packages include matching Web assets, corresponding source, license texts and a CycloneDX SBOM; `verify-package` validates an unpacked package before installation. See [artifact verification and SBOM](docs/发行物验证与SBOM.md). Packages are currently unsigned development builds.
 
@@ -107,7 +109,7 @@ Other OS versions and architectures require separate validation. Actual support 
 
 ## Contribute
 
-The project is under active feature development, prioritizing immediate AI terminal control, credential injection, reusable tasks and common connectors. Contributions to cross-platform implementation, UI, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+The project is closing prerelease reliability, platform acceptance and distribution work. Contributions to cross-platform implementation, UI, testing and reader-focused documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
 
 ## License and community
 

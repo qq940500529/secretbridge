@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -79,20 +79,14 @@ def main() -> int:
         print("Dependency license check requires cargo and pnpm.")
         return 1
 
-    cargo_metadata = command_json(
-        [cargo, "metadata", "--format-version", "1", "--locked"]
-    )
+    cargo_metadata = command_json([cargo, "metadata", "--format-version", "1", "--locked"])
     rust_packages = [
-        package
-        for package in cargo_metadata["packages"]
-        if package.get("source") is not None
+        package for package in cargo_metadata["packages"] if package.get("source") is not None
     ]
     missing_rust = sorted(
         package["name"] for package in rust_packages if not package.get("license")
     )
-    rust_licenses = {
-        package["license"] for package in rust_packages if package.get("license")
-    }
+    rust_licenses = {package["license"] for package in rust_packages if package.get("license")}
 
     npm_metadata = command_json([pnpm, "licenses", "list", "--json"])
     npm_licenses = set(npm_metadata)

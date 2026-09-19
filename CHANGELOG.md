@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0-beta.4
+
+### Fixed
+
+- Prevent terminal approval and run history from exhausting active-work capacity after long-term use.
+- Distinguish missing, locked/denied and unavailable native credential-store entries, and fail closed across credential-store/SQLite mutation failures.
+- Propagate interrupted-run recovery failures and replace stale installer marker locks with operating-system file locks.
+- Return focus to the exact editor trigger and remove the browser-input timing race from compatibility acceptance.
+
+### Changed
+
+- Reset the unpublished database/package contract to schema 16; earlier Beta data is intentionally unsupported before the first public release.
+- Pin Rust, Node, pnpm, Python formatting and dependency-update policy; retain sanitized CI/browser/stability metadata.
+- Add reader-focused AI-assisted and manual deployment paths, synchronized metadata checks and production-build browser fixtures.
+
+### Known limitations
+
+- No public GitHub Release exists. Real desktop, native credential-store, reboot and assistive-technology evidence remains platform-specific and must not be inferred from headless fixtures.
+
 ## 0.2.0-beta.3
 
 - Added Chromium, Firefox and WebKit workbench compatibility acceptance, axe-core accessibility checks, and cross-platform startup, local status latency and idle-memory baselines.

@@ -107,101 +107,33 @@ pub(crate) fn open_with_migration_backup(
     use crate::catalog::{CatalogOpenError, SCHEMA_VERSION};
     let connection = rusqlite::Connection::open(path)?;
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version <= 0 || version >= SCHEMA_VERSION {
+    if version == 0 || version == SCHEMA_VERSION {
         return Catalog::initialize(connection);
     }
-    let rollback_path = path.with_file_name(format!(
-        "secretbridge.pre-migration-v{version}-{}.sqlite3",
-        uuid::Uuid::new_v4()
-    ));
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&rollback_path)
-        .map_err(|_| CatalogOpenError::Recovery)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|_| CatalogOpenError::Recovery)?;
-    }
-    let mut rollback = rusqlite::Connection::open(&rollback_path)?;
-    copy_database(&connection, &mut rollback).map_err(|_| CatalogOpenError::Recovery)?;
-    rollback.pragma_update(None, "journal_mode", "DELETE")?;
-    file.sync_all().map_err(|_| CatalogOpenError::Recovery)?;
-    match Catalog::initialize(connection) {
-        Ok(catalog) => Ok(catalog),
-        Err(error) => {
-            let mut live = rusqlite::Connection::open(path)?;
-            copy_database(&rollback, &mut live).map_err(|_| CatalogOpenError::Recovery)?;
-            Err(error)
-        }
-    }
+    Err(CatalogOpenError::UnsupportedSchema(version))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn upgrade_retains_consistent_pre_migration_backup() {
+    fn unpublished_legacy_schema_is_rejected_without_mutation() {
         let directory =
             std::env::temp_dir().join(format!("secretbridge-migration-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let path = directory.join("secretbridge.sqlite3");
         let catalog = Catalog::open(&path).unwrap();
-        catalog
-            .lock()
-            .execute_batch("DROP TABLE configuration_imports; PRAGMA user_version=14;")
-            .unwrap();
+        catalog.lock().pragma_update(None, "user_version", 15).unwrap();
         drop(catalog);
-        let upgraded = Catalog::open(&path).unwrap();
-        assert_eq!(
-            upgraded
-                .lock()
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-                .unwrap(),
-            15
-        );
-        let backup = fs::read_dir(&directory)
-            .unwrap()
-            .filter_map(Result::ok)
-            .find(|item| {
-                item.file_name()
-                    .to_string_lossy()
-                    .starts_with("secretbridge.pre-migration-v14-")
-            })
-            .unwrap()
-            .path();
-        assert_eq!(
-            inspect_configuration_backup(&backup)
-                .unwrap()
-                .schema_version,
-            14
-        );
-        drop(upgraded);
-        fs::remove_dir_all(directory).unwrap();
-    }
-    #[test]
-    fn failed_schema_migration_rolls_database_back_to_original_version() {
-        let directory = std::env::temp_dir().join(format!(
-            "secretbridge-migration-failure-{}",
-            uuid::Uuid::new_v4()
+        assert!(matches!(
+            Catalog::open(&path),
+            Err(crate::catalog::CatalogOpenError::UnsupportedSchema(15))
         ));
-        fs::create_dir(&directory).unwrap();
-        let path = directory.join("secretbridge.sqlite3");
-        let catalog = Catalog::open(&path).unwrap();
-        // A name collision causes migration 15 to fail after beginning its transaction.
-        catalog
-            .lock()
-            .execute_batch("PRAGMA user_version=14;")
-            .unwrap();
-        drop(catalog);
-        assert!(Catalog::open(&path).is_err());
         let raw = rusqlite::Connection::open(&path).unwrap();
         assert_eq!(
             raw.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            14
+            15
         );
         assert_eq!(
             raw.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))

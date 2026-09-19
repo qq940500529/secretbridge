@@ -68,7 +68,7 @@ try {
     } else if (path.endsWith("/backup/preview"))
       body = {
         schema_version: 14,
-        restore_schema_version: 15,
+        restore_schema_version: 16,
         integrity_ok: true,
         credentials: 1,
         connections: 1,
@@ -89,7 +89,7 @@ try {
         format: "secretbridge-diagnostics",
         version: "0.1.0-test",
         platform: "windows",
-        schema_version: 15,
+        schema_version: 16,
         credentials: 1,
         connections: 1,
         templates: 1,
@@ -124,13 +124,11 @@ try {
     (await download).suggestedFilename(),
     "secretbridge-configuration.json",
   );
-  await page
-    .getByLabel("选择配置文件（最多 8 MiB）")
-    .setInputFiles({
-      name: "configuration.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(JSON.stringify(bundle)),
-    });
+  await page.getByLabel("选择配置文件（最多 8 MiB）").setInputFiles({
+    name: "configuration.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(bundle)),
+  });
   await page.getByRole("button", { name: "检查导入", exact: true }).click();
   await page.getByRole("button", { name: "确认导入", exact: true }).click();
   await page.getByRole("alert").waitFor();
@@ -146,13 +144,11 @@ try {
     (await download).suggestedFilename(),
     "secretbridge-backup.sqlite3",
   );
-  await page
-    .getByLabel("选择备份进行只读预检（最多 256 MiB）")
-    .setInputFiles({
-      name: "backup.sqlite3",
-      mimeType: "application/vnd.sqlite3",
-      buffer: Buffer.from("SQLite format 3\0synthetic"),
-    });
+  await page.getByLabel("选择备份进行只读预检（最多 256 MiB）").setInputFiles({
+    name: "backup.sqlite3",
+    mimeType: "application/vnd.sqlite3",
+    buffer: Buffer.from("SQLite format 3\0synthetic"),
+  });
   await page.getByRole("button", { name: "检查备份", exact: true }).click();
   await page.getByText(/完整性检查通过/).waitFor();
   assert.equal(

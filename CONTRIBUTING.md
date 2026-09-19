@@ -5,7 +5,7 @@
 Thank you for helping build SecretBridge. Contributions to documentation, accessibility, platform validation, security design and repository tooling are welcome.
 
 > [!IMPORTANT]
-> The project is in the design stage. Discuss changes to credential access, authorization or isolation before implementation. Never include real credentials or private infrastructure in a contribution.
+> The project is prerelease software with working native and Web implementations. Discuss changes to credential access, authorization or isolation before implementation. Never include real credentials or private infrastructure in a contribution.
 
 ## Find a contribution
 
@@ -28,7 +28,17 @@ Start with an [issue](https://github.com/qq940500529/secretbridge/issues) for su
 
    ```sh
    python tools/check_repository.py
+   python tools/check_project_metadata.py
+   python -m ruff format --check tools tests
+   python -m ruff check tools tests
    python -m unittest discover -s tests -v
+   pnpm format:web:check
+   pnpm typecheck
+   pnpm test
+   pnpm build
+   cargo fmt --all -- --check
+   cargo test --workspace --all-targets
+   cargo clippy --workspace --all-targets -- -D warnings
    git diff --check
    ```
 5. Inspect the complete diff for private data, unlicensed material and inaccurate status claims.

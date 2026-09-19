@@ -74,7 +74,7 @@ use catalog::{
     UpdateCredentialReference, UpdateTarget,
 };
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
-use secret_store::SecretStore;
+use secret_store::{SecretStore, SecretStoreError};
 use terminal::{
     CreateTerminal, TerminalCapabilities, TerminalConnection, TerminalError, TerminalEvent,
     TerminalManager, TerminalShell, TerminalStatus, TerminalSummary,
@@ -497,6 +497,8 @@ enum ApiError {
     NotFound,
     PolicyDenied,
     ResourceInUse,
+    SecretEntryNotFound,
+    SecretStoreLocked,
     SecretStoreUnavailable,
     TerminalCapacity,
     Unauthorized,
@@ -571,6 +573,16 @@ impl IntoResponse for ApiError {
                 "resource_in_use",
                 "The resource is still referenced and cannot be deleted.",
             ),
+            Self::SecretEntryNotFound => (
+                StatusCode::CONFLICT,
+                "secret_entry_not_found",
+                "The credential entry is missing. Set the secret again to repair it.",
+            ),
+            Self::SecretStoreLocked => (
+                StatusCode::LOCKED,
+                "secret_store_locked",
+                "The operating-system credential store is locked or access was denied.",
+            ),
             Self::SecretStoreUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "secret_store_unavailable",
@@ -588,6 +600,14 @@ impl IntoResponse for ApiError {
             ),
         };
         (status, Json(ErrorResponse { code, message })).into_response()
+    }
+}
+
+const fn map_secret_store_error(error: SecretStoreError) -> ApiError {
+    match error {
+        SecretStoreError::NotFound => ApiError::SecretEntryNotFound,
+        SecretStoreError::LockedOrDenied => ApiError::SecretStoreLocked,
+        SecretStoreError::Unavailable => ApiError::SecretStoreUnavailable,
     }
 }
 
@@ -956,35 +976,34 @@ async fn delete_credential_reference(
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
-    let prior_secret = if current.secret_state == SecretState::Available {
+    let preflight_catalog = state.catalog.clone();
+    task::spawn_blocking(move || preflight_catalog.ensure_credential_reference_deletable(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    if current.secret_state == SecretState::Available {
+        let pending_catalog = state.catalog.clone();
+        task::spawn_blocking(move || {
+            pending_catalog.begin_credential_secret_mutation(id, current.version)
+        })
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
         let store = state.secret_store.clone();
-        Some(
-            task::spawn_blocking(move || store.get(id))
-                .await
-                .map_err(|_| ApiError::Internal)?
-                .map_err(|_| ApiError::SecretStoreUnavailable)?,
-        )
-    } else {
-        None
-    };
-    if prior_secret.is_some() {
-        let store = state.secret_store.clone();
-        task::spawn_blocking(move || store.delete(id))
+        let removed = task::spawn_blocking(move || store.delete(id))
             .await
-            .map_err(|_| ApiError::Internal)?
-            .map_err(|_| ApiError::SecretStoreUnavailable)?;
+            .map_err(|_| ApiError::Internal)?;
+        if let Err(error) = removed
+            && error != SecretStoreError::NotFound
+        {
+            return Err(map_secret_store_error(error));
+        }
     }
     let catalog = state.catalog.clone();
     let deleted = task::spawn_blocking(move || catalog.delete_credential_reference(id))
         .await
         .map_err(|_| ApiError::Internal)?;
-    if let Err(error) = deleted {
-        if let Some(prior_secret) = prior_secret {
-            let store = state.secret_store.clone();
-            let _ = task::spawn_blocking(move || store.set(id, &prior_secret)).await;
-        }
-        return Err(map_catalog_error(error));
-    }
+    deleted.map_err(map_catalog_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1010,37 +1029,27 @@ async fn set_credential_secret(
     if current.version != request.expected_version {
         return Err(ApiError::VersionConflict);
     }
-    let prior_secret = if current.secret_state == SecretState::Available {
-        let store = state.secret_store.clone();
-        Some(
-            task::spawn_blocking(move || store.get(id))
-                .await
-                .map_err(|_| ApiError::Internal)?
-                .map_err(|_| ApiError::SecretStoreUnavailable)?,
-        )
-    } else {
-        None
-    };
+    let pending_catalog = state.catalog.clone();
+    let pending = task::spawn_blocking(move || {
+        pending_catalog.begin_credential_secret_mutation(id, request.expected_version)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
     let secret = zeroize::Zeroizing::new(request.secret);
     let store = state.secret_store.clone();
     task::spawn_blocking(move || store.set(id, &secret))
         .await
         .map_err(|_| ApiError::Internal)?
-        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+        .map_err(map_secret_store_error)?;
 
     let catalog = state.catalog.clone();
     let updated = task::spawn_blocking(move || {
-        catalog.set_credential_secret_state(id, request.expected_version, true)
+        catalog.set_credential_secret_state(id, pending.version, true)
     })
     .await
     .map_err(|_| ApiError::Internal)?;
-    match updated {
-        Ok(item) => Ok(Json(item)),
-        Err(error) => {
-            rollback_secret(&state, id, prior_secret).await;
-            Err(map_catalog_error(error))
-        }
-    }
+    updated.map(Json).map_err(map_catalog_error)
 }
 
 async fn clear_credential_secret(
@@ -1064,43 +1073,30 @@ async fn clear_credential_secret(
     if current.secret_state == SecretState::NotConfigured {
         return Err(ApiError::BadRequest);
     }
-    let store = state.secret_store.clone();
-    let prior_secret = task::spawn_blocking(move || store.get(id))
+    let pending_catalog = state.catalog.clone();
+    let pending = task::spawn_blocking(move || {
+        pending_catalog.begin_credential_secret_mutation(id, request.expected_version)
+    })
         .await
         .map_err(|_| ApiError::Internal)?
-        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+        .map_err(map_catalog_error)?;
     let store = state.secret_store.clone();
-    task::spawn_blocking(move || store.delete(id))
+    let removed = task::spawn_blocking(move || store.delete(id))
         .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(|_| ApiError::SecretStoreUnavailable)?;
+        .map_err(|_| ApiError::Internal)?;
+    if let Err(error) = removed
+        && error != SecretStoreError::NotFound
+    {
+        return Err(map_secret_store_error(error));
+    }
 
     let catalog = state.catalog.clone();
     let updated = task::spawn_blocking(move || {
-        catalog.set_credential_secret_state(id, request.expected_version, false)
+        catalog.set_credential_secret_state(id, pending.version, false)
     })
     .await
     .map_err(|_| ApiError::Internal)?;
-    match updated {
-        Ok(item) => Ok(Json(item)),
-        Err(error) => {
-            rollback_secret(&state, id, Some(prior_secret)).await;
-            Err(map_catalog_error(error))
-        }
-    }
-}
-
-async fn rollback_secret(
-    state: &AppState,
-    id: Uuid,
-    prior_secret: Option<zeroize::Zeroizing<String>>,
-) {
-    let store = state.secret_store.clone();
-    let _ = task::spawn_blocking(move || match prior_secret {
-        Some(secret) => store.set(id, &secret),
-        None => store.delete(id),
-    })
-    .await;
+    updated.map(Json).map_err(map_catalog_error)
 }
 
 async fn list_targets(
