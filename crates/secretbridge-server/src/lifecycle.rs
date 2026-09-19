@@ -50,6 +50,10 @@ pub(super) async fn handle(
         "install" if arguments.len() == 2 => {
             installation::install(Path::new(&arguments[1])).await?;
         }
+        "verify-package" if arguments.len() == 2 => {
+            let verification = installation::verify(Path::new(&arguments[1]))?;
+            println!("{}", serde_json::to_string_pretty(&verification)?);
+        }
         "rollback" if arguments.len() == 1 => {
             installation::rollback().await?;
         }

@@ -165,7 +165,7 @@ fn parse_startup_mode(arguments: &[impl AsRef<OsStr>]) -> Result<StartupMode, &'
         [argument] if argument.as_ref() == OsStr::new("--mcp-stdio") => Ok(StartupMode::McpStdio),
         [argument] if argument.as_ref() == OsStr::new("--serve") => Ok(StartupMode::Broker),
         _ => Err(
-            "usage: secretbridge-server [start [--no-open] | open | stop | status | install PACKAGE | rollback | autostart on|off | uninstall | --serve | --mcp-stdio]",
+            "usage: secretbridge-server [start [--no-open] | open | stop | status | verify-package PACKAGE | install PACKAGE | rollback | autostart on|off | uninstall | --serve | --mcp-stdio]",
         ),
     }
 }

@@ -78,7 +78,7 @@ The English and Chinese homepages cover the same product scope. Detailed enginee
 
 ## Run the development prototype
 
-The launcher starts a detached broker. Use `start --no-open`, `open`, `status` and `stop` for explicit control, or `--serve` for foreground debugging. Native versioned installation, upgrade/rollback, per-user login startup and data-retaining uninstall are described in the [delivery guide](docs/后台运行与安装交付.md). Portable packages include matching Web assets, corresponding source and third-party license texts; they are currently unsigned development builds.
+The launcher starts a detached broker. Use `start --no-open`, `open`, `status` and `stop` for explicit control, or `--serve` for foreground debugging. Native versioned installation, upgrade/rollback, per-user login startup and data-retaining uninstall are described in the [delivery guide](docs/后台运行与安装交付.md). Portable packages include matching Web assets, corresponding source, license texts and a CycloneDX SBOM; `verify-package` validates an unpacked package before installation. See [artifact verification and SBOM](docs/发行物验证与SBOM.md). Packages are currently unsigned development builds.
 
 Install Node.js 24, pnpm 11 and the stable Rust 1.98 toolchain or newer:
 
