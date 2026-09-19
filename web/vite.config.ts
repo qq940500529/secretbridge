@@ -4,9 +4,31 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
+const packageVersion = (
+  JSON.parse(
+    readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+  ) as { version: string }
+).version;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    {
+      name: "secretbridge-build-metadata",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "secretbridge-build.json",
+          source: JSON.stringify({
+            format_version: 1,
+            version: packageVersion,
+          }),
+        });
+      },
+    },
+  ],
   build: {
     target: "es2022",
     sourcemap: true,

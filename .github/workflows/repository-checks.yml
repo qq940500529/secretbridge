@@ -33,7 +33,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned
         with:
@@ -59,8 +59,25 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Test Rust workspace
+        env:
+          RUST_TEST_THREADS: 2
         run: cargo test --workspace --all-targets
       - name: Lint Rust workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check locked dependency licenses
         run: python tools/check_dependency_licenses.py
+      - name: Package matching native application and source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          executable=target/debug/secretbridge-server
+          if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
+          cargo build --locked
+          python tools/package_release.py --binary "$executable" --output dist/acceptance
+      - name: Test isolated native package lifecycle
+        shell: bash
+        run: |
+          for archive in dist/acceptance/*.zip dist/acceptance/*.tar.gz; do
+            if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
+          done

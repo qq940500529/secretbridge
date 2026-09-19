@@ -28,6 +28,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { consumePairingToken } from "./pairing";
+import { BackgroundServiceView } from "./BackgroundServiceView";
 
 const TerminalView = lazy(() =>
   import("./TerminalView").then((module) => ({ default: module.TerminalView })),
@@ -395,6 +396,18 @@ export function App() {
             {activePage === "settings" ? (
               <>
                 <SettingsView text={text} status={serviceStatus} />
+                {sessionToken && serviceStatus?.background_control_enabled && (
+                  <BackgroundServiceView
+                    sessionToken={sessionToken}
+                    language={language}
+                    onStopped={() => {
+                      setSessionToken(null);
+                      setAuthentication("unpaired");
+                      setConnection("offline");
+                      setServiceStatus(null);
+                    }}
+                  />
+                )}
                 {sessionToken && (
                   <Suspense
                     fallback={

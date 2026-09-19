@@ -16,6 +16,7 @@ export function EditorDialog({
   onOpen,
   onClose,
   busy = false,
+  triggerIcon,
   children,
 }: {
   title: string;
@@ -23,6 +24,7 @@ export function EditorDialog({
   onOpen: () => void;
   onClose: () => void;
   busy?: boolean;
+  triggerIcon?: ReactNode;
   children: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -54,7 +56,7 @@ export function EditorDialog({
         className="workbench-primary"
         onClick={onOpen}
       >
-        <Plus className="size-4" />
+        {triggerIcon ?? <Plus className="size-4" />}
         {title}
       </button>
       <dialog

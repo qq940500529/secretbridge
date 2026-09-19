@@ -533,6 +533,48 @@ const OP_READ_OUTPUT: &str = "read_run_output";
 const OP_CANCEL_RUN: &str = "cancel_run";
 const OP_LIST_RUN_EVENTS: &str = "list_run_events";
 const OP_TERMINAL: &str = "terminal";
+const OP_RUNTIME: &str = "runtime_control";
+
+/// Authenticated lifecycle client for the local CLI; not advertised as an MCP tool.
+pub struct BrokerController {
+    client: BridgeClient,
+}
+impl BrokerController {
+    /// Checks the authenticated bridge even if an older broker lacks runtime control.
+    pub async fn is_reachable(&self) -> bool {
+        self.client.health().await.is_ok()
+    }
+    #[must_use]
+    pub fn new(data_directory: &Path) -> Self {
+        Self {
+            client: BridgeClient::from_file(data_directory.join(BRIDGE_CONNECTION_FILE)),
+        }
+    }
+    /// Reads authenticated runtime state without returning connection or pairing tokens.
+    /// # Errors
+    /// Returns an error if the broker cannot be reached or rejects the request.
+    pub async fn status(&self) -> Result<crate::RuntimeStatus, ErrorData> {
+        self.client
+            .call(OP_RUNTIME, &crate::runtime::RuntimeRequest::Status)
+            .await
+    }
+    /// Opens a fresh one-time pairing URL in the broker's browser.
+    /// # Errors
+    /// Returns an error if the broker or browser is unavailable.
+    pub async fn open(&self) -> Result<crate::RuntimeStatus, ErrorData> {
+        self.client
+            .call(OP_RUNTIME, &crate::runtime::RuntimeRequest::Open)
+            .await
+    }
+    /// Requests graceful broker shutdown without acting on a saved PID.
+    /// # Errors
+    /// Returns an error if authenticated control is unavailable.
+    pub async fn stop(&self) -> Result<crate::RuntimeStatus, ErrorData> {
+        self.client
+            .call(OP_RUNTIME, &crate::runtime::RuntimeRequest::Stop)
+            .await
+    }
+}
 
 #[derive(Clone)]
 struct BridgeClient {
@@ -1027,6 +1069,18 @@ async fn dispatch_bridge_request(
     operation: &str,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, ErrorData> {
+    if operation == OP_RUNTIME {
+        return serialize_bridge_payload(
+            crate::runtime::handle(&state, parse_bridge_payload(payload)?).await?,
+        );
+    }
+    if state
+        .runtime_control
+        .as_ref()
+        .is_some_and(|control| control.stopping.is_cancelled())
+    {
+        return Err(ErrorData::internal_error("broker_stopping", None));
+    }
     let backend = McpBackend::Local(state);
     match operation {
         OP_HEALTH => {
@@ -1071,6 +1125,20 @@ async fn dispatch_bridge_request(
                 .await?,
         ),
         OP_TERMINAL => {
+            let _gate = match &backend {
+                McpBackend::Local(state) => {
+                    let gate = state.configuration_gate.read().await;
+                    if state
+                        .runtime_control
+                        .as_ref()
+                        .is_some_and(|control| control.stopping.is_cancelled())
+                    {
+                        return Err(ErrorData::internal_error("broker_stopping", None));
+                    }
+                    Some(gate)
+                }
+                McpBackend::Remote(_) => None,
+            };
             backend
                 .terminal_request(parse_bridge_payload(payload)?)
                 .await
@@ -1107,7 +1175,10 @@ fn safe_bridge_error_code(error: ErrorData) -> String {
         | "terminal_input_required"
         | "terminal_closed"
         | "terminal_spawn_failed"
-        | "terminal_unsupported_shell" => code,
+        | "terminal_unsupported_shell"
+        | "runtime_control_unavailable"
+        | "browser_open_failed"
+        | "broker_stopping" => code,
         _ => "secretbridge_operation_failed".to_owned(),
     }
 }

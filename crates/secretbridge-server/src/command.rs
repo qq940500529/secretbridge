@@ -834,7 +834,17 @@ pub(crate) mod tests {
             };
             let result = crate::create_run_for_state(&state, request).await.unwrap();
             let page = wait(&state, result.run.id).await;
-            assert_eq!(page.state, RunState::Succeeded, "{mode}");
+            assert_eq!(
+                page.state,
+                RunState::Succeeded,
+                "{mode}: code={:?}, exit={:?}",
+                state
+                    .catalog
+                    .get_synthetic_run(result.run.id)
+                    .unwrap()
+                    .result_status,
+                page.exit_code
+            );
             assert_eq!(page.exit_code, Some(0));
             let output = page
                 .items
@@ -1029,7 +1039,17 @@ pub(crate) mod tests {
             };
             let result = crate::create_run_for_state(&state, request).await.unwrap();
             let page = wait(&state, result.run.id).await;
-            assert_eq!(page.state, RunState::Succeeded);
+            assert_eq!(
+                page.state,
+                RunState::Succeeded,
+                "code={:?}, exit={:?}",
+                state
+                    .catalog
+                    .get_synthetic_run(result.run.id)
+                    .unwrap()
+                    .result_status,
+                page.exit_code
+            );
             let output = page
                 .items
                 .iter()
@@ -1195,7 +1215,13 @@ pub(crate) mod tests {
             assert_eq!(status, StatusCode::CREATED);
             let run = Uuid::parse_str(result["run"]["id"].as_str().unwrap()).unwrap();
             let page = wait(&state, run).await;
-            assert_eq!(page.state, RunState::Succeeded);
+            assert_eq!(
+                page.state,
+                RunState::Succeeded,
+                "code={:?}, exit={:?}",
+                state.catalog.get_synthetic_run(run).unwrap().result_status,
+                page.exit_code
+            );
             let output = page
                 .items
                 .iter()
