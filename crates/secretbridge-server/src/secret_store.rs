@@ -129,6 +129,7 @@ mod tests {
         store
             .set(entry.id, secret)
             .expect("write failure-path disposable secret");
+        drop(entry);
         Err("synthetic failure after native credential write")
     }
 

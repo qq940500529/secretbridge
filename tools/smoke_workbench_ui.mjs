@@ -261,6 +261,9 @@ try {
   );
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
   await page.getByRole("button", { name: "申请授权", exact: true }).click();
+  await page.waitForFunction(
+    () => document.querySelector("#approval-template")?.value === "task",
+  );
   assert.equal(
     await page.getByRole("dialog").getByLabel("操作模板").inputValue(),
     "task",

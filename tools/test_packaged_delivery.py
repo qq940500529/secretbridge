@@ -13,7 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener
 import uuid
 import zipfile
 from contextlib import closing
@@ -49,6 +49,7 @@ def accept(archive: Path) -> None:
                    SECRETBRIDGE_BIND="127.0.0.1:0", SECRETBRIDGE_WEB_ROOT=str(package / "web"),
                    APPDATA=str(workspace / "appdata"), HOME=str(workspace / "home"),
                    XDG_CONFIG_HOME=str(workspace / "xdg"))
+        loopback_opener = build_opener(ProxyHandler({}))
 
         def run(*args: str | Path, success: bool = True) -> dict:
             result = subprocess.run([str(binary), *(str(arg) for arg in args)], env=env, capture_output=True, timeout=45)
@@ -57,7 +58,7 @@ def accept(archive: Path) -> None:
 
         def web_text() -> str:
             origin = run("status")["runtime"]["origin"]
-            with urlopen(origin, timeout=5) as response:
+            with loopback_opener.open(origin, timeout=5) as response:
                 return response.read().decode("utf-8")
 
         def wait_stopped() -> None:
