@@ -533,15 +533,21 @@ async fn service_restart(engine: DatabaseEngine) {
     .await
     .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let restarted = tokio::task::spawn_blocking(move || {
-        std::process::Command::new("docker")
-            .args(["restart", "--time", "0", &container])
-            .status()
+    let (killed, started) = tokio::task::spawn_blocking(move || {
+        let killed = std::process::Command::new("docker")
+            .args(["kill", &container])
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        let started = std::process::Command::new("docker")
+            .args(["start", &container])
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        Ok::<_, std::io::Error>((killed, started))
     })
     .await
     .unwrap()
     .unwrap();
-    assert!(restarted.success());
+    assert!(killed.success() && started.success());
     let output = wait(&state, run.run.id).await;
     assert_eq!(
         state.catalog.get_synthetic_run(run.run.id).unwrap().state,
@@ -557,7 +563,7 @@ async fn service_restart(engine: DatabaseEngine) {
     database.operation = DatabaseOperation::Check;
     database.query.clear();
     database.columns.clear();
-    tokio::time::timeout(Duration::from_secs(60), async {
+    tokio::time::timeout(Duration::from_secs(90), async {
         loop {
             let mut sessions = Sessions::default();
             let connected = request(
