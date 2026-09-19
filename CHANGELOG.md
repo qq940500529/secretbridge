@@ -2,6 +2,9 @@
 
 ## 0.2.0-beta.3
 
+- Added Chromium, Firefox and WebKit workbench compatibility acceptance, axe-core accessibility checks, and cross-platform startup, local status latency and idle-memory baselines.
+- Added an explicit supported/experimental environment matrix and real-device boundaries for Windows DPI, Linux fractional scaling and Safari/Retina checks.
+- Changed create, edit, authorization and run dialogs into right-side drawers that slide left while retaining native dialog keyboard behavior, Escape handling, focus restoration and reduced-motion support.
 - Added deterministic refusal, response truncation and live transport interruption tests for HTTP, SSH, SFTP and Git, with fixed sanitized errors and bounded cleanup.
 - Extended the disposable PostgreSQL/MySQL acceptance environment to restart each real database during an in-flight query, verify a bounded failed result, and confirm the connector can reconnect afterward.
 - Added an eight-run concurrency acceptance that saturates the four-task personal-use budget, keeps catalog operations responsive, cancels queued and active work, verifies every permit is released, and executes a successful follow-up request.

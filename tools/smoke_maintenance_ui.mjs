@@ -2,14 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UI-only synthetic fixture: no credential-store writes or business connections.
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-const { chromium } = createRequire(import.meta.url)(
-  process.env.PLAYWRIGHT_MODULE || "playwright",
-);
-const browser = await chromium.launch({
-  headless: true,
-  channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
-});
+import { launchBrowser } from "./browser_test_support.mjs";
+const { browser } = await launchBrowser();
 try {
   const page = await browser.newPage({
     locale: "zh-CN",

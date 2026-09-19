@@ -36,7 +36,12 @@ a {
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
   outline: 3px solid rgba(14, 165, 233, 0.35);
   outline-offset: 2px;
 }
@@ -126,17 +131,52 @@ button:disabled {
   opacity: 0.6;
 }
 .workbench-dialog {
-  width: min(64rem, calc(100vw - 2rem));
-  max-height: calc(100dvh - 2rem);
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(44rem, calc(100vw - 3rem));
+  height: 100dvh;
+  max-width: none;
+  max-height: 100dvh;
+  margin: 0 0 0 auto;
   padding: 0;
-  border: 1px solid #cbd5e1;
-  border-radius: 0.75rem;
+  border: 0;
+  border-left: 1px solid #cbd5e1;
+  border-radius: 1rem 0 0 1rem;
   overflow: auto;
   color: #172033;
   background: white;
+  box-shadow: -1rem 0 2.5rem rgb(15 23 42 / 0.2);
+  opacity: 0;
+  transform: translateX(100%);
+  transition:
+    opacity 180ms ease-out,
+    transform 180ms ease-out,
+    overlay 180ms allow-discrete,
+    display 180ms allow-discrete;
+}
+.workbench-dialog[open] {
+  opacity: 1;
+  transform: translateX(0);
 }
 .workbench-dialog::backdrop {
   background: #0f172a80;
+  opacity: 0;
+  transition:
+    opacity 180ms ease-out,
+    overlay 180ms allow-discrete,
+    display 180ms allow-discrete;
+}
+.workbench-dialog[open]::backdrop {
+  opacity: 1;
+}
+@starting-style {
+  .workbench-dialog[open] {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  .workbench-dialog[open]::backdrop {
+    opacity: 0;
+  }
 }
 .workbench-master-detail {
   display: grid;
@@ -207,10 +247,15 @@ button:disabled {
 }
 @media (max-height: 600px) {
   .workbench-dialog {
-    max-height: calc(100dvh - 1rem);
+    max-height: 100dvh;
   }
 }
 @media (max-width: 640px) {
+  .workbench-dialog {
+    width: 100vw;
+    border-left: 0;
+    border-radius: 0;
+  }
   .app-sidebar {
     inset: auto 0 0;
     width: 100%;

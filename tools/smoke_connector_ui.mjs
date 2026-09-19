@@ -2,15 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UI-only fixture. Real authentication and operations are covered by Rust integration tests.
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
+import { launchBrowser } from "./browser_test_support.mjs";
 const url = process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799";
-const browser = await chromium.launch({
-  headless: true,
-  channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
-});
+const { browser } = await launchBrowser();
 try {
   const page = await browser.newPage({
     locale: "zh-CN",

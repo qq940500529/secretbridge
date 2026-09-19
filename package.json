@@ -12,6 +12,12 @@
     "build": "pnpm --dir web build",
     "dev:web": "pnpm --dir web dev",
     "test": "pnpm --dir web test",
+    "test:browser": "python tools/test_browser_acceptance.py",
+    "test:personal-scale": "python tools/test_personal_scale.py",
     "typecheck": "pnpm --dir web typecheck"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "playwright": "1.63.0"
   }
 }
