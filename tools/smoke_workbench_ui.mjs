@@ -190,6 +190,9 @@ try {
   const add = page.getByRole("button", { name: "添加凭据引用", exact: true });
   await add.click();
   const drawer = page.locator("dialog[data-presentation='side-drawer']");
+  await drawer.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
   const drawerBox = await drawer.boundingBox();
   assert.ok(drawerBox);
   const viewportWidths = await page.evaluate(() => [

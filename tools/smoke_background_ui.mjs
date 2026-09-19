@@ -8,6 +8,7 @@ try {
   for (const width of [1440, 390, 320]) {
     for (const english of [false, true]) {
       const page = await browser.newPage({
+        locale: "zh-CN",
         viewport: { width, height: 1000 },
         reducedMotion: "reduce",
       });
