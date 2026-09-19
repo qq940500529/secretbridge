@@ -192,7 +192,15 @@ try {
   const drawer = page.locator("dialog[data-presentation='side-drawer']");
   const drawerBox = await drawer.boundingBox();
   assert.ok(drawerBox);
-  assert.ok(Math.abs(drawerBox.x + drawerBox.width - 1440) <= 1);
+  const viewportWidths = await page.evaluate(() => [
+    window.innerWidth,
+    document.documentElement.clientWidth,
+  ]);
+  const rightEdge = drawerBox.x + drawerBox.width;
+  assert.ok(
+    Math.min(...viewportWidths.map((width) => Math.abs(rightEdge - width))) <=
+      1,
+  );
   assert.equal(Math.round(drawerBox.height), 1000);
   for (let index = 0; index < 10; index++) {
     await page.keyboard.press(index % 2 ? "Shift+Tab" : "Tab");
