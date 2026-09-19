@@ -3,19 +3,21 @@
 // UI-only fixture: no OS credential writes or business connections.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-const { chromium } = createRequire(import.meta.url)(
-  process.env.PLAYWRIGHT_MODULE || "playwright",
-);
-const browser = await chromium.launch({
-  headless: true,
-  channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
-});
+import {
+  assertNoSeriousAccessibilityViolations,
+  launchBrowser,
+} from "./browser_test_support.mjs";
+
+const require = createRequire(import.meta.url);
+const AxeBuilder = require("@axe-core/playwright").default;
+const { browser, name: browserName } = await launchBrowser();
 try {
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     locale: "zh-CN",
     reducedMotion: "reduce",
     viewport: { width: 1440, height: 1000 },
   });
+  const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const credentials = [],
@@ -187,6 +189,22 @@ try {
   await nav("凭据").click();
   const add = page.getByRole("button", { name: "添加凭据引用", exact: true });
   await add.click();
+  const drawer = page.locator("dialog[data-presentation='side-drawer']");
+  await drawer.evaluate((element) =>
+    Promise.all(element.getAnimations().map((animation) => animation.finished)),
+  );
+  const drawerBox = await drawer.boundingBox();
+  assert.ok(drawerBox);
+  const viewportWidths = await page.evaluate(() => [
+    window.innerWidth,
+    document.documentElement.clientWidth,
+  ]);
+  const rightEdge = drawerBox.x + drawerBox.width;
+  assert.ok(
+    Math.min(...viewportWidths.map((width) => Math.abs(rightEdge - width))) <=
+      1,
+  );
+  assert.equal(Math.round(drawerBox.height), 1000);
   for (let index = 0; index < 10; index++) {
     await page.keyboard.press(index % 2 ? "Shift+Tab" : "Tab");
     assert.equal(
@@ -203,6 +221,12 @@ try {
     true,
   );
   await page.keyboard.press("Escape");
+  const addHandle = await add.elementHandle();
+  await page.waitForFunction(
+    (button) => document.activeElement === button,
+    addHandle,
+    { timeout: 2_000 },
+  );
   assert.equal(
     await add.evaluate((button) => document.activeElement === button),
     true,
@@ -302,6 +326,86 @@ try {
     .getByRole("heading", { name: "Connections", exact: true })
     .waitFor();
   await page.getByRole("button", { name: "Switch to Chinese" }).click();
+  if (browserName === "chromium") {
+    const accessibility = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    assertNoSeriousAccessibilityViolations(accessibility, assert);
+
+    for (let index = 1; index < 100; index++) {
+      targets.push({
+        ...metadata,
+        id: `scale-target-${String(index).padStart(3, "0")}`,
+        name: `规模连接 ${String(index).padStart(3, "0")}`,
+        kind: "http_service",
+        environment: "test",
+        description: "个人本机规模验收数据",
+        credential_reference_id: null,
+        postgres: null,
+      });
+    }
+    for (let index = 1; index < 200; index++) {
+      tasks.push({
+        ...metadata,
+        id: `scale-task-${String(index).padStart(3, "0")}`,
+        target_id: `scale-target-${String((index % 99) + 1).padStart(3, "0")}`,
+        name: `规模任务 ${String(index).padStart(3, "0")}`,
+        operation: "synthetic_health_check",
+        result_scope: "status_only",
+        description: "个人本机规模验收数据",
+        timeout_seconds: 30,
+        enabled: true,
+        command: null,
+      });
+    }
+    for (let index = 1; index < 500; index++) {
+      runs.push({
+        ...metadata,
+        id: `scale-run-${String(index).padStart(3, "0")}`,
+        approval_id: "approval",
+        action_template_id: `scale-task-${String(((index - 1) % 198) + 1).padStart(3, "0")}`,
+        target_id: `scale-target-${String((index % 99) + 1).padStart(3, "0")}`,
+        target_version: 1,
+        operation: "synthetic_health_check",
+        result_scope: "status_only",
+        state: "succeeded",
+        result_status: "synthetic_ok",
+        started_at_unix_ms: now + index,
+        finished_at_unix_ms: now + index + 20,
+      });
+    }
+    runs.at(-1).action_template_id = "scale-task-199";
+    runs.at(-1).target_id = "scale-target-099";
+
+    const searchAndOpen = async (section, query, expected) => {
+      const started = performance.now();
+      await nav(section).click();
+      const records = page.getByRole("complementary", { name: "记录列表" });
+      await records.getByLabel("搜索记录").fill(query);
+      const match = records.getByRole("button", { name: new RegExp(expected) });
+      await match.waitFor();
+      await match.click();
+      await page
+        .getByRole("region", { name: "记录详情" })
+        .getByText(expected, { exact: true })
+        .waitFor();
+      const duration = performance.now() - started;
+      assert.ok(
+        duration <= 2_000,
+        `${section} search took ${duration.toFixed(1)} ms`,
+      );
+      return Math.round(duration * 10) / 10;
+    };
+    const scaleDurations = {
+      tasks_ms: await searchAndOpen("任务", "规模任务 199", "规模任务 199"),
+      connections_ms: await searchAndOpen("连接", "规模连接 099", "规模连接 099"),
+      history_ms: await searchAndOpen("历史", "规模任务 199", "规模连接 099"),
+    };
+    console.log(
+      `Personal-scale UI passed: 100 connections, 200 tasks and 500 runs (${JSON.stringify(scaleDurations)}).`,
+    );
+    await nav("连接").click();
+  }
   if (process.env.SECRETBRIDGE_UI_SCREENSHOT)
     await page.screenshot({
       path: process.env.SECRETBRIDGE_UI_SCREENSHOT.replace(
@@ -364,7 +468,7 @@ try {
   await page.getByRole("heading", { name: "请先配对本机服务" }).waitFor();
   assert.deepEqual(errors, []);
   console.log(
-    "Workbench UI smoke passed: six sections, credential/connection/task/authorization/run/result workflow, retry, focus, search, language, narrow layouts and unpairing.",
+    `Workbench UI smoke passed (${browserName}): six sections, credential/connection/task/authorization/run/result workflow, retry, focus, search, language, narrow layouts and unpairing.`,
   );
 } finally {
   await browser.close();

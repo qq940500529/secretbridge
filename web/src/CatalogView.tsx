@@ -447,7 +447,7 @@ export function CredentialReferencesView({
                     <ShieldCheck className="size-3.5" />
                     {text.states[item.secret_state]}
                   </span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                     {common.version} {item.version}
                   </span>
                 </div>
@@ -925,7 +925,7 @@ export function TargetsView({
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                     {environmentLabels[language][item.environment]}
                   </span>
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-500">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                     {common.version} {item.version}
                   </span>
                 </div>

@@ -38,7 +38,7 @@ One-time pairing, expiring/revocable page sessions and reconnectable real PTYs a
 
 ## How it works
 
-The browser workbench groups Credentials, Connections, Tasks, Terminal, History and Settings into searchable master-detail workflows with separate modal editors. Connection details link to task authorization and recent execution results. See the [workbench guide](docs/工作台使用说明.md).
+The browser workbench groups Credentials, Connections, Tasks, Terminal, History and Settings into searchable master-detail workflows with right-side drawer editors. Connection details link to task authorization and recent execution results. See the [workbench guide](docs/工作台使用说明.md).
 
 Native [HTTP credential tasks](docs/HTTP凭据任务.md) support fixed endpoints, authentication slots in headers or JSON bodies, ordinary parameters and selected response fields without exposing tokens to an assistant or requiring curl. HTTPS uses platform trust roots; status-only results are the default.
 

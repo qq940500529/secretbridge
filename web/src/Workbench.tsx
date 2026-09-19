@@ -34,18 +34,17 @@ export function EditorDialog({
   useEffect(() => {
     const element = dialog.current;
     if (open && element && !element.open) {
-      returnFocus.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
+      // WebKit does not consistently focus buttons activated with a pointer,
+      // so document.activeElement is not a reliable return target here.
+      returnFocus.current = trigger.current;
       element.showModal();
     }
     if (!open && element?.open) {
-      element.close();
-      (returnFocus.current?.isConnected
+      const target = returnFocus.current?.isConnected
         ? returnFocus.current
-        : trigger.current
-      )?.focus();
+        : trigger.current;
+      element.close();
+      requestAnimationFrame(() => target?.focus());
     }
   }, [open]);
   return (
@@ -54,7 +53,10 @@ export function EditorDialog({
         ref={trigger}
         type="button"
         className="workbench-primary"
-        onClick={onOpen}
+        onClick={() => {
+          returnFocus.current = trigger.current;
+          onOpen();
+        }}
       >
         {triggerIcon ?? <Plus className="size-4" />}
         {title}
@@ -62,13 +64,20 @@ export function EditorDialog({
       <dialog
         ref={dialog}
         aria-labelledby={heading}
+        data-presentation="side-drawer"
         className="workbench-dialog"
         onCancel={(event) => {
           event.preventDefault();
           if (!busy) onClose();
         }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            if (!busy) onClose();
+          }
+        }}
       >
-        <header className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4">
           <h2 id={heading} className="m-0 text-lg font-semibold">
             {title}
           </h2>

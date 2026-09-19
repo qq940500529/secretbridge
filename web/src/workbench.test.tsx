@@ -71,6 +71,7 @@ describe("workbench surfaces", () => {
     );
     expect(html).not.toContain("synthetic-only");
     expect(html).toContain("aria-labelledby=");
+    expect(html).toContain('data-presentation="side-drawer"');
   });
   it("keeps errors and fields available in an open editor", () => {
     const html = renderToStaticMarkup(

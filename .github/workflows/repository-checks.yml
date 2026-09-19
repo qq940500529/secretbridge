@@ -99,6 +99,12 @@ jobs:
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
           cargo build --locked
           python tools/package_release.py --binary "$executable" --output dist/acceptance
+      - name: Check personal-scale startup and idle resource baseline
+        shell: bash
+        run: |
+          executable=target/debug/secretbridge-server
+          if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
+          python tools/test_personal_scale.py --binary "$executable" --rounds 2
       - name: Test isolated native package lifecycle
         shell: bash
         run: |

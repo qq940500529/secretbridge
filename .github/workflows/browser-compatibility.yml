@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Browser compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-compatibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-compatibility:
+    name: Chromium, Firefox and WebKit acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, pinned
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4, pinned
+        with:
+          node-version: 24
+      - name: Install locked dependencies and browsers
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium firefox webkit
+      - name: Build Web application
+        run: pnpm build
+      - name: Run browser and accessibility acceptance
+        run: python tools/test_browser_acceptance.py
