@@ -83,8 +83,8 @@ jobs:
         env:
           RUST_TEST_THREADS: 2
         run: cargo test --workspace --all-targets
-      - name: Test Windows Credential Manager with a disposable entry
-        if: runner.os == 'Windows'
+      - name: Test native credential store with a disposable entry
+        if: runner.os == 'Windows' || runner.os == 'macOS'
         run: cargo test -p secretbridge-server native_store_round_trip_uses_a_disposable_entry -- --ignored --nocapture
       - name: Lint Rust workspace
         run: cargo clippy --workspace --all-targets -- -D warnings

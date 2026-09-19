@@ -105,15 +105,74 @@ mod tests {
 
     use super::{NativeSecretStore, SecretStore};
 
+    struct DisposableNativeEntry {
+        id: Uuid,
+    }
+
+    impl DisposableNativeEntry {
+        fn new() -> Self {
+            Self { id: Uuid::new_v4() }
+        }
+    }
+
+    impl Drop for DisposableNativeEntry {
+        fn drop(&mut self) {
+            let _ = NativeSecretStore.delete(self.id);
+        }
+    }
+
+    fn write_then_fail(
+        store: &NativeSecretStore,
+        entry: DisposableNativeEntry,
+        secret: &str,
+    ) -> Result<(), &'static str> {
+        store
+            .set(entry.id, secret)
+            .expect("write failure-path disposable secret");
+        drop(entry);
+        Err("synthetic failure after native credential write")
+    }
+
     #[test]
     #[ignore = "explicitly mutates the operating-system credential store"]
     fn native_store_round_trip_uses_a_disposable_entry() {
         let store = NativeSecretStore;
-        let id = Uuid::new_v4();
-        let secret = "secretbridge-native-store-synthetic-check";
-        store.set(id, secret).expect("write disposable secret");
-        let loaded = store.get(id);
-        let _ = store.delete(id);
-        assert_eq!(loaded.expect("read disposable secret").as_str(), secret);
+        let entry = DisposableNativeEntry::new();
+        let initial = "secretbridge-native-store-synthetic-initial";
+        let replacement = "secretbridge-native-store-synthetic-replacement";
+
+        store
+            .set(entry.id, initial)
+            .expect("write disposable secret");
+        assert_eq!(
+            store
+                .get(entry.id)
+                .expect("read disposable secret")
+                .as_str(),
+            initial
+        );
+        store
+            .set(entry.id, replacement)
+            .expect("overwrite disposable secret");
+        assert_eq!(
+            store
+                .get(entry.id)
+                .expect("read overwritten disposable secret")
+                .as_str(),
+            replacement
+        );
+        store.delete(entry.id).expect("delete disposable secret");
+        assert!(
+            store.get(entry.id).is_err(),
+            "deleted secret must be absent"
+        );
+
+        let failed_entry = DisposableNativeEntry::new();
+        let failed_id = failed_entry.id;
+        assert!(write_then_fail(&store, failed_entry, initial).is_err());
+        assert!(
+            store.get(failed_id).is_err(),
+            "failure-path disposable secret must be cleaned"
+        );
     }
 }
