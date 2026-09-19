@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #![forbid(unsafe_code)]
+mod lifecycle;
 
 use std::{
     env,
@@ -39,6 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_synthetic_terminal();
     }
     if run_maintenance(&arguments)? {
+        return Ok(());
+    }
+    if lifecycle::handle(&arguments).await? {
         return Ok(());
     }
     let startup_mode = parse_startup_mode(&arguments)?;
@@ -81,20 +85,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]);
     }
 
+    let web_root =
+        env::var_os("SECRETBRIDGE_WEB_ROOT").map_or_else(default_web_root, PathBuf::from);
+    lifecycle::validate_web_build(&web_root)?;
     let data_directory = data_directory()?;
     create_private_data_directory(&data_directory)?;
     let database_path = data_directory.join("secretbridge.sqlite3");
-    let (state, bootstrap_token) = AppState::new_persistent(trusted_origins, &database_path)?;
+    let (mut state, _) = AppState::new_persistent(trusted_origins, &database_path)?;
+    let cancellation = CancellationToken::new();
+    state.enable_runtime_control(origin, cancellation.clone());
     let bridge = LocalMcpBridge::bind(&data_directory, state.clone())?;
-    let web_root =
-        env::var_os("SECRETBRIDGE_WEB_ROOT").map_or_else(default_web_root, PathBuf::from);
     let app = router_with_web(state.clone(), web_root);
 
-    let pairing_url = format!("{origin}/#pair={bootstrap_token}");
-    webbrowser::open(&pairing_url)
-        .map_err(|error| format!("failed to open the pairing URL: {error}"))?;
     info!(%address, mode = "controlled_operations", "SecretBridge local broker started");
-    let cancellation = CancellationToken::new();
     let http_cancellation = cancellation.clone();
     let http_service = async move {
         axum::serve(listener, app)
@@ -106,16 +109,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::pin!(bridge_service);
     tokio::select! {
         result = &mut http_service => {
+            state.shutdown_operations().await;
             cancellation.cancel();
             result?;
             bridge_service.await?;
         }
         result = &mut bridge_service => {
+            state.shutdown_operations().await;
             cancellation.cancel();
             result?;
             http_service.await?;
         }
         () = shutdown_signal() => {
+            state.shutdown_operations().await;
             cancellation.cancel();
             http_service.await?;
             bridge_service.await?;
@@ -157,7 +163,10 @@ fn parse_startup_mode(arguments: &[impl AsRef<OsStr>]) -> Result<StartupMode, &'
     match arguments {
         [] => Ok(StartupMode::Broker),
         [argument] if argument.as_ref() == OsStr::new("--mcp-stdio") => Ok(StartupMode::McpStdio),
-        _ => Err("usage: secretbridge-server [--mcp-stdio]"),
+        [argument] if argument.as_ref() == OsStr::new("--serve") => Ok(StartupMode::Broker),
+        _ => Err(
+            "usage: secretbridge-server [start [--no-open] | open | stop | status | install PACKAGE | rollback | autostart on|off | uninstall | --serve | --mcp-stdio]",
+        ),
     }
 }
 
@@ -311,6 +320,14 @@ fn write_synthetic_flood(stdout: &mut impl Write, bytes: usize) -> io::Result<()
 }
 
 fn default_web_root() -> PathBuf {
+    if let Ok(executable) = env::current_exe()
+        && let Some(root) = executable.parent().and_then(Path::parent)
+    {
+        let packaged = root.join("web");
+        if packaged.join("secretbridge-build.json").is_file() {
+            return packaged;
+        }
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -325,6 +342,16 @@ fn application_log_target(target: &str) -> bool {
 }
 
 async fn shutdown_signal() {
+    #[cfg(unix)]
+    if let Ok(mut terminate) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+        return;
+    }
     let _ = tokio::signal::ctrl_c().await;
 }
 

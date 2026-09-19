@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Native packages
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    name: Native package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - name: Build Web application
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Verify source and dependency notices
+        run: |
+          python tools/check_repository.py
+          python tools/check_dependency_licenses.py
+      - name: Build native application
+        run: cargo build --release --locked
+      - name: Package executable, Web assets and corresponding source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          executable=target/release/secretbridge-server
+          if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
+          python tools/package_release.py --binary "$executable" --output dist/packages
+      - name: Verify native package
+        shell: bash
+        run: |
+          for archive in dist/packages/*.zip dist/packages/*.tar.gz; do
+            if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
+          done
+      - name: Retain unsigned native packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: secretbridge-${{ runner.os }}-${{ runner.arch }}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 30

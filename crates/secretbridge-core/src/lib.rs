@@ -31,6 +31,7 @@ pub struct StatusResponse {
     pub configuration_storage: ConfigurationStorage,
     pub paired: bool,
     pub real_credentials_enabled: bool,
+    pub background_control_enabled: bool,
 }
 
 impl StatusResponse {
@@ -43,6 +44,7 @@ impl StatusResponse {
             configuration_storage,
             paired,
             real_credentials_enabled: false,
+            background_control_enabled: false,
         }
     }
 
@@ -58,6 +60,7 @@ impl StatusResponse {
             configuration_storage,
             paired,
             real_credentials_enabled: true,
+            background_control_enabled: false,
         }
     }
 
@@ -73,6 +76,7 @@ impl StatusResponse {
             configuration_storage,
             paired,
             real_credentials_enabled: true,
+            background_control_enabled: false,
         }
     }
 }

@@ -8,6 +8,15 @@ export interface ServiceStatus {
   configuration_storage: ConfigurationStorage;
   paired: boolean;
   real_credentials_enabled: boolean;
+  background_control_enabled?: boolean;
+}
+
+export async function stopBroker(token: string): Promise<void> {
+  const response = await fetch("/api/v1/runtime/stop", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (response.status !== 202) throw new Error("broker_stop_failed");
 }
 
 export type ConfigurationStorage = "memory_only" | "sqlite";

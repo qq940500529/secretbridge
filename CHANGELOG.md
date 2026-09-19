@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0-beta.1
+
+- Added detached native start/open/status/stop commands using the authenticated local IPC channel. Closing the launcher no longer owns the broker lifetime, and pairing tokens stay out of CLI results.
+- Added graceful cancellation, page-session revocation and owned terminal cleanup, rejection of new work during shutdown, Unix termination handling, and a confirmed Web settings stop control.
+- Added checksum-verified immutable version installations, matching executable/Web/schema validation, activation failure recovery and previous-release rollback without overwriting configuration data.
+- Added explicit per-user login startup controls for Windows, Linux desktop sessions and macOS, ownership-checked startup files and transactional restoration on write failures.
+- Added manifest-scoped uninstall with default data retention and an explicit catalog-removal option; operating-system credentials and unknown files remain untouched.
+- Added native package generation with corresponding source snapshots, third-party license texts and SHA-256 sidecars, three-platform isolated lifecycle acceptance and an unsigned release-build workflow.
+- Desktop login/reboot observation, signing and clean-machine usability acceptance remain separate from process-level CI tests.
+
 ## 0.1.0-alpha.32
 
 - Added settings workflows for non-secret configuration export, read-only import preflight and explicit confirmation, remapping imported UUIDs and credential slots without replacing existing records.

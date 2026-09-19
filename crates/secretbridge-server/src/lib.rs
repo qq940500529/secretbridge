@@ -14,6 +14,7 @@ mod mcp;
 mod parameters;
 mod postgres;
 mod redaction;
+mod runtime;
 mod secret_store;
 mod sftp_task;
 mod ssh_task;
@@ -21,7 +22,9 @@ mod terminal;
 mod terminal_control;
 
 pub use maintenance::{BackupReport, inspect_configuration_backup, restore_configuration_backup};
+pub use mcp::BrokerController;
 pub use mcp::LocalMcpBridge;
+pub use runtime::RuntimeStatus;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -97,6 +100,7 @@ pub struct AppState {
     command_directory: Arc<PathBuf>,
     command_capacity: Arc<tokio::sync::Semaphore>,
     changes: broadcast::Sender<()>,
+    runtime_control: Option<Arc<runtime::RuntimeControl>>,
 }
 
 #[derive(Debug)]
@@ -202,6 +206,7 @@ impl AppState {
             run_cancellations: RunCancellations::default(),
             secret_store,
             changes: terminals.change_notifier(),
+            runtime_control: None,
             terminals,
             terminal_controls: terminal_control::TerminalControls::default(),
             command_directory: Arc::new(
@@ -219,6 +224,51 @@ impl AppState {
             .await
             .insert(token_digest(&token), Instant::now() + SESSION_TTL);
         (token, SESSION_TTL.as_secs())
+    }
+
+    /// Enables authenticated native lifecycle control without exposing it as an MCP tool.
+    pub fn enable_runtime_control(&mut self, origin: String, cancellation: CancellationToken) {
+        self.runtime_control = Some(Arc::new(runtime::RuntimeControl {
+            origin,
+            cancellation,
+            stopping: CancellationToken::new(),
+        }));
+    }
+
+    /// Cancels running operations and stops owned terminal processes during broker shutdown.
+    pub async fn shutdown_operations(&self) {
+        if let Some(control) = &self.runtime_control {
+            control.stopping.cancel();
+        }
+        let sessions: Vec<_> = self
+            .session_tokens
+            .write()
+            .await
+            .drain()
+            .map(|(digest, _)| digest)
+            .collect();
+        for digest in sessions {
+            let _ = self.session_revocations.send(digest);
+        }
+        for (_, token) in self.run_cancellations.active.lock().await.values() {
+            token.cancel();
+        }
+        // Cancel running readers before acquiring the configuration writer.
+        // Then include creations which were already in flight when stopping began.
+        let gate = self.configuration_gate.write().await;
+        for (_, token) in self.run_cancellations.active.lock().await.values() {
+            token.cancel();
+        }
+        drop(gate);
+        for terminal in self.terminals.list() {
+            let _ = self.terminals.remove(terminal.id);
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(10), async {
+            while !self.run_cancellations.active.lock().await.is_empty() {
+                sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await;
     }
 
     async fn authenticate(&self, token: &str) -> Option<u64> {
@@ -551,6 +601,7 @@ pub fn router_with_web(state: AppState, web_root: impl AsRef<Path>) -> Router {
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/status", get(status))
+        .route("/api/v1/runtime/stop", post(runtime::stop_http))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session", get(session).delete(revoke_session))
         .route(
@@ -667,6 +718,14 @@ async fn notify_mutations(
             *request.method(),
             Method::GET | Method::HEAD | Method::OPTIONS
         );
+    if mutation
+        && state
+            .runtime_control
+            .as_ref()
+            .is_some_and(|control| control.stopping.is_cancelled())
+    {
+        return ApiError::PolicyDenied.into_response();
+    }
     let response = next.run(request).await;
     if mutation && response.status().is_success() {
         let _ = state.changes.send(());
@@ -772,10 +831,9 @@ fn apply_security_headers(router: Router) -> Router {
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
     let paired = state.active_session_count().await > 0;
-    Json(StatusResponse::controlled_operations(
-        paired,
-        state.configuration_storage,
-    ))
+    let mut status = StatusResponse::controlled_operations(paired, state.configuration_storage);
+    status.background_control_enabled = state.runtime_control.is_some();
+    Json(status)
 }
 
 async fn pair(
@@ -1332,6 +1390,14 @@ async fn create_run_for_state(
     state: &AppState,
     request: CreateSyntheticRun,
 ) -> Result<CreateRunOutcome, CatalogError> {
+    let _lifecycle = state.configuration_gate.read().await;
+    if state
+        .runtime_control
+        .as_ref()
+        .is_some_and(|control| control.stopping.is_cancelled())
+    {
+        return Err(CatalogError::PolicyDenied);
+    }
     let catalog = state.catalog.clone();
     let outcome = task::spawn_blocking(move || catalog.create_synthetic_run(&request))
         .await
@@ -1588,6 +1654,14 @@ async fn create_terminal(
     headers: HeaderMap,
     Json(request): Json<CreateTerminal>,
 ) -> Result<(StatusCode, Json<TerminalSummary>), ApiError> {
+    let _lifecycle = state.configuration_gate.read().await;
+    if state
+        .runtime_control
+        .as_ref()
+        .is_some_and(|control| control.stopping.is_cancelled())
+    {
+        return Err(ApiError::PolicyDenied);
+    }
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
     let terminals = state.terminals.clone();
