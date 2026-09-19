@@ -2,6 +2,8 @@
 
 ## 0.2.0-beta.2
 
+- Added a fail-closed dependency vulnerability gate using exact `cargo-audit 0.22.2` and `pnpm 11.23.0` versions for Rust and production Web lockfiles, with tested, exact-match exceptions limited to 90 days.
+- Updated the locked `rustls` dependency from 0.23.44 to 0.23.45 after the new gate detected `RUSTSEC-2026-0285`; no vulnerability exception was added.
 - Added a centralized synthetic credential canary matrix that scans normal APIs, filtered output, events, configuration export, diagnostics and SQLite backups across all four fixed-program injection modes, including cancellation and timeout cleanup of temporary credential files.
 - Added a Windows CI acceptance step that writes, reads and deletes a disposable Credential Manager entry without inspecting existing user credentials.
 - Added a read-only `verify-package` command that checks the package manifest, every payload digest, the Web/schema metadata contract and the bundled CycloneDX SBOM without executing package content. Executable version is checked by the trusted build and activation paths.
