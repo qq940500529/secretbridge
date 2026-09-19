@@ -57,7 +57,7 @@ python tools/verify_reproducible_packages.py dist/packages-a dist/packages-b
 
 ## 尚未覆盖
 
-当前开发包没有 Windows Authenticode、macOS Developer ID/公证或 Linux 发行仓库签名。正式签名需要版权方控制的真实证书、受限密钥和发布身份，不能由测试密钥替代。跨构建机编译器重现、漏洞数据库扫描结果和平台签名/公证将在后续发布验收中继续完成。
+开源版当前采用未签名发行包，不把 Windows Authenticode、macOS Developer ID/公证或 Linux 软件源签名作为 1.0 发布条件。使用者应通过官方发布入口、外层 SHA-256、包内清单、对应源码和 `verify-package` 共同检查下载及内容完整性；这些机制不能替代发行者身份签名。后续发布继续执行依赖漏洞、许可证、SBOM 和确定性打包检查。
 
 ---
 
