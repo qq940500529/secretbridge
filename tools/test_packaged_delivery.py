@@ -30,7 +30,8 @@ def rehash(package: Path) -> None:
 
 def accept(archive: Path) -> None:
     archive = archive.resolve()
-    with tempfile.TemporaryDirectory(prefix="secretbridge-delivery-") as temporary:
+    # macOS Unix sockets have a 104-byte pathname limit; keep the fixture root short.
+    with tempfile.TemporaryDirectory(prefix="sb-p-") as temporary:
         workspace = Path(temporary)
         extracted = workspace / "download"
         extracted.mkdir()
