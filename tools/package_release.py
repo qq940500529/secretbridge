@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import tomllib
 import uuid
 import zipfile
@@ -24,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import urlopen
 
@@ -317,18 +318,31 @@ def upstream_license(repository: str, commit: str) -> str:
                 raise ValueError("Unsupported upstream license encoding")
             raw = base64.b64decode(content["content"])
         else:
-            try:
-                with urlopen(url, timeout=20) as response:
-                    raw = response.read(1024 * 1024 + 1)
-            except HTTPError as error:
-                if error.code == 404:
-                    continue
-                raise
+            raw = download_upstream_license(url)
+            if raw is None:
+                continue
         if len(raw) > 1024 * 1024:
             raise ValueError("Upstream license file exceeds size limit")
         text = raw.decode("utf-8")
         return f"\n--- {url} (SHA-256 {hashlib.sha256(raw).hexdigest()}) ---\n{text}\n"
     raise ValueError(f"Pinned upstream license unavailable: {owner}/{repo}@{commit}")
+
+
+def download_upstream_license(url: str) -> bytes | None:
+    """Fetch a pinned license with bounded retries for transient transport failures."""
+    for attempt in range(3):
+        try:
+            with urlopen(url, timeout=20) as response:
+                return response.read(1024 * 1024 + 1)
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            failure: Exception = error
+        except (URLError, TimeoutError, ConnectionError) as error:
+            failure = error
+        if attempt < 2:
+            time.sleep(0.25 * (attempt + 1))
+    raise ValueError("Pinned upstream license download failed after 3 attempts") from failure
 
 
 def third_party_notices() -> str:

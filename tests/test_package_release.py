@@ -10,6 +10,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import URLError
 
 SPEC = importlib.util.spec_from_file_location(
     "package_release", Path(__file__).parents[1] / "tools/package_release.py"
@@ -54,6 +55,36 @@ class PackageReleaseTests(unittest.TestCase):
             package_release.upstream_license("https://github.com/example/project", "main")
         with self.assertRaises(ValueError):
             package_release.upstream_license("https://untrusted.invalid/example/project", "a" * 40)
+
+    def test_upstream_license_download_retries_transient_transport_failure(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def read(_limit):
+                return b"license fixture"
+
+        package_release.upstream_license.cache_clear()
+        with (
+            patch.object(package_release.shutil, "which", return_value=None),
+            patch.object(
+                package_release,
+                "urlopen",
+                side_effect=[URLError("temporary reset"), Response()],
+            ) as request,
+            patch.object(package_release.time, "sleep") as sleep,
+        ):
+            notice = package_release.upstream_license(
+                "https://github.com/example/project", "a" * 40
+            )
+        self.assertIn("license fixture", notice)
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(0.25)
+        package_release.upstream_license.cache_clear()
 
     def test_sbom_contains_native_and_web_runtime_components(self):
         with tempfile.TemporaryDirectory() as temporary:
