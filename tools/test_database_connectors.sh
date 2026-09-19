@@ -7,6 +7,17 @@ task_tmp=$(mktemp -d /tmp/secretbridge-db.XXXXXXXX)
 task_suffix=${task_tmp##*.}
 task_pg="secretbridge-pg-$task_suffix"
 task_mysql="secretbridge-mysql-$task_suffix"
+read -r task_pg_port task_mysql_port < <(python3 - <<'PY'
+import socket
+
+sockets = []
+for _ in range(2):
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    sockets.append(listener)
+print(*(listener.getsockname()[1] for listener in sockets))
+PY
+)
 cleanup() {
   docker rm -f "$task_pg" "$task_mysql" >/dev/null 2>&1 || true
   case "$task_tmp" in /tmp/secretbridge-db.*) rm -rf -- "$task_tmp" ;; esac
@@ -15,10 +26,10 @@ trap cleanup EXIT
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=SecretBridge local fixture CA' -keyout "$task_tmp/ca.key" -out "$task_tmp/ca.pem" 2>/dev/null
 openssl req -new -newkey rsa:2048 -nodes -subj '/CN=SecretBridge local fixture' -addext 'subjectAltName=IP:127.0.0.1' -keyout "$task_tmp/server.key" -out "$task_tmp/server.csr" 2>/dev/null
 openssl x509 -req -in "$task_tmp/server.csr" -CA "$task_tmp/ca.pem" -CAkey "$task_tmp/ca.key" -CAcreateserial -days 2 -copy_extensions copy -out "$task_tmp/server.pem" 2>/dev/null
-docker create --name "$task_pg" -p 127.0.0.1::5432 \
+docker create --name "$task_pg" -p "127.0.0.1:$task_pg_port:5432" \
   -e POSTGRES_USER=secretbridge -e POSTGRES_DB=secretbridge -e POSTGRES_PASSWORD=Synthetic_db_password_30 \
   postgres:17 bash -c 'chown postgres:postgres /tmp/server.key; chmod 600 /tmp/server.key; exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/server.pem -c ssl_key_file=/tmp/server.key' >/dev/null
-docker create --name "$task_mysql" -p 127.0.0.1::3306 \
+docker create --name "$task_mysql" -p "127.0.0.1:$task_mysql_port:3306" \
   -e MYSQL_DATABASE=secretbridge -e MYSQL_USER=secretbridge -e MYSQL_PASSWORD=Synthetic_db_password_30 -e MYSQL_ROOT_PASSWORD=Synthetic_root_fixture_30 \
   mysql:8.4 bash -c 'chown mysql:mysql /tmp/server.key; chmod 600 /tmp/server.key; exec docker-entrypoint.sh mysqld --log-bin-trust-function-creators=ON --ssl-ca=/tmp/ca.pem --ssl-cert=/tmp/server.pem --ssl-key=/tmp/server.key' >/dev/null
 for container in "$task_pg" "$task_mysql"; do
@@ -41,9 +52,9 @@ if [ "$task_ready" != true ]; then
   exit 1
 fi
 export SECRETBRIDGE_TEST_PG_PORT
-SECRETBRIDGE_TEST_PG_PORT=$(docker port "$task_pg" 5432/tcp | awk -F: '{print $NF}')
+SECRETBRIDGE_TEST_PG_PORT=$task_pg_port
 export SECRETBRIDGE_TEST_MYSQL_PORT
-SECRETBRIDGE_TEST_MYSQL_PORT=$(docker port "$task_mysql" 3306/tcp | awk -F: '{print $NF}')
+SECRETBRIDGE_TEST_MYSQL_PORT=$task_mysql_port
 export SECRETBRIDGE_TEST_DB_CA="$task_tmp/ca.pem"
 export SECRETBRIDGE_TEST_PG_CONTAINER="$task_pg"
 export SECRETBRIDGE_TEST_MYSQL_CONTAINER="$task_mysql"
