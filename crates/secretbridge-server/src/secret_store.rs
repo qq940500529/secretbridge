@@ -20,7 +20,9 @@ impl fmt::Display for SecretStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NotFound => "the credential entry does not exist",
-            Self::LockedOrDenied => "the operating-system credential store is locked or denied access",
+            Self::LockedOrDenied => {
+                "the operating-system credential store is locked or denied access"
+            }
             Self::Unavailable => "the operating-system credential store is unavailable",
         })
     }
@@ -38,7 +40,7 @@ pub trait SecretStore: Send + Sync {
 pub struct NativeSecretStore;
 
 impl NativeSecretStore {
-    fn map_error(error: KeyringError) -> SecretStoreError {
+    fn map_error(error: &KeyringError) -> SecretStoreError {
         match error {
             KeyringError::NoEntry => SecretStoreError::NotFound,
             KeyringError::NoStorageAccess(_) => SecretStoreError::LockedOrDenied,
@@ -48,7 +50,7 @@ impl NativeSecretStore {
 
     fn entry(credential_id: Uuid) -> Result<Entry, SecretStoreError> {
         Entry::new(KEYRING_SERVICE, &credential_id.to_string())
-            .map_err(Self::map_error)
+            .map_err(|error| Self::map_error(&error))
     }
 }
 
@@ -56,20 +58,20 @@ impl SecretStore for NativeSecretStore {
     fn set(&self, credential_id: Uuid, secret: &str) -> Result<(), SecretStoreError> {
         Self::entry(credential_id)?
             .set_password(secret)
-            .map_err(Self::map_error)
+            .map_err(|error| Self::map_error(&error))
     }
 
     fn get(&self, credential_id: Uuid) -> Result<Zeroizing<String>, SecretStoreError> {
         Self::entry(credential_id)?
             .get_password()
             .map(Zeroizing::new)
-            .map_err(Self::map_error)
+            .map_err(|error| Self::map_error(&error))
     }
 
     fn delete(&self, credential_id: Uuid) -> Result<(), SecretStoreError> {
         Self::entry(credential_id)?
             .delete_credential()
-            .map_err(Self::map_error)
+            .map_err(|error| Self::map_error(&error))
     }
 }
 

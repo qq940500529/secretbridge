@@ -123,7 +123,10 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let path = directory.join("secretbridge.sqlite3");
         let catalog = Catalog::open(&path).unwrap();
-        catalog.lock().pragma_update(None, "user_version", 15).unwrap();
+        catalog
+            .lock()
+            .pragma_update(None, "user_version", 15)
+            .unwrap();
         drop(catalog);
         assert!(matches!(
             Catalog::open(&path),

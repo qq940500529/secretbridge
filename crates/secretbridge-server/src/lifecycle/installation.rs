@@ -190,7 +190,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
             .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
         || manifest.platform != env::consts::OS
         || manifest.architecture != env::consts::ARCH
-        || manifest.schema_version != crate::catalog::SCHEMA_VERSION
+        || manifest.schema_version != secretbridge_core::SCHEMA_VERSION
         || manifest.files.len() > 8192
     {
         return Err("package_incompatible");
@@ -649,10 +649,7 @@ mod tests {
         fs::write(root.join("installer.lock"), b"stale synthetic marker").unwrap();
 
         let first = InstallLock::acquire(&root).expect("acquire stale lock file");
-        assert!(matches!(
-            InstallLock::acquire(&root),
-            Err("installer_busy")
-        ));
+        assert!(matches!(InstallLock::acquire(&root), Err("installer_busy")));
         drop(first);
         drop(InstallLock::acquire(&root).expect("reacquire released lock"));
 
@@ -670,7 +667,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").into(),
             platform: env::consts::OS.into(),
             architecture: env::consts::ARCH.into(),
-            schema_version: crate::catalog::SCHEMA_VERSION,
+            schema_version: secretbridge_core::SCHEMA_VERSION,
             files: Vec::new(),
         };
         let mut sbom = serde_json::json!({

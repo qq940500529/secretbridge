@@ -123,6 +123,16 @@ class RepositoryChecks(unittest.TestCase):
                     path.write_text("synthetic", encoding="utf-8")
                     self.assertEqual([], inspect_file(root, path))
 
+    def test_oversized_modules_and_documents_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rust = root / "large.rs"
+            rust.write_text("// line\n" * 2501, encoding="utf-8")
+            self.assertIn("large.rs: oversized-rust-module", inspect_file(root, rust))
+            document = root / "large.md"
+            document.write_text("text\n" * 241, encoding="utf-8")
+            self.assertIn("large.md: oversized-document", inspect_file(root, document))
+
     def test_required_files(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertTrue(check_repository(Path(directory)))

@@ -71,6 +71,8 @@ TEXT_SUFFIXES = {
     ".sh",
 }
 SKIP_PARTS = {".git", ".ruff_cache", "__pycache__", "dist", "node_modules", "target"}
+MAX_RUST_SOURCE_LINES = 2_500
+MAX_MARKDOWN_LINES = 240
 PATTERNS = {
     "private-key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "github-token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
@@ -152,6 +154,11 @@ def inspect_file(root: Path, path: Path) -> list[str]:
     except (UnicodeError, OSError):
         return [f"{label}: unreadable-text"]
     errors = [f"{label}: {name}" for name, pattern in PATTERNS.items() if pattern.search(content)]
+    line_count = len(content.splitlines())
+    if path.suffix == ".rs" and line_count > MAX_RUST_SOURCE_LINES:
+        errors.append(f"{label}: oversized-rust-module")
+    if path.suffix == ".md" and line_count > MAX_MARKDOWN_LINES:
+        errors.append(f"{label}: oversized-document")
     if path.suffix == ".md":
         body, structure_errors = markdown_structure(content)
         errors.extend(f"{label}: {rule}" for rule in structure_errors)

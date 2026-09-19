@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -213,6 +214,21 @@ def npm_findings(report: Any) -> list[Finding]:
     return sorted(set(findings))
 
 
+def current_npm_report(pnpm: str, attempts: int = 3) -> Any:
+    """Require a complete pnpm advisory report, retrying transient registry responses."""
+    for attempt in range(1, attempts + 1):
+        report = command_json([pnpm, "audit", "--prod", "--json"])
+        if (
+            isinstance(report, dict)
+            and isinstance(report.get("advisories"), dict)
+            and isinstance(report.get("metadata"), dict)
+        ):
+            return report
+        if attempt < attempts:
+            time.sleep(attempt)
+    raise RuntimeError("pnpm audit did not return a complete advisory report after 3 attempts")
+
+
 def scanner_versions(policy: dict[str, Any]) -> tuple[str, str]:
     cargo = shutil.which("cargo")
     pnpm = shutil.which("pnpm")
@@ -303,9 +319,7 @@ def main() -> int:
             else current_rustsec_report(cargo)
         )
         npm_report = (
-            read_json(args.npm_report.resolve())
-            if args.npm_report
-            else command_json([pnpm, "audit", "--prod", "--json"])
+            read_json(args.npm_report.resolve()) if args.npm_report else current_npm_report(pnpm)
         )
         findings = rust_findings(rust_report) + npm_findings(npm_report)
         blocked, accepted, unused = evaluate(findings, policy)
@@ -333,7 +347,7 @@ def main() -> int:
             f"{len(accepted)} time-bounded exceptions)."
         )
         return 0
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, RuntimeError, TypeError, ValueError, json.JSONDecodeError) as error:
         print(f"Dependency vulnerability policy failed: {error}")
         return 1
 

@@ -21,6 +21,7 @@ class ProjectMetadataTests(unittest.TestCase):
         (root / "web").mkdir()
         (root / "tools").mkdir()
         (root / "docs").mkdir()
+        (root / "crates/secretbridge-core/src").mkdir(parents=True)
         (root / "crates/secretbridge-server/src").mkdir(parents=True)
         (root / "Cargo.toml").write_text(
             '[workspace.package]\nversion = "1.2.3"\nrust-version = "1.98"\n', encoding="utf-8"
@@ -33,8 +34,12 @@ class ProjectMetadataTests(unittest.TestCase):
         (root / "web/package.json").write_text(
             json.dumps({"version": web_version}), encoding="utf-8"
         )
-        (root / "crates/secretbridge-server/src/catalog.rs").write_text(
+        (root / "crates/secretbridge-core/src/lib.rs").write_text(
             f"pub const SCHEMA_VERSION: i64 = {schema};\n", encoding="utf-8"
+        )
+        (root / "crates/secretbridge-server/src/catalog.rs").write_text(
+            "pub const SCHEMA_VERSION: i64 = secretbridge_core::SCHEMA_VERSION;\n",
+            encoding="utf-8",
         )
         (root / "tools/package_release.py").write_text(
             f'{{"schema_version": {schema}}}\n', encoding="utf-8"

@@ -1,10 +1,19 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
-use super::*;
 use rusqlite::backup::{Backup, StepResult};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     time::{Duration, Instant},
+};
+use uuid::Uuid;
+
+use super::{
+    ApprovalOperation, ApprovalResultScope, Catalog, CatalogError, CreateActionTemplate,
+    CreateCredentialReference, CreateTarget, CredentialKind, PostgresTargetConfig, SCHEMA_VERSION,
+    TargetEnvironment, TargetKind, ensure_capacity, now_unix_ms_i64, validate_command,
 };
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;

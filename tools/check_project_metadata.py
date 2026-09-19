@@ -32,8 +32,8 @@ def check(root: Path) -> str:
     node_version = (root / ".node-version").read_text(encoding="utf-8").strip()
     if not node_version.startswith("24."):
         fail("the RC Node.js toolchain must stay within the declared Node.js 24 engine")
-    catalog = (root / "crates/secretbridge-server/src/catalog.rs").read_text(encoding="utf-8")
-    match = re.search(r"SCHEMA_VERSION: i64 = (\d+);", catalog)
+    core = (root / "crates/secretbridge-core/src/lib.rs").read_text(encoding="utf-8")
+    match = re.search(r"SCHEMA_VERSION: i64 = (\d+);", core)
     if match is None:
         fail("SCHEMA_VERSION was not found")
     schema = int(match.group(1))
