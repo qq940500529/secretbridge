@@ -321,9 +321,9 @@ pub(super) fn summary() -> Result<serde_json::Value> {
         return Ok(serde_json::Value::Null);
     };
     let binary = match &installation.active {
-        Some(active) => Some(
-            safe_path(&root()?, &format!("releases/{active}"))?.join(binary_name()),
-        ),
+        Some(active) => {
+            Some(safe_path(&root()?, &format!("releases/{active}"))?.join(binary_name()))
+        }
         None => None,
     };
     Ok(
