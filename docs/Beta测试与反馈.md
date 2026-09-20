@@ -6,7 +6,7 @@ SecretBridge 的自动化检查覆盖三平台构建、浏览器流程、真实�
 
 ## 最短测试流程
 
-1. 从[最新 Beta Release](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.5)下载匹配平台的包，核对 SHA-256 和包内清单。
+1. 从[最新 Beta Release](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.6)下载匹配平台的包，核对 SHA-256 和包内清单。
 2. 按[安装与后台运行](后台运行与安装交付.md)完成安装和首次启动，阅读并同意双语[许可协议与免责协议](最终用户许可与免责声明.md)。
 3. 只创建一次性合成凭据，验证写入、覆盖、删除和删除后不可用。
 4. 建立合成任务，分别验证批准、拒绝、超时、取消、输出脱敏和审计记录。
