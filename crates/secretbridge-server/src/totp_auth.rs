@@ -10,6 +10,8 @@ use super::{
     map_catalog_error, map_secret_store_error, record_authentication_failure, require_session,
     reset_authentication_attempts, task, validate_origin,
 };
+use base64::Engine as _;
+use qrcodegen::{QrCode, QrCodeEcc};
 use subtle::ConstantTimeEq;
 use totp_rs::{Algorithm, Builder, Secret, Totp};
 use zeroize::Zeroizing;
@@ -53,11 +55,55 @@ pub fn generate_setup() -> Result<SetupMaterial, ()> {
         .build()
         .map_err(|_| ())?;
     let secret = Zeroizing::new(totp.secret().to_base32());
-    let qr_code_base64 = Zeroizing::new(totp.to_qr_base64().map_err(|_| ())?);
+    let provisioning_uri = Zeroizing::new(totp.to_url().map_err(|_| ())?);
+    let qr_code =
+        QrCode::encode_text(provisioning_uri.as_str(), QrCodeEcc::Medium).map_err(|_| ())?;
+    let qr_code_base64 = render_qr_png(&qr_code)?;
     Ok(SetupMaterial {
         secret,
         qr_code_base64,
     })
+}
+
+fn render_qr_png(qr_code: &QrCode) -> Result<Zeroizing<String>, ()> {
+    const SCALE: u32 = 8;
+    const QUIET_ZONE: u32 = 4;
+    let modules = u32::try_from(qr_code.size()).map_err(|_| ())?;
+    let width = modules
+        .checked_add(QUIET_ZONE * 2)
+        .and_then(|value| value.checked_mul(SCALE))
+        .ok_or(())?;
+    let pixel_count = width.checked_mul(width).ok_or(())?;
+    let mut pixels = Zeroizing::new(vec![255_u8; usize::try_from(pixel_count).map_err(|_| ())?]);
+    for module_y in 0..modules {
+        for module_x in 0..modules {
+            if !qr_code.get_module(
+                i32::try_from(module_x).map_err(|_| ())?,
+                i32::try_from(module_y).map_err(|_| ())?,
+            ) {
+                continue;
+            }
+            let start_x = (module_x + QUIET_ZONE) * SCALE;
+            let start_y = (module_y + QUIET_ZONE) * SCALE;
+            for pixel_y in start_y..start_y + SCALE {
+                for pixel_x in start_x..start_x + SCALE {
+                    let index = usize::try_from(pixel_y * width + pixel_x).map_err(|_| ())?;
+                    pixels[index] = 0;
+                }
+            }
+        }
+    }
+    let mut output = Zeroizing::new(Vec::new());
+    {
+        let mut encoder = png::Encoder::new(&mut *output, width, width);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|_| ())?;
+        writer.write_image_data(&pixels).map_err(|_| ())?;
+    }
+    Ok(Zeroizing::new(
+        base64::engine::general_purpose::STANDARD.encode(output.as_slice()),
+    ))
 }
 
 pub fn verify(secret_base32: &str, code: &str, now_seconds: u64) -> Option<u64> {
@@ -304,7 +350,11 @@ pub(super) async fn confirm_setup(
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCEPTED_PAST_STEPS, STEP_SECONDS, build, verify};
+    use std::io::Cursor;
+
+    use base64::Engine as _;
+
+    use super::{ACCEPTED_PAST_STEPS, STEP_SECONDS, build, generate_setup, verify};
     use totp_rs::Secret;
 
     const RFC_SECRET: &[u8] = b"12345678901234567890";
@@ -329,5 +379,20 @@ mod tests {
         let encoded = Secret::from(RFC_SECRET).to_base32();
         assert_eq!(verify(&encoded, "12345", 0), None);
         assert_eq!(verify(&encoded, "12345x", 0), None);
+    }
+
+    #[test]
+    fn enrollment_qr_is_a_bounded_grayscale_png() {
+        let setup = generate_setup().expect("setup material");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(setup.qr_code_base64.as_bytes())
+            .expect("base64 QR");
+        let decoder = png::Decoder::new(Cursor::new(bytes));
+        let reader = decoder.read_info().expect("PNG header");
+        let info = reader.info();
+        assert_eq!(info.width, info.height);
+        assert!((200..=800).contains(&info.width));
+        assert_eq!(info.color_type, png::ColorType::Grayscale);
+        assert_eq!(info.bit_depth, png::BitDepth::Eight);
     }
 }
