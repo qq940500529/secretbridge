@@ -143,6 +143,10 @@ export function CredentialReferencesView({
           name: "引用名称",
           namePlaceholder: "例如：测试库只读账号",
           kind: "凭据类型",
+          address: "地址（可选）",
+          addressPlaceholder: "计算机名、域名、网址、SMB/FTP 地址或 IP",
+          username: "账号（可选）",
+          usernamePlaceholder: "用于登录的账号或用户名，不要填写密码",
           purpose: "用途说明（可选）",
           purposePlaceholder: "说明允许用于什么，不要填写任何秘密",
           listTitle: "已登记的引用",
@@ -163,6 +167,12 @@ export function CredentialReferencesView({
           name: "Reference name",
           namePlaceholder: "Example: test database read-only account",
           kind: "Credential type",
+          address: "Address (optional)",
+          addressPlaceholder:
+            "Computer name, domain, URL, SMB/FTP address, or IP",
+          username: "Account (optional)",
+          usernamePlaceholder:
+            "Login account or username; never enter a password",
           purpose: "Purpose (optional)",
           purposePlaceholder: "Describe the allowed use; never enter a secret",
           listTitle: "Registered references",
@@ -183,6 +193,8 @@ export function CredentialReferencesView({
   const [editorOpen, setEditorOpen] = useState(false);
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CredentialKind>("password");
+  const [address, setAddress] = useState("");
+  const [username, setUsername] = useState("");
   const [purpose, setPurpose] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
@@ -222,6 +234,8 @@ export function CredentialReferencesView({
       const request = {
         name,
         kind,
+        ...(address.trim() ? { address } : {}),
+        ...(username.trim() ? { username } : {}),
         ...(purpose.trim() ? { purpose } : {}),
       };
       if (editingId) {
@@ -347,6 +361,8 @@ export function CredentialReferencesView({
     setEditingVersion(item.version);
     setName(item.name);
     setKind(item.kind);
+    setAddress(item.address ?? "");
+    setUsername(item.username ?? "");
     setPurpose(item.purpose ?? "");
     setError(null);
   }
@@ -357,6 +373,8 @@ export function CredentialReferencesView({
     setEditingVersion(null);
     setName("");
     setKind("password");
+    setAddress("");
+    setUsername("");
     setPurpose("");
   }
 
@@ -413,6 +431,27 @@ export function CredentialReferencesView({
             )}
           </select>
         </Field>
+        <Field label={text.address} htmlFor="credential-address">
+          <input
+            id="credential-address"
+            maxLength={2048}
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            placeholder={text.addressPlaceholder}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={text.username} htmlFor="credential-username">
+          <input
+            id="credential-username"
+            maxLength={256}
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder={text.usernamePlaceholder}
+            className={inputClass}
+          />
+        </Field>
         <Field label={text.purpose} htmlFor="credential-purpose">
           <textarea
             id="credential-purpose"
@@ -463,6 +502,11 @@ export function CredentialReferencesView({
                 {item.purpose && (
                   <p className="mb-0 mt-2 break-words text-sm leading-6 text-slate-600">
                     {item.purpose}
+                  </p>
+                )}
+                {(item.username || item.address) && (
+                  <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
+                    {[item.username, item.address].filter(Boolean).join(" @ ")}
                   </p>
                 )}
               </div>
@@ -554,6 +598,10 @@ export function TargetsView({
           namePlaceholder: "例如：测试报表数据库",
           kind: "连接类型",
           environment: "环境",
+          address: "地址（可选）",
+          addressPlaceholder: "计算机名、域名、网址、SMB/FTP 地址或 IP",
+          username: "账号（可选）",
+          usernamePlaceholder: "连接使用的账号或用户名",
           description: "用途说明（可选）",
           descriptionPlaceholder: "说明业务用途，不要填写地址或秘密",
           credential: "关联凭据引用（可选）",
@@ -576,6 +624,11 @@ export function TargetsView({
           namePlaceholder: "Example: test reporting database",
           kind: "Connection type",
           environment: "Environment",
+          address: "Address (optional)",
+          addressPlaceholder:
+            "Computer name, domain, URL, SMB/FTP address, or IP",
+          username: "Account (optional)",
+          usernamePlaceholder: "Account or username used by this connection",
           description: "Purpose (optional)",
           descriptionPlaceholder:
             "Describe the business use; do not enter an address or secret",
@@ -597,6 +650,8 @@ export function TargetsView({
   const [kind, setKind] = useState<TargetKind>("database");
   const [environment, setEnvironment] = useState<TargetEnvironment>("test");
   const [description, setDescription] = useState("");
+  const [address, setAddress] = useState("");
+  const [username, setUsername] = useState("");
   const [credentialId, setCredentialId] = useState("");
   const [postgresHost, setPostgresHost] = useState("");
   const [postgresPort, setPostgresPort] = useState("5432");
@@ -647,6 +702,8 @@ export function TargetsView({
         name,
         kind,
         environment,
+        ...(address.trim() ? { address } : {}),
+        ...(username.trim() ? { username } : {}),
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
         ...(kind === "database" && postgresHost.trim()
@@ -723,6 +780,8 @@ export function TargetsView({
     setKind(item.kind);
     setEnvironment(item.environment);
     setDescription(item.description ?? "");
+    setAddress(item.address ?? "");
+    setUsername(item.username ?? "");
     setCredentialId(item.credential_reference_id ?? "");
     setPostgresHost(item.postgres?.host ?? "");
     setPostgresPort(String(item.postgres?.port ?? 5432));
@@ -739,6 +798,8 @@ export function TargetsView({
     setKind("database");
     setEnvironment("test");
     setDescription("");
+    setAddress("");
+    setUsername("");
     setCredentialId("");
     setPostgresHost("");
     setPostgresPort("5432");
@@ -819,6 +880,27 @@ export function TargetsView({
             </select>
           </Field>
         </div>
+        <Field label={text.address} htmlFor="target-address">
+          <input
+            id="target-address"
+            maxLength={2048}
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            placeholder={text.addressPlaceholder}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={text.username} htmlFor="target-username">
+          <input
+            id="target-username"
+            maxLength={256}
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder={text.usernamePlaceholder}
+            className={inputClass}
+          />
+        </Field>
         <Field label={text.credential} htmlFor="target-credential">
           <select
             id="target-credential"
@@ -957,6 +1039,11 @@ export function TargetsView({
                       text.noCredential)
                     : text.noCredential}
                 </p>
+                {(item.username || item.address) && (
+                  <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
+                    {[item.username, item.address].filter(Boolean).join(" @ ")}
+                  </p>
+                )}
                 {item.postgres && (
                   <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
                     {item.postgres.username}@{item.postgres.host}:

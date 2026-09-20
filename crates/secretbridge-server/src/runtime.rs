@@ -61,10 +61,19 @@ pub(crate) async fn handle(
             if control.stopping.is_cancelled() {
                 return Err(rmcp::ErrorData::internal_error("broker_stopping", None));
             }
-            // A new one-time bootstrap token is never returned to the CLI or MCP.
-            let token = crate::new_token();
-            *state.bootstrap_token.write().await = Some(crate::token_digest(&token));
-            let url = format!("{}/#pair={token}", control.origin);
+            // A new one-time bootstrap token is never returned to the CLI or MCP. When the user
+            // selected PIN verification, open the stable login page instead of invalidating an
+            // unconsumed pairing capability on every MCP request.
+            let url = if state.catalog.browser_auth_mode().map_err(|_| {
+                rmcp::ErrorData::internal_error("browser_auth_unavailable", None)
+            })? == crate::catalog::BrowserAuthMode::Pin
+            {
+                format!("{}/#login=pin", control.origin)
+            } else {
+                let token = crate::new_token();
+                *state.bootstrap_token.write().await = Some(crate::token_digest(&token));
+                format!("{}/#pair={token}", control.origin)
+            };
             tokio::task::spawn_blocking(move || webbrowser::open(&url))
                 .await
                 .map_err(|_| rmcp::ErrorData::internal_error("browser_open_failed", None))?

@@ -1089,6 +1089,8 @@ async fn approval_and_run_flow_requires_web_decision_and_returns_only_safe_data(
             kind: TargetKind::HttpService,
             environment: TargetEnvironment::Test,
             description: Some(SENSITIVE_MARKER.to_owned()),
+            address: Some("https://example.test".to_owned()),
+            username: Some("synthetic-user".to_owned()),
             credential_reference_id: None,
             postgres: None,
         })

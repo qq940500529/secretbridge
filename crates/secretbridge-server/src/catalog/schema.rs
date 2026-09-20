@@ -33,6 +33,8 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
                 kind TEXT NOT NULL CHECK (kind IN ('password', 'api_token', 'ssh_key')),
                 purpose TEXT CHECK (purpose IS NULL OR length(purpose) <= 240),
+                address TEXT CHECK (address IS NULL OR length(address) <= 2048),
+                username TEXT CHECK (username IS NULL OR length(username) <= 256),
                 secret_state TEXT NOT NULL CHECK (secret_state = 'not_configured'),
                 secret_configured INTEGER NOT NULL DEFAULT 0 CHECK (secret_configured IN (0, 1)),
                 secret_updated_at_unix_ms INTEGER,
@@ -46,6 +48,8 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host')),
                 environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
                 description TEXT CHECK (description IS NULL OR length(description) <= 240),
+                address TEXT CHECK (address IS NULL OR length(address) <= 2048),
+                username TEXT CHECK (username IS NULL OR length(username) <= 256),
                 credential_reference_id TEXT REFERENCES credential_references(id) ON DELETE RESTRICT,
                 postgres_host TEXT,
                 postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
@@ -58,6 +62,13 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              );
              CREATE INDEX targets_credential_reference_idx
                 ON targets(credential_reference_id);
+             CREATE TABLE browser_auth_settings (
+                singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                mode TEXT NOT NULL CHECK (mode IN ('pairing_link', 'pin')),
+                updated_at_unix_ms INTEGER NOT NULL
+             );
+             INSERT INTO browser_auth_settings(singleton, mode, updated_at_unix_ms)
+                VALUES(1, 'pairing_link', 0);
              CREATE TABLE action_templates (
                 id TEXT PRIMARY KEY NOT NULL,
                 target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
@@ -263,6 +274,50 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
     }
     if version < 16 {
         connection.pragma_update(None, "user_version", 16_i64)?;
+    }
+    if version < 17 {
+        let mut migration = String::from("BEGIN IMMEDIATE;");
+        for (table, column, definition) in [
+            (
+                "credential_references",
+                "address",
+                "TEXT CHECK (address IS NULL OR length(address) <= 2048)",
+            ),
+            (
+                "credential_references",
+                "username",
+                "TEXT CHECK (username IS NULL OR length(username) <= 256)",
+            ),
+            (
+                "targets",
+                "address",
+                "TEXT CHECK (address IS NULL OR length(address) <= 2048)",
+            ),
+            (
+                "targets",
+                "username",
+                "TEXT CHECK (username IS NULL OR length(username) <= 256)",
+            ),
+        ] {
+            if !column_exists(connection, table, column)? {
+                write!(
+                    &mut migration,
+                    "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+                )
+                .expect("writing a schema migration to String cannot fail");
+            }
+        }
+        migration.push_str(
+            "CREATE TABLE IF NOT EXISTS browser_auth_settings (
+                singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                mode TEXT NOT NULL CHECK (mode IN ('pairing_link', 'pin')),
+                updated_at_unix_ms INTEGER NOT NULL
+             );
+             INSERT OR IGNORE INTO browser_auth_settings(singleton, mode, updated_at_unix_ms)
+                VALUES(1, 'pairing_link', 0);",
+        );
+        migration.push_str("PRAGMA user_version = 17; COMMIT;");
+        connection.execute_batch(&migration)?;
     }
     Ok(())
 }

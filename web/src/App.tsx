@@ -22,10 +22,13 @@ import {
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import {
+  getBrowserAuthMethods,
   getSession,
   getStatus,
   pair,
+  pairWithPin,
   revokePageSession,
+  setBrowserAuthMethod,
   type ServiceStatus,
 } from "./api";
 import { consumePairingToken } from "./pairing";
@@ -208,6 +211,8 @@ const navItems: Array<{ id: Page; icon: LucideIcon }> = [
   { id: "settings", icon: Settings },
 ];
 
+const PAGE_SESSION_KEY = "secretbridge.page-session.v1";
+
 function stateLabel(value: Connection | Authentication, text: Copy): string {
   return text[value === "error" ? "authError" : value];
 }
@@ -223,6 +228,7 @@ export function App() {
     null,
   );
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [pinEnabled, setPinEnabled] = useState(false);
   const [activePage, setActivePage] = useState<Page>("operations");
   const [taskContext, setTaskContext] = useState<{
     targetId?: string;
@@ -254,16 +260,41 @@ export function App() {
         setServiceStatus(status);
         setConnection("online");
 
-        if (!bootstrapToken) return;
+        const savedSession = window.sessionStorage.getItem(PAGE_SESSION_KEY);
+        if (savedSession) {
+          try {
+            const session = await getSession(savedSession);
+            if (!active) return;
+            if (session.authenticated) {
+              setAuthentication("paired");
+              setSessionToken(savedSession);
+              return;
+            }
+          } catch {
+            window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+          }
+        }
 
-        setAuthentication("pairing");
-        const pairedSession = await pair(bootstrapToken);
-        const session = await getSession(pairedSession.session_token);
-        if (!active) return;
-        setAuthentication(session.authenticated ? "paired" : "error");
-        if (session.authenticated) setSessionToken(pairedSession.session_token);
-        const refreshedStatus = await getStatus();
-        if (active) setServiceStatus(refreshedStatus);
+        if (bootstrapToken) {
+          setAuthentication("pairing");
+          const pairedSession = await pair(bootstrapToken);
+          const session = await getSession(pairedSession.session_token);
+          if (!active) return;
+          setAuthentication(session.authenticated ? "paired" : "error");
+          if (session.authenticated) {
+            setSessionToken(pairedSession.session_token);
+            window.sessionStorage.setItem(
+              PAGE_SESSION_KEY,
+              pairedSession.session_token,
+            );
+          }
+          const refreshedStatus = await getStatus();
+          if (active) setServiceStatus(refreshedStatus);
+          return;
+        }
+
+        const methods = await getBrowserAuthMethods();
+        if (active) setPinEnabled(methods.pin_enabled);
       } catch {
         if (!active) return;
         setConnection("offline");
@@ -434,10 +465,19 @@ export function App() {
                     language={language}
                     onStopped={() => {
                       setSessionToken(null);
+                      window.sessionStorage.removeItem(PAGE_SESSION_KEY);
                       setAuthentication("unpaired");
                       setConnection("offline");
                       setServiceStatus(null);
                     }}
+                  />
+                )}
+                {sessionToken && (
+                  <BrowserAuthenticationSettings
+                    language={language}
+                    sessionToken={sessionToken}
+                    pinEnabled={pinEnabled}
+                    onChanged={setPinEnabled}
                   />
                 )}
                 {sessionToken && (
@@ -468,6 +508,7 @@ export function App() {
                         try {
                           await revokePageSession(sessionToken);
                           setSessionToken(null);
+                          window.sessionStorage.removeItem(PAGE_SESSION_KEY);
                           setAuthentication("unpaired");
                         } catch {
                           setDisconnectError(true);
@@ -534,7 +575,28 @@ export function App() {
                 />
               </Suspense>
             ) : (
-              <PairingRequired text={text} page={text[activePage]} />
+              <PairingRequired
+                text={text}
+                page={text[activePage]}
+                language={language}
+                pinEnabled={pinEnabled}
+                onPin={async (pin) => {
+                  setAuthentication("pairing");
+                  try {
+                    const response = await pairWithPin(pin);
+                    await getSession(response.session_token);
+                    setSessionToken(response.session_token);
+                    window.sessionStorage.setItem(
+                      PAGE_SESSION_KEY,
+                      response.session_token,
+                    );
+                    setAuthentication("paired");
+                  } catch {
+                    setAuthentication("error");
+                    throw new Error("pin_failed");
+                  }
+                }}
+              />
             )}
           </main>
         </div>
@@ -595,7 +657,23 @@ function StatusPill({
   );
 }
 
-function PairingRequired({ text, page }: { text: Copy; page: string }) {
+function PairingRequired({
+  text,
+  page,
+  language,
+  pinEnabled,
+  onPin,
+}: {
+  text: Copy;
+  page: string;
+  language: Language;
+  pinEnabled: boolean;
+  onPin: (pin: string) => Promise<void>;
+}) {
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const zh = language === "zh-CN";
   return (
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-dashed border-slate-300 bg-white/65 p-10 text-center">
       <div className="max-w-lg">
@@ -609,7 +687,151 @@ function PairingRequired({ text, page }: { text: Copy; page: string }) {
           {text.futureModule}
         </h1>
         <p className="mb-0 mt-3 leading-7 text-slate-600">{text.futureBody}</p>
+        {pinEnabled && (
+          <form
+            className="mx-auto mt-6 max-w-sm space-y-3 text-left"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              setBusy(true);
+              setFailed(false);
+              try {
+                await onPin(pin);
+                setPin("");
+              } catch {
+                setFailed(true);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <label
+              htmlFor="browser-pin"
+              className="block text-sm font-semibold text-slate-700"
+            >
+              {zh ? "本机 PIN 或口令" : "Local PIN or passphrase"}
+            </label>
+            <input
+              id="browser-pin"
+              type="password"
+              minLength={6}
+              maxLength={64}
+              required
+              autoComplete="current-password"
+              value={pin}
+              onChange={(event) => setPin(event.target.value)}
+              className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="workbench-button w-full"
+            >
+              {busy
+                ? zh
+                  ? "验证中…"
+                  : "Verifying…"
+                : zh
+                  ? "验证并进入"
+                  : "Verify and continue"}
+            </button>
+            {failed && (
+              <p role="alert" className="text-sm text-rose-700">
+                {zh
+                  ? "验证失败。连续错误会触发一分钟冷却。"
+                  : "Verification failed. Repeated failures trigger a one-minute cooldown."}
+              </p>
+            )}
+          </form>
+        )}
       </div>
+    </section>
+  );
+}
+
+function BrowserAuthenticationSettings({
+  language,
+  sessionToken,
+  pinEnabled,
+  onChanged,
+}: {
+  language: Language;
+  sessionToken: string;
+  pinEnabled: boolean;
+  onChanged: (enabled: boolean) => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const zh = language === "zh-CN";
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="m-0 text-lg font-semibold text-slate-950">
+        {zh ? "浏览器身份验证" : "Browser identity verification"}
+      </h2>
+      <p className="text-sm leading-6 text-slate-600">
+        {zh
+          ? "PIN/口令保存在操作系统凭据库。启用后，服务重启或页面会话失效时无需生成新的配对链接。不要把它交给 AI。"
+          : "The PIN/passphrase is stored in the OS credential store. After enabling it, a restart or expired page session can recover without a new pairing link. Never share it with an AI."}
+      </p>
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <input
+          type="password"
+          minLength={6}
+          maxLength={64}
+          value={pin}
+          onChange={(event) => setPin(event.target.value)}
+          placeholder={zh ? "至少 6 个字符" : "At least 6 characters"}
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
+        />
+        <button
+          type="button"
+          disabled={busy || pin.length < 6}
+          className="workbench-button"
+          onClick={async () => {
+            setBusy(true);
+            setMessage(null);
+            try {
+              await setBrowserAuthMethod(sessionToken, "pin", pin);
+              setPin("");
+              onChanged(true);
+              setMessage(zh ? "PIN/口令已启用。" : "PIN/passphrase enabled.");
+            } catch {
+              setMessage(zh ? "保存失败。" : "Could not save.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {zh ? "设置或更换" : "Set or change"}
+        </button>
+        {pinEnabled && (
+          <button
+            type="button"
+            disabled={busy}
+            className="workbench-button"
+            onClick={async () => {
+              setBusy(true);
+              setMessage(null);
+              try {
+                await setBrowserAuthMethod(sessionToken, "pairing_link");
+                onChanged(false);
+                setMessage(
+                  zh
+                    ? "已改回一次性配对链接。"
+                    : "Switched to one-time pairing links.",
+                );
+              } catch {
+                setMessage(zh ? "修改失败。" : "Could not change the method.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {zh ? "改用配对链接" : "Use pairing links"}
+          </button>
+        )}
+      </div>
+      {message && <p className="mb-0 mt-3 text-sm text-slate-600">{message}</p>}
     </section>
   );
 }

@@ -17,7 +17,12 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub(crate) mod maintenance;
+mod browser_auth;
+mod rows;
 mod schema;
+
+pub use browser_auth::BrowserAuthMode;
+use rows::{credential_from_row, target_from_row};
 
 pub(crate) const SCHEMA_VERSION: i64 = secretbridge_core::SCHEMA_VERSION;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
@@ -29,6 +34,8 @@ const MAX_ACTION_TEMPLATES: i64 = 256;
 const MAX_ACTIVE_RUNS: i64 = 1_024;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
+const MAX_ADDRESS_CHARS: usize = 2_048;
+const MAX_USERNAME_CHARS: usize = 256;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
 const MAX_APPROVAL_TTL_SECONDS: u64 = 3_600;
 const MAX_IDEMPOTENCY_KEY_CHARS: usize = 96;
@@ -115,6 +122,8 @@ pub struct CredentialReference {
     pub name: String,
     pub kind: CredentialKind,
     pub purpose: Option<String>,
+    pub address: Option<String>,
+    pub username: Option<String>,
     pub secret_state: SecretState,
     pub secret_updated_at_unix_ms: Option<u64>,
     pub created_at_unix_ms: u64,
@@ -159,6 +168,10 @@ pub struct CreateCredentialReference {
     name: String,
     kind: CredentialKind,
     purpose: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +180,10 @@ pub struct UpdateCredentialReference {
     name: String,
     kind: CredentialKind,
     purpose: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
     expected_version: u64,
 }
 
@@ -231,6 +248,8 @@ pub struct Target {
     pub kind: TargetKind,
     pub environment: TargetEnvironment,
     pub description: Option<String>,
+    pub address: Option<String>,
+    pub username: Option<String>,
     pub credential_reference_id: Option<Uuid>,
     pub postgres: Option<PostgresTargetConfig>,
     pub created_at_unix_ms: u64,
@@ -245,6 +264,10 @@ pub struct CreateTarget {
     pub(crate) kind: TargetKind,
     pub(crate) environment: TargetEnvironment,
     pub(crate) description: Option<String>,
+    #[serde(default)]
+    pub(crate) address: Option<String>,
+    #[serde(default)]
+    pub(crate) username: Option<String>,
     pub(crate) credential_reference_id: Option<Uuid>,
     pub(crate) postgres: Option<PostgresTargetConfig>,
 }
@@ -256,6 +279,10 @@ pub struct UpdateTarget {
     kind: TargetKind,
     environment: TargetEnvironment,
     description: Option<String>,
+    #[serde(default)]
+    address: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
     credential_reference_id: Option<Uuid>,
     postgres: Option<PostgresTargetConfig>,
     expected_version: u64,
@@ -682,7 +709,7 @@ impl Catalog {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT id, name, kind, purpose, secret_configured,
+                "SELECT id, name, kind, purpose, address, username, secret_configured,
                         secret_updated_at_unix_ms, created_at_unix_ms,
                         updated_at_unix_ms, version
                    FROM credential_references
@@ -702,6 +729,8 @@ impl Catalog {
     ) -> Result<CredentialReference, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let purpose = normalize_optional(request.purpose.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
+        let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
         let connection = self.lock();
         ensure_capacity(
             &connection,
@@ -713,14 +742,16 @@ impl Catalog {
         connection
             .execute(
                 "INSERT INTO credential_references
-                    (id, name, kind, purpose, secret_state, created_at_unix_ms,
+                    (id, name, kind, purpose, address, username, secret_state, created_at_unix_ms,
                      updated_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, 'not_configured', ?5, ?5, 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'not_configured', ?7, ?7, 1)",
                 params![
                     id.to_string(),
                     name,
                     request.kind.as_storage(),
                     purpose,
+                    address,
+                    username,
                     now
                 ],
             )
@@ -735,6 +766,8 @@ impl Catalog {
     ) -> Result<CredentialReference, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let purpose = normalize_optional(request.purpose.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
+        let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
         let connection = self.lock();
         let current = credential_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
         if current.secret_state == SecretState::Available && current.kind != request.kind {
@@ -743,13 +776,15 @@ impl Catalog {
         let changed = connection
             .execute(
                 "UPDATE credential_references
-                    SET name = ?1, kind = ?2, purpose = ?3,
-                        updated_at_unix_ms = ?4, version = version + 1
-                  WHERE id = ?5 AND version = ?6",
+                    SET name = ?1, kind = ?2, purpose = ?3, address = ?4, username = ?5,
+                        updated_at_unix_ms = ?6, version = version + 1
+                  WHERE id = ?7 AND version = ?8",
                 params![
                     name,
                     request.kind.as_storage(),
                     purpose,
+                    address,
+                    username,
                     now_unix_ms_i64()?,
                     id.to_string(),
                     i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?
@@ -932,7 +967,7 @@ impl Catalog {
         let connection = self.lock();
         let mut statement = connection
             .prepare(
-                "SELECT id, name, kind, environment, description,
+                "SELECT id, name, kind, environment, description, address, username,
                         credential_reference_id, postgres_host, postgres_port,
                         postgres_database, postgres_username, postgres_tls_mode,
                         created_at_unix_ms, updated_at_unix_ms, version
@@ -951,6 +986,8 @@ impl Catalog {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
+        let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
         let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_capacity(&connection, "targets", MAX_TARGETS)?;
@@ -960,17 +997,19 @@ impl Catalog {
         connection
             .execute(
                 "INSERT INTO targets
-                    (id, name, kind, environment, description,
+                    (id, name, kind, environment, description, address, username,
                      credential_reference_id, postgres_host, postgres_port,
                      postgres_database, postgres_username, postgres_tls_mode,
                      created_at_unix_ms, updated_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, 1)",
                 params![
                     id.to_string(),
                     name,
                     request.kind.as_storage(),
                     request.environment.as_storage(),
                     description,
+                    address,
+                    username,
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
@@ -990,6 +1029,8 @@ impl Catalog {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
+        let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
+        let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
         let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_credential_exists(&connection, request.credential_reference_id)?;
@@ -997,17 +1038,20 @@ impl Catalog {
             .execute(
                 "UPDATE targets
                     SET name = ?1, kind = ?2, environment = ?3,
-                        description = ?4, credential_reference_id = ?5,
-                        postgres_host = ?6, postgres_port = ?7,
-                        postgres_database = ?8, postgres_username = ?9,
-                        postgres_tls_mode = ?10,
-                        updated_at_unix_ms = ?11, version = version + 1
-                  WHERE id = ?12 AND version = ?13",
+                        description = ?4, address = ?5, username = ?6,
+                        credential_reference_id = ?7,
+                        postgres_host = ?8, postgres_port = ?9,
+                        postgres_database = ?10, postgres_username = ?11,
+                        postgres_tls_mode = ?12,
+                        updated_at_unix_ms = ?13, version = version + 1
+                  WHERE id = ?14 AND version = ?15",
                 params![
                     name,
                     request.kind.as_storage(),
                     request.environment.as_storage(),
                     description,
+                    address,
+                    username,
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
@@ -2011,7 +2055,7 @@ fn credential_by_id(
 ) -> Result<Option<CredentialReference>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, name, kind, purpose, secret_configured,
+            "SELECT id, name, kind, purpose, address, username, secret_configured,
                     secret_updated_at_unix_ms, created_at_unix_ms,
                     updated_at_unix_ms, version
                FROM credential_references WHERE id = ?1",
@@ -2022,32 +2066,10 @@ fn credential_by_id(
         .map_err(|_| CatalogError::Storage)
 }
 
-fn credential_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CredentialReference> {
-    let secret_configured = row.get::<_, bool>(4)?;
-    Ok(CredentialReference {
-        id: uuid_from_row(row, 0)?,
-        name: row.get(1)?,
-        kind: CredentialKind::from_storage(&row.get::<_, String>(2)?)?,
-        purpose: row.get(3)?,
-        secret_state: if secret_configured {
-            SecretState::Available
-        } else {
-            SecretState::NotConfigured
-        },
-        secret_updated_at_unix_ms: row
-            .get::<_, Option<i64>>(5)?
-            .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
-            .transpose()?,
-        created_at_unix_ms: u64_from_row(row, 6)?,
-        updated_at_unix_ms: u64_from_row(row, 7)?,
-        version: u64_from_row(row, 8)?,
-    })
-}
-
 fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, CatalogError> {
     connection
         .query_row(
-            "SELECT id, name, kind, environment, description,
+            "SELECT id, name, kind, environment, description, address, username,
                     credential_reference_id, postgres_host, postgres_port,
                     postgres_database, postgres_username, postgres_tls_mode,
                     created_at_unix_ms, updated_at_unix_ms, version
@@ -2057,40 +2079,6 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
         )
         .optional()
         .map_err(|_| CatalogError::Storage)
-}
-
-fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
-    let credential_id = row.get::<_, Option<String>>(5)?;
-    let postgres_host = row.get::<_, Option<String>>(6)?;
-    let postgres = postgres_host
-        .map(|host| {
-            let port = row
-                .get::<_, i64>(7)?
-                .try_into()
-                .map_err(|_| rusqlite::Error::InvalidQuery)?;
-            Ok::<PostgresTargetConfig, rusqlite::Error>(PostgresTargetConfig {
-                host,
-                port,
-                database: row.get(8)?,
-                username: row.get(9)?,
-                tls_mode: PostgresTlsMode::from_storage(&row.get::<_, String>(10)?)?,
-            })
-        })
-        .transpose()?;
-    Ok(Target {
-        id: uuid_from_row(row, 0)?,
-        name: row.get(1)?,
-        kind: TargetKind::from_storage(&row.get::<_, String>(2)?)?,
-        environment: TargetEnvironment::from_storage(&row.get::<_, String>(3)?)?,
-        description: row.get(4)?,
-        credential_reference_id: credential_id
-            .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
-            .transpose()?,
-        postgres,
-        created_at_unix_ms: u64_from_row(row, 11)?,
-        updated_at_unix_ms: u64_from_row(row, 12)?,
-        version: u64_from_row(row, 13)?,
-    })
 }
 
 fn action_template_by_id(

@@ -68,7 +68,7 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
-    ActionTemplate, Approval, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
+    ActionTemplate, Approval, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
     CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation,
     PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
@@ -84,6 +84,7 @@ use terminal::{
 
 const BEARER_PREFIX: &str = "Bearer ";
 const SESSION_TTL: Duration = Duration::from_mins(30);
+const BROWSER_PIN_CREDENTIAL_ID: Uuid = Uuid::from_u128(0x5e63_7265_7462_7269_6467_6570_696e_0001);
 const WEBSOCKET_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 8 * 1024;
@@ -93,6 +94,7 @@ pub struct AppState {
     bootstrap_token: Arc<RwLock<Option<[u8; 32]>>>,
     session_tokens: Arc<RwLock<HashMap<[u8; 32], Instant>>>,
     session_revocations: broadcast::Sender<[u8; 32]>,
+    pin_attempts: Arc<Mutex<PinAttempts>>,
     trusted_origins: Arc<HashSet<String>>,
     catalog: Catalog,
     configuration_storage: ConfigurationStorage,
@@ -203,6 +205,7 @@ impl AppState {
             bootstrap_token: Arc::new(RwLock::new(Some(token_digest(&bootstrap_token)))),
             session_tokens: Arc::new(RwLock::new(HashMap::new())),
             session_revocations,
+            pin_attempts: Arc::new(Mutex::new(PinAttempts::default())),
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
             catalog,
             configuration_storage,
@@ -307,6 +310,12 @@ impl AppState {
     }
 }
 
+#[derive(Default)]
+struct PinAttempts {
+    failures: u8,
+    blocked_until: Option<Instant>,
+}
+
 #[derive(Clone, Default)]
 struct RunCancellations {
     active: Arc<Mutex<HashMap<Uuid, (Uuid, CancellationToken)>>>,
@@ -360,6 +369,33 @@ struct PairResponse {
     session_token: String,
     token_type: &'static str,
     expires_in_seconds: u64,
+}
+
+#[derive(Serialize)]
+struct BrowserAuthMethodsResponse {
+    pin_enabled: bool,
+    pairing_link_enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinPairRequest {
+    pin: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum BrowserAuthMethod {
+    PairingLink,
+    Pin,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetBrowserAuthMethodRequest {
+    method: BrowserAuthMethod,
+    #[serde(default)]
+    pin: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -638,6 +674,9 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/status", get(status))
         .route("/api/v1/runtime/stop", post(runtime::stop_http))
         .route("/api/v1/session/pair", post(pair))
+        .route("/api/v1/session/pin", post(pair_with_pin))
+        .route("/api/v1/session/methods", get(browser_auth_methods))
+        .route("/api/v1/session/method", put(set_browser_auth_method))
         .route("/api/v1/session", get(session).delete(revoke_session))
         .route(
             "/api/v1/credential-references",
@@ -893,6 +932,96 @@ async fn pair(
         token_type: "Bearer",
         expires_in_seconds,
     }))
+}
+
+async fn browser_auth_methods(
+    State(state): State<AppState>,
+) -> Result<Json<BrowserAuthMethodsResponse>, ApiError> {
+    let mode = state.catalog.browser_auth_mode().map_err(map_catalog_error)?;
+    Ok(Json(BrowserAuthMethodsResponse {
+        pin_enabled: mode == BrowserAuthMode::Pin,
+        pairing_link_enabled: true,
+    }))
+}
+
+fn valid_browser_pin(pin: &str) -> bool {
+    let length = pin.chars().count();
+    (6..=64).contains(&length) && !pin.chars().any(char::is_control)
+}
+
+async fn pair_with_pin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<PinPairRequest>,
+) -> Result<Json<PairResponse>, ApiError> {
+    validate_origin(&headers, &state)?;
+    if state.catalog.browser_auth_mode().map_err(map_catalog_error)? != BrowserAuthMode::Pin
+        || !valid_browser_pin(&request.pin)
+    {
+        return Err(ApiError::Unauthorized);
+    }
+    {
+        let attempts = state.pin_attempts.lock().await;
+        if attempts.blocked_until.is_some_and(|until| until > Instant::now()) {
+            return Err(ApiError::Unauthorized);
+        }
+    }
+    let store = state.secret_store.clone();
+    let expected = task::spawn_blocking(move || store.get(BROWSER_PIN_CREDENTIAL_ID))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_secret_store_error)?;
+    let matches: bool = token_digest(&request.pin)
+        .ct_eq(&token_digest(expected.as_str()))
+        .into();
+    if !matches {
+        let mut attempts = state.pin_attempts.lock().await;
+        attempts.failures = attempts.failures.saturating_add(1);
+        if attempts.failures >= 5 {
+            attempts.blocked_until = Some(Instant::now() + Duration::from_secs(60));
+            attempts.failures = 0;
+        }
+        return Err(ApiError::Unauthorized);
+    }
+    *state.pin_attempts.lock().await = PinAttempts::default();
+    let (session_token, expires_in_seconds) = state.issue_session().await;
+    Ok(Json(PairResponse {
+        session_token,
+        token_type: "Bearer",
+        expires_in_seconds,
+    }))
+}
+
+async fn set_browser_auth_method(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SetBrowserAuthMethodRequest>,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let store = state.secret_store.clone();
+    match request.method {
+        BrowserAuthMethod::Pin => {
+            let pin = request.pin.filter(|value| valid_browser_pin(value)).ok_or(ApiError::BadRequest)?;
+            task::spawn_blocking(move || store.set(BROWSER_PIN_CREDENTIAL_ID, &pin))
+                .await
+                .map_err(|_| ApiError::Internal)?
+                .map_err(map_secret_store_error)?;
+            state
+                .catalog
+                .set_browser_auth_mode(BrowserAuthMode::Pin)
+                .map_err(map_catalog_error)?;
+        }
+        BrowserAuthMethod::PairingLink => {
+            state
+                .catalog
+                .set_browser_auth_mode(BrowserAuthMode::PairingLink)
+                .map_err(map_catalog_error)?;
+            let _ = task::spawn_blocking(move || store.delete(BROWSER_PIN_CREDENTIAL_ID)).await;
+        }
+    }
+    *state.pin_attempts.lock().await = PinAttempts::default();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn session(

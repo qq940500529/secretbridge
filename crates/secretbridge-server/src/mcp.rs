@@ -52,7 +52,7 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "SecretBridge provides approved credential-backed operations and ordinary persistent terminals. For credential-backed operations request approval and wait for the user in the Web console. Ordinary terminals accept non-secret commands only: never submit passwords or tokens, retrieve credential files, or use the shell to bypass credential-backed operations. Attach before reading or writing; input requires request_input=true. Read with next_cursor, not by re-executing commands. Writes are not automatically retried. Detach releases input without stopping the process; close terminates and removes it. The returned terminal exit code is the shell process exit code, not each command's exit code. Terminal bytes are ordinary unfiltered process output; credential injection and streaming redaction are not available on this path.";
+const SERVER_INSTRUCTIONS: &str = "Use SecretBridge only through these MCP tools. Never operate, automate, inspect, or approve through the SecretBridge Web console; that surface is reserved for the local human and may require a separate PIN or passphrase. Never ask the user to reveal that verifier. Read the non-secret credential and connection catalog to plan an operation, submit credential values only by opaque placeholders, then wait for the user to approve the exact request. Never retrieve credential files or use a shell to bypass a controlled operation. Terminal input and output must remain broker-mediated; use returned cursors, do not re-execute to recover output, and do not blindly retry writes.";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -128,6 +128,30 @@ impl McpBackend {
         }
     }
 
+    async fn list_catalog(&self) -> Result<CatalogSummary, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                let catalog = state.catalog.clone();
+                catalog_task(move || {
+                    Ok(CatalogSummary {
+                        credentials: catalog
+                            .list_credential_references()?
+                            .into_iter()
+                            .map(CredentialSummary::from)
+                            .collect(),
+                        connections: catalog
+                            .list_targets()?
+                            .into_iter()
+                            .map(ConnectionSummary::from)
+                            .collect(),
+                    })
+                })
+                .await
+            }
+            Self::Remote(client) => client.call(OP_LIST_CATALOG, &BridgeEmpty {}).await,
+        }
+    }
+
     async fn evaluate_policy(&self, params: IdentifierParams) -> Result<PolicySummary, ErrorData> {
         match self {
             Self::Local(state) => {
@@ -156,9 +180,80 @@ impl McpBackend {
                 };
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
                 let _ = state.changes.send(());
+                open_console_for_human(state).await;
                 Ok(ApprovalSummary::from(approval))
             }
             Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
+        }
+    }
+
+    async fn request_command(
+        &self,
+        params: RequestCommandParams,
+    ) -> Result<ApprovalSummary, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                let target_id = parse_uuid(&params.connection_id)?;
+                let catalog = state.catalog.clone();
+                let template = crate::catalog::CreateActionTemplate {
+                    command: Some(crate::command::CommandConfig {
+                        database: None,
+                        http: None,
+                        ssh: None,
+                        git: None,
+                        parameters: Vec::new(),
+                        program: params.program,
+                        working_directory: params.working_directory,
+                        arguments: params.arguments,
+                        slots: params
+                            .credential_slots
+                            .into_iter()
+                            .map(|slot| {
+                                Ok(crate::command::CredentialSlot {
+                                    name: slot.name,
+                                    credential_id: parse_uuid(&slot.credential_id)?,
+                                    injection: slot.injection.into(),
+                                    environment_variable: slot.environment_variable,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, ErrorData>>()?,
+                    }),
+                    target_id,
+                    name: params.name,
+                    operation: ApprovalOperation::CommandExecution,
+                    result_scope: ApprovalResultScope::SanitizedOutput,
+                    description: Some("One-time command draft requested through MCP".to_owned()),
+                    timeout_seconds: params.timeout_seconds,
+                };
+                let created = catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.create_action_template(&template)
+                })
+                .await?;
+                let request = CreateApproval {
+                    parameters: Default::default(),
+                    authorization_mode: params.authorization_mode,
+                    action_template_id: created.id,
+                    reason: Some("One-time command requested through MCP".to_owned()),
+                    expires_in_seconds: params.expires_in_seconds,
+                };
+                let approval = match catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.create_approval(&request)
+                })
+                .await
+                {
+                    Ok(approval) => approval,
+                    Err(error) => {
+                        let _ = catalog_task(move || catalog.delete_action_template(created.id)).await;
+                        return Err(error);
+                    }
+                };
+                let _ = state.changes.send(());
+                open_console_for_human(state).await;
+                Ok(ApprovalSummary::from(approval))
+            }
+            Self::Remote(client) => client.call(OP_REQUEST_COMMAND, &params).await,
         }
     }
 
@@ -253,6 +348,12 @@ impl McpBackend {
             }
             Self::Remote(client) => client.call(OP_LIST_RUN_EVENTS, &params).await,
         }
+    }
+}
+
+async fn open_console_for_human(state: &AppState) {
+    if state.runtime_control.is_some() {
+        let _ = crate::runtime::handle(state, crate::runtime::RuntimeRequest::Open).await;
     }
 }
 
@@ -380,6 +481,14 @@ impl SecretBridgeMcp {
     }
 
     #[tool(
+        name = "secretbridge_list_catalog",
+        description = "List non-secret credential and connection metadata for planning commands: opaque IDs, types, addresses, accounts, environments and availability only. Secret values are never returned."
+    )]
+    async fn list_catalog(&self) -> Result<McpJson<CatalogSummary>, ErrorData> {
+        Ok(McpJson(self.backend.list_catalog().await?))
+    }
+
+    #[tool(
         name = "secretbridge_evaluate_policy",
         description = "Evaluate the current server policy for one action template before requesting approval. Returns fixed reason codes and requirements only."
     )]
@@ -403,6 +512,17 @@ impl SecretBridgeMcp {
         Parameters(params): Parameters<RequestApprovalParams>,
     ) -> Result<McpJson<ApprovalSummary>, ErrorData> {
         Ok(McpJson(self.backend.request_approval(params).await?))
+    }
+
+    #[tool(
+        name = "secretbridge_request_command",
+        description = "Submit an exact non-shell command draft and credential placeholders for human approval without requiring a pre-existing template. This never accepts secret values and cannot approve or execute the draft."
+    )]
+    async fn request_command(
+        &self,
+        Parameters(params): Parameters<RequestCommandParams>,
+    ) -> Result<McpJson<ApprovalSummary>, ErrorData> {
+        Ok(McpJson(self.backend.request_command(params).await?))
     }
 
     #[tool(
@@ -524,8 +644,10 @@ const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 const OP_HEALTH: &str = "health";
 const OP_LIST_TEMPLATES: &str = "list_action_templates";
+const OP_LIST_CATALOG: &str = "list_catalog";
 const OP_EVALUATE_POLICY: &str = "evaluate_policy";
 const OP_REQUEST_APPROVAL: &str = "request_approval";
+const OP_REQUEST_COMMAND: &str = "request_command";
 const OP_GET_APPROVAL: &str = "get_approval";
 const OP_CREATE_RUN: &str = "create_run";
 const OP_GET_RUN: &str = "get_run";
@@ -1094,6 +1216,10 @@ async fn dispatch_bridge_request(
             parse_bridge_payload::<BridgeEmpty>(payload)?;
             serialize_bridge_payload(backend.list_action_templates().await?)
         }
+        OP_LIST_CATALOG => {
+            parse_bridge_payload::<BridgeEmpty>(payload)?;
+            serialize_bridge_payload(backend.list_catalog().await?)
+        }
         OP_EVALUATE_POLICY => serialize_bridge_payload(
             backend
                 .evaluate_policy(parse_bridge_payload(payload)?)
@@ -1102,6 +1228,11 @@ async fn dispatch_bridge_request(
         OP_REQUEST_APPROVAL => serialize_bridge_payload(
             backend
                 .request_approval(parse_bridge_payload(payload)?)
+                .await?,
+        ),
+        OP_REQUEST_COMMAND => serialize_bridge_payload(
+            backend
+                .request_command(parse_bridge_payload(payload)?)
                 .await?,
         ),
         OP_GET_APPROVAL => {
@@ -1484,6 +1615,61 @@ struct RequestApprovalParams {
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
+struct RequestCommandParams {
+    #[schemars(description = "Short human-readable label for this one-time command draft")]
+    name: String,
+    #[schemars(description = "Connection UUID returned by secretbridge_list_catalog")]
+    connection_id: String,
+    #[schemars(description = "Absolute executable path; never a shell command string")]
+    program: String,
+    #[schemars(description = "Existing absolute working directory")]
+    working_directory: String,
+    #[schemars(description = "Exact argv items; credential placeholders must occupy a complete item")]
+    arguments: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "Opaque credential bindings and injection modes; no secret values")]
+    credential_slots: Vec<DynamicCredentialSlot>,
+    #[serde(default)]
+    authorization_mode: crate::parameters::AuthorizationMode,
+    #[schemars(description = "Pending approval lifetime in seconds, from 60 through 3600")]
+    expires_in_seconds: u64,
+    #[schemars(description = "Maximum command runtime in seconds, from 1 through 300")]
+    timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DynamicCredentialSlot {
+    name: String,
+    #[schemars(description = "Credential UUID returned by secretbridge_list_catalog")]
+    credential_id: String,
+    injection: DynamicInjection,
+    #[serde(default)]
+    environment_variable: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DynamicInjection {
+    Stdin,
+    Environment,
+    Argument,
+    File,
+}
+
+impl From<DynamicInjection> for crate::command::Injection {
+    fn from(value: DynamicInjection) -> Self {
+        match value {
+            DynamicInjection::Stdin => Self::Stdin,
+            DynamicInjection::Environment => Self::Environment,
+            DynamicInjection::Argument => Self::Argument,
+            DynamicInjection::File => Self::File,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
 struct CreateRunParams {
     #[schemars(description = "Approved usable approval UUID")]
     approval_id: String,
@@ -1498,6 +1684,79 @@ struct CancelRunParams {
     run_id: String,
     #[schemars(description = "Current run version returned by get_run")]
     expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+struct CatalogSummary {
+    credentials: Vec<CredentialSummary>,
+    connections: Vec<ConnectionSummary>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+struct CredentialSummary {
+    id: String,
+    name: String,
+    kind: String,
+    address: Option<String>,
+    username: Option<String>,
+    configured: bool,
+    version: u64,
+}
+
+impl From<crate::catalog::CredentialReference> for CredentialSummary {
+    fn from(value: crate::catalog::CredentialReference) -> Self {
+        Self {
+            id: value.id.to_string(),
+            name: value.name,
+            kind: match value.kind {
+                crate::catalog::CredentialKind::Password => "password",
+                crate::catalog::CredentialKind::ApiToken => "api_token",
+                crate::catalog::CredentialKind::SshKey => "ssh_key",
+            }
+            .to_owned(),
+            address: value.address,
+            username: value.username,
+            configured: value.secret_state == crate::catalog::SecretState::Available,
+            version: value.version,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+struct ConnectionSummary {
+    id: String,
+    name: String,
+    kind: String,
+    environment: String,
+    address: Option<String>,
+    username: Option<String>,
+    credential_id: Option<String>,
+    version: u64,
+}
+
+impl From<crate::catalog::Target> for ConnectionSummary {
+    fn from(value: crate::catalog::Target) -> Self {
+        Self {
+            id: value.id.to_string(),
+            name: value.name,
+            kind: match value.kind {
+                crate::catalog::TargetKind::Database => "database",
+                crate::catalog::TargetKind::HttpService => "http_service",
+                crate::catalog::TargetKind::SshHost => "ssh_host",
+            }
+            .to_owned(),
+            environment: match value.environment {
+                crate::catalog::TargetEnvironment::Development => "development",
+                crate::catalog::TargetEnvironment::Test => "test",
+                crate::catalog::TargetEnvironment::Production => "production",
+            }
+            .to_owned(),
+            address: value.address,
+            username: value.username,
+            credential_id: value.credential_reference_id.map(|id| id.to_string()),
+            version: value.version,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]

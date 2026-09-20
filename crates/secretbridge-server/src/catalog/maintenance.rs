@@ -18,7 +18,7 @@ use super::{
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
-const TABLES: [&str; 9] = [
+const TABLES: [&str; 10] = [
     "credential_references",
     "targets",
     "action_templates",
@@ -28,6 +28,7 @@ const TABLES: [&str; 9] = [
     "command_slots",
     "run_output",
     "configuration_imports",
+    "browser_auth_settings",
 ];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -47,6 +48,10 @@ pub(crate) struct PortableCredential {
     pub name: String,
     pub kind: CredentialKind,
     pub purpose: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,6 +61,10 @@ pub(crate) struct PortableConnection {
     pub kind: TargetKind,
     pub environment: TargetEnvironment,
     pub description: Option<String>,
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
     pub credential_reference_id: Option<Uuid>,
     pub postgres: Option<PostgresTargetConfig>,
 }
@@ -151,6 +160,8 @@ impl Catalog {
                     name: item.name,
                     kind: item.kind,
                     purpose: item.purpose,
+                    address: item.address,
+                    username: item.username,
                 })
                 .collect(),
             connections: snapshot
@@ -162,6 +173,8 @@ impl Catalog {
                     kind: item.kind,
                     environment: item.environment,
                     description: item.description,
+                    address: item.address,
+                    username: item.username,
                     credential_reference_id: item.credential_reference_id,
                     postgres: item.postgres,
                 })
@@ -221,7 +234,7 @@ impl Catalog {
                 return Err(CatalogError::Invalid);
             }
             let request: CreateCredentialReference = serde_json::from_value(
-                serde_json::json!({"name":item.name,"kind":item.kind,"purpose":item.purpose}),
+                serde_json::json!({"name":item.name,"kind":item.kind,"purpose":item.purpose,"address":item.address,"username":item.username}),
             )
             .map_err(|_| CatalogError::Invalid)?;
             credentials.insert(item.id, staged.create_credential_reference(&request)?.id);
@@ -234,7 +247,7 @@ impl Catalog {
                 .credential_reference_id
                 .map(|id| credentials.get(&id).copied().ok_or(CatalogError::Invalid))
                 .transpose()?;
-            let request: CreateTarget = serde_json::from_value(serde_json::json!({"name":item.name,"kind":item.kind,"environment":item.environment,"description":item.description,"credential_reference_id":credential,"postgres":item.postgres})).map_err(|_| CatalogError::Invalid)?;
+            let request: CreateTarget = serde_json::from_value(serde_json::json!({"name":item.name,"kind":item.kind,"environment":item.environment,"description":item.description,"address":item.address,"username":item.username,"credential_reference_id":credential,"postgres":item.postgres})).map_err(|_| CatalogError::Invalid)?;
             targets.insert(item.id, staged.create_target(&request)?.id);
         }
         for item in &bundle.templates {

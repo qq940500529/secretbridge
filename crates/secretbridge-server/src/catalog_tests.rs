@@ -43,6 +43,8 @@ fn updates_increment_versions_and_preserve_relationships() {
                 name: "Updated synthetic operator".to_owned(),
                 kind: CredentialKind::ApiToken,
                 purpose: Some("Updated metadata only".to_owned()),
+                address: Some("https://api.example.test".to_owned()),
+                username: Some("automation".to_owned()),
                 expected_version: 1,
             },
         )
@@ -55,6 +57,8 @@ fn updates_increment_versions_and_preserve_relationships() {
                 kind: TargetKind::HttpService,
                 environment: TargetEnvironment::Development,
                 description: None,
+                address: Some("server.example.test".to_owned()),
+                username: Some("operator".to_owned()),
                 credential_reference_id: None,
                 postgres: None,
                 expected_version: 1,
@@ -73,6 +77,8 @@ fn updates_increment_versions_and_preserve_relationships() {
             name: "Stale edit".to_owned(),
             kind: CredentialKind::Password,
             purpose: None,
+            address: None,
+            username: None,
             expected_version: 1,
         },
     );
@@ -103,6 +109,8 @@ fn control_characters_and_unknown_links_are_rejected() {
         name: "unsafe\nname".to_owned(),
         kind: CredentialKind::ApiToken,
         purpose: None,
+        address: None,
+        username: None,
     });
     assert!(matches!(invalid, Err(CatalogError::Invalid)));
 
@@ -111,6 +119,8 @@ fn control_characters_and_unknown_links_are_rejected() {
         kind: TargetKind::HttpService,
         environment: TargetEnvironment::Development,
         description: None,
+        address: None,
+        username: None,
         credential_reference_id: Some(Uuid::new_v4()),
         postgres: None,
     });
@@ -301,6 +311,8 @@ fn postgres_target_configuration_is_bounded_and_database_only() {
             kind: TargetKind::Database,
             environment: TargetEnvironment::Test,
             description: None,
+            address: Some("db.test.example".to_owned()),
+            username: Some("secretbridge_reader".to_owned()),
             credential_reference_id: Some(credential.id),
             postgres: Some(PostgresTargetConfig {
                 host: "DB.TEST.EXAMPLE".to_owned(),
@@ -321,6 +333,8 @@ fn postgres_target_configuration_is_bounded_and_database_only() {
             kind: TargetKind::HttpService,
             environment: TargetEnvironment::Test,
             description: None,
+            address: None,
+            username: None,
             credential_reference_id: None,
             postgres: Some(PostgresTargetConfig {
                 host: "example.test".to_owned(),
@@ -347,6 +361,8 @@ fn postgres_connection_check_requires_configured_password_and_has_safe_results()
             kind: TargetKind::Database,
             environment: TargetEnvironment::Test,
             description: None,
+            address: Some("db.test.example".to_owned()),
+            username: Some("secretbridge_reader".to_owned()),
             credential_reference_id: Some(credential.id),
             postgres: Some(PostgresTargetConfig {
                 host: "db.test.example".to_owned(),
@@ -1253,6 +1269,8 @@ fn policy_evaluation_is_explainable_and_fails_closed_on_version_drift() {
                 kind: target.kind,
                 environment: target.environment,
                 description: Some("Changed after approval request".to_owned()),
+                address: target.address.clone(),
+                username: target.username.clone(),
                 credential_reference_id: target.credential_reference_id,
                 postgres: target.postgres.clone(),
                 expected_version: target.version,
@@ -1325,6 +1343,8 @@ fn create_credential(catalog: &Catalog) -> super::CredentialReference {
             name: "Synthetic database operator".to_owned(),
             kind: CredentialKind::Password,
             purpose: None,
+            address: Some("db.test.example".to_owned()),
+            username: Some("synthetic_reader".to_owned()),
         })
         .expect("synthetic reference")
 }
@@ -1336,6 +1356,8 @@ fn create_target(catalog: &Catalog, credential_id: Uuid) -> super::Target {
             kind: TargetKind::Database,
             environment: TargetEnvironment::Test,
             description: None,
+            address: Some("db.test.example".to_owned()),
+            username: Some("synthetic_reader".to_owned()),
             credential_reference_id: Some(credential_id),
             postgres: None,
         })

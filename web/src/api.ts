@@ -26,7 +26,10 @@ export interface ConfigurationBundle {
   format_version: 1;
   exported_at_unix_ms: number;
   credentials: Array<
-    Pick<CredentialReference, "id" | "name" | "kind" | "purpose">
+    Pick<
+      CredentialReference,
+      "id" | "name" | "kind" | "purpose" | "address" | "username"
+    >
   >;
   connections: Array<
     Pick<
@@ -36,6 +39,8 @@ export interface ConfigurationBundle {
       | "kind"
       | "environment"
       | "description"
+      | "address"
+      | "username"
       | "credential_reference_id"
       | "postgres"
     >
@@ -157,6 +162,48 @@ export interface PairResponse {
   expires_in_seconds: number;
 }
 
+export interface BrowserAuthMethods {
+  pin_enabled: boolean;
+  pairing_link_enabled: boolean;
+}
+
+export async function getBrowserAuthMethods(): Promise<BrowserAuthMethods> {
+  return readJson<BrowserAuthMethods>(
+    await fetch("/api/v1/session/methods", {
+      credentials: "omit",
+      cache: "no-store",
+    }),
+  );
+}
+
+export async function pairWithPin(pin: string): Promise<PairResponse> {
+  return readJson<PairResponse>(
+    await fetch("/api/v1/session/pin", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    }),
+  );
+}
+
+export async function setBrowserAuthMethod(
+  token: string,
+  method: "pairing_link" | "pin",
+  pin?: string,
+): Promise<void> {
+  await requireOk(
+    await fetch("/api/v1/session/method", {
+      method: "PUT",
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ method, ...(pin ? { pin } : {}) }),
+    }),
+  );
+}
+
 export interface SessionResponse {
   authenticated: boolean;
   mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
@@ -205,6 +252,8 @@ export interface CredentialReference {
   name: string;
   kind: CredentialKind;
   purpose: string | null;
+  address: string | null;
+  username: string | null;
   secret_state: "not_configured" | "available";
   secret_updated_at_unix_ms: number | null;
   created_at_unix_ms: number;
@@ -216,6 +265,8 @@ export interface CreateCredentialReference {
   name: string;
   kind: CredentialKind;
   purpose?: string;
+  address?: string;
+  username?: string;
 }
 
 export interface UpdateCredentialReference extends CreateCredentialReference {
@@ -240,6 +291,8 @@ export interface Target {
   kind: TargetKind;
   environment: TargetEnvironment;
   description: string | null;
+  address: string | null;
+  username: string | null;
   credential_reference_id: string | null;
   postgres: PostgresTargetConfig | null;
   created_at_unix_ms: number;
@@ -252,6 +305,8 @@ export interface CreateTarget {
   kind: TargetKind;
   environment: TargetEnvironment;
   description?: string;
+  address?: string;
+  username?: string;
   credential_reference_id?: string;
   postgres?: PostgresTargetConfig;
 }
