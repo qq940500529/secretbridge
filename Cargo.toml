@@ -25,7 +25,7 @@ russh-sftp = "=3.0.0"
 base64 = "=0.22.1"
 mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
 rand = "=0.10.2"
-rmcp = { version = "=3.3.0", default-features = false, features = ["macros", "server", "transport-io"] }
+rmcp = { version = "=3.4.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "serialize"], default-features = false }
 schemars = "=1.2.2"
 rustls-tokio-postgres = { version = "=0.5.1", default-features = false, features = ["channel-binding", "platform-verifier", "ring", "tls12"] }
