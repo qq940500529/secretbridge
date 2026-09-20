@@ -4,8 +4,7 @@
 //! Creation of the current catalog schema.
 //!
 //! Unpublished legacy schemas are rejected before this module is called. The staged builders
-//! below exist only to assemble a new schema and can be replaced by a single current-schema
-//! definition before the first public release.
+//! below assemble the current schema in reviewable groups; they are not a compatibility chain.
 
 use std::fmt::Write as _;
 

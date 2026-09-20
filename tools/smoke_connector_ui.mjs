@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UI-only fixture. Real authentication and operations are covered by Rust integration tests.
 import assert from "node:assert/strict";
-import { launchBrowser } from "./browser_test_support.mjs";
+import { acceptLegalConsent, launchBrowser } from "./browser_test_support.mjs";
 const url = process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799";
 const { browser } = await launchBrowser();
 try {
@@ -85,6 +85,7 @@ try {
     });
   });
   await page.goto(`${url}/#pair=synthetic-bootstrap`);
+  await acceptLegalConsent(page);
   await page.getByText("已配对", { exact: true }).waitFor();
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("SFTP UI 验证");

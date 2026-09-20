@@ -4,7 +4,7 @@
 
 **Keep credentials local. Let explicit approval decide each operation.**
 
-[简体中文](README.zh-CN.md) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
+[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.5) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge is prerelease software for individual, single-machine use. No GitHub Release exists yet. Evaluate source builds only with synthetic credentials. There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
+> SecretBridge `0.2.0-beta.5` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
 
 ## Why SecretBridge
 
@@ -75,7 +75,13 @@ Detailed engineering documents are currently in Simplified Chinese. Start with t
 | Linux | Ubuntu 24.04 x64 | Bash |
 | macOS | macOS 14+ arm64/x64 | Zsh |
 
-Other versions and architectures are experimental until separately validated. Current packages are unsigned development artifacts; each future public release will state its supported environments.
+Other versions and architectures are experimental until separately validated. Beta packages are unsigned; each public release states its supported environments and known limitations.
+
+## Help test the Beta
+
+Broader real-machine validation is now community-led. After installing the latest Beta, use synthetic data to check installation, browser pairing, credential-store write/overwrite/delete, approval and rejection, redaction, restart or login recovery, upgrade/rollback and uninstall on your own environment. Do not weaken TLS, SSH host verification, the credential store or other system protections to make a test pass.
+
+Report a reproducible ordinary defect through the [Beta bug form](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md). Include the package version, platform, install method, sanitized steps and cleanup result—never a real credential, private endpoint, user path or business record. Use the [private security advisory form](https://github.com/qq940500529/secretbridge/security/advisories/new) for a possible vulnerability.
 
 ## Security boundary
 
@@ -96,5 +102,7 @@ See the [security model](docs/安全模型与验收.md) and [automated security 
 | Develop locally | [Developer setup](docs/开发者入门.md) · [Architecture](docs/开发设计.md) |
 | Contribute | [Contribution guide](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) |
 | Understand licensing | [Licensing](LICENSING.md) · [Commercial license](COMMERCIAL_LICENSE.md) |
+| Review first-run terms | [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md) |
+| Report a problem | [Public bug report](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Private security report](https://github.com/qq940500529/secretbridge/security/advisories/new) |
 
 Copyright (c) 2026 数链创元（天津）信息技术有限责任公司. Open-source code is licensed under `AGPL-3.0-or-later`; third-party components retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

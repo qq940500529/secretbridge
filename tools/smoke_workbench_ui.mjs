@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import {
+  acceptLegalConsent,
   assertNoSeriousAccessibilityViolations,
   launchBrowser,
 } from "./browser_test_support.mjs";
@@ -175,6 +176,20 @@ try {
   await page.goto(
     `${process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799"}/#pair=synthetic-bootstrap`,
   );
+  await page
+    .getByRole("heading", { name: "许可协议与免责协议", exact: true })
+    .waitFor();
+  assertNoSeriousAccessibilityViolations(
+    await new AxeBuilder({ page }).analyze(),
+    assert,
+  );
+  await acceptLegalConsent(page);
+  assert.equal(
+    await page.evaluate(() =>
+      localStorage.getItem("secretbridge.legal-consent.v1"),
+    ),
+    "2026-09-beta-1",
+  );
   await page.getByText("已配对", { exact: true }).waitFor();
   assert.equal(
     await page
@@ -342,6 +357,10 @@ try {
   await page.getByText("没有匹配记录", { exact: true }).waitFor();
   await page.getByLabel("搜索记录").fill("");
   await page.getByRole("button", { name: "切换到英文" }).click();
+  assert.equal(
+    await page.evaluate(() => localStorage.getItem("secretbridge.language.v1")),
+    "en",
+  );
   await page
     .getByRole("heading", { name: "Connections", exact: true })
     .waitFor();

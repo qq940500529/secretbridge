@@ -1,0 +1,247 @@
+// SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import type { Language } from "./preferences";
+
+export interface LegalSection {
+  title: string;
+  paragraphs: string[];
+}
+
+interface LegalCopy {
+  title: string;
+  introduction: string;
+  prerelease: string;
+  languageLabel: string;
+  licenseHeading: string;
+  disclaimerHeading: string;
+  licenseSections: LegalSection[];
+  disclaimerSections: LegalSection[];
+  acknowledgement: string;
+  accept: string;
+  close: string;
+  feedback: string;
+  security: string;
+  sourceLicense: string;
+  privacyNote: string;
+}
+
+export const legalCopy: Record<Language, LegalCopy> = {
+  "zh-CN": {
+    title: "许可协议与免责协议",
+    introduction:
+      "请在使用 SecretBridge 前完整阅读。选择同意表示你理解本软件的开源许可、预发行状态、安全边界及使用责任。",
+    prerelease:
+      "Beta 预发行版：功能、数据格式和兼容性可能在后续版本中变化。请先使用合成数据评估，并自行备份重要配置。",
+    languageLabel: "协议语言",
+    licenseHeading: "一、最终用户许可协议",
+    disclaimerHeading: "二、预发行软件免责协议",
+    licenseSections: [
+      {
+        title: "1. 协议范围与主体",
+        paragraphs: [
+          "本协议适用于你对 SecretBridge 开源版及其随附文档、安装包和界面的使用。项目自有内容的版权方为数链创元（天津）信息技术有限责任公司；第三方内容的权利仍归相应权利人。",
+          "本页面用于在首次运行时提示适用条款，不取代 GNU Affero General Public License 第 3 版或任何适用的第三方许可，也不限制这些许可依法授予你的权利。许可文本发生冲突时，以对应开源许可原文为准。",
+          "本协议不对 AGPL 授予的权利增加限制。界面中的确认用于记录你已阅读预发行风险和使用责任，不是取得源代码许可的前提；即使你不使用本应用界面，仍可依 AGPL 行使相应权利。",
+        ],
+      },
+      {
+        title: "2. 开源许可与商业许可",
+        paragraphs: [
+          "除另有明确标注的第三方内容外，SecretBridge 开源代码按 AGPL-3.0-or-later 提供。你可以在遵守该许可的前提下运行、研究、复制、修改和再分发软件；通过网络向用户提供修改版功能时，应履行该许可要求的对应源码提供义务。",
+          "闭源分发、专有集成或不适用 AGPL 的商业使用，需要另行取得版权方签署的书面商业许可。咨询、报价或付款意向均不自动形成授权。",
+        ],
+      },
+      {
+        title: "3. 第三方组件",
+        paragraphs: [
+          "软件包含由各自许可管理的第三方依赖和资产。你应同时遵守安装包内的第三方声明、许可证和归属要求。SecretBridge 的许可不会扩大任何第三方权利。",
+        ],
+      },
+      {
+        title: "4. 合法、授权和审慎使用",
+        paragraphs: [
+          "你只能对自己拥有或已获明确授权的设备、账号、网络、仓库、数据库和服务执行操作，并遵守适用法律、组织政策以及目标服务条款。不得将本软件用于未授权访问、绕过安全控制、窃取秘密、破坏数据或其他违法侵权活动。",
+          "你负责为任务配置最小权限凭据、核对目标与参数、决定批准或拒绝、检查输出范围，并在凭据疑似泄露时及时撤销或轮换。AI、自动化工具或他人提出的操作不能替代你的判断和授权。",
+        ],
+      },
+      {
+        title: "5. 本机数据与隐私",
+        paragraphs: [
+          "SecretBridge 按设计在本机运行，并将秘密值交由操作系统凭据库保存；项目不因此承诺你的操作系统、浏览器、扩展、Shell、第三方服务或同账号运行的其他程序均可信。你负责设备安全、账号访问控制、备份和数据保留。",
+          "公开提交 Issue、日志、截图或诊断信息是你主动向 GitHub 等外部服务披露内容。请只使用合成凭据并删除私有地址、个人路径、令牌、业务数据和其他敏感信息。安全漏洞应通过私密渠道报告。",
+        ],
+      },
+      {
+        title: "6. 更新、终止与条款版本",
+        paragraphs: [
+          "你可以随时停止使用并按文档卸载。违反开源许可时，相应权利的终止与恢复依照该许可执行。Beta 期间项目可以调整功能、数据格式和本提示；协议版本变更后，应用会再次请求确认。",
+          "语言选择和同意版本仅保存在当前浏览器的本地存储中，不是账号注册、电子签名服务或远程遥测记录。清除浏览器数据或使用新的浏览器配置会再次显示本页面。",
+        ],
+      },
+    ],
+    disclaimerSections: [
+      {
+        title: "1. 预发行性质",
+        paragraphs: [
+          "本 Beta 版本用于公开测试和改进，可能包含缺陷、兼容性变化、性能问题或未完成的交互。它不附带可用性、响应时间、长期支持、迁移兼容或服务等级承诺，不应直接作为关键业务、生产控制或唯一备份工具。",
+        ],
+      },
+      {
+        title: "2. 安全边界",
+        paragraphs: [
+          "写入式凭据界面、审批、输出过滤和审计可降低意外泄露风险，但不能形成操作系统级沙箱，也不能保证识别所有秘密或业务敏感数据。能够以同一系统账号执行任意代码的恶意程序，可能绕过应用控制并访问进程、文件或凭据库。",
+          "不得为了使测试通过而关闭 TLS 验证、SSH 主机验证、系统凭据库保护、防火墙或其他安全机制。对真实系统使用前，应独立评估威胁模型并使用短期、最小权限且可撤销的凭据。",
+        ],
+      },
+      {
+        title: "3. 操作与数据风险",
+        paragraphs: [
+          "命令、HTTP、SSH、SFTP、Git 和数据库任务可能修改或删除数据、触发费用、影响远程系统，或返回不适合发送给 AI 的信息。批准前请核对预览，并为重要数据建立独立、经过恢复验证的备份。",
+          "升级、回滚和卸载不等同于业务数据恢复。预发行版本可能不兼容早期未发布的数据目录或安装包；每个 Release 的说明和校验值构成该版本的交付边界。",
+        ],
+      },
+      {
+        title: "4. 第三方服务与环境",
+        paragraphs: [
+          "项目不控制操作系统凭据库、浏览器、包管理器、模型服务、Git 托管、网络、数据库或其他第三方系统，也不保证其持续可用、兼容或安全。第三方中断、变更和条款由相应提供方负责。",
+        ],
+      },
+      {
+        title: "5. 不提供保证",
+        paragraphs: [
+          "在适用法律允许的最大范围内，软件按“现状”和“可获得”状态提供，不作任何明示、默示或法定保证，包括但不限于适销性、特定用途适用性、不侵权、无错误、持续可用、数据不丢失或安全风险可被完全消除的保证。AGPL 第 15 条的免责声明同时适用。",
+        ],
+      },
+      {
+        title: "6. 责任限制",
+        paragraphs: [
+          "在适用法律允许的最大范围内，版权方、贡献者和分发者不对因使用或无法使用本软件产生的间接、附带、特殊、惩罚性或后果性损失负责，包括利润、数据、商誉、业务机会或服务中断损失；AGPL 第 16 条同时适用。任何依法不得排除或限制的责任不受本条排除或限制。",
+        ],
+      },
+      {
+        title: "7. 反馈与支持",
+        paragraphs: [
+          "公开仓库和社区反馈不构成付费支持或修复承诺。提交问题前请更新到最新 Beta、使用合成数据复现并清理输出。普通缺陷使用公开 Issue；可能导致秘密、隐私或安全边界受损的问题使用私密安全报告。",
+        ],
+      },
+    ],
+    acknowledgement:
+      "我已阅读并同意上述许可协议与免责协议，理解这是 Beta 预发行软件，并会在获授权的范围内审慎使用。",
+    accept: "同意并继续",
+    close: "返回 SecretBridge",
+    feedback: "反馈普通问题",
+    security: "私密报告安全问题",
+    sourceLicense: "查看 AGPL 许可与授权说明",
+    privacyNote: "请勿在公开反馈中提交真实凭据、私人地址或业务数据。",
+  },
+  en: {
+    title: "License Agreement and Disclaimer",
+    introduction:
+      "Read these terms before using SecretBridge. By accepting, you acknowledge the open-source license, prerelease status, security boundaries and your responsibilities.",
+    prerelease:
+      "Beta prerelease: features, data formats and compatibility may change. Evaluate with synthetic data first and keep independent backups of important configuration.",
+    languageLabel: "Agreement language",
+    licenseHeading: "I. End User License Agreement",
+    disclaimerHeading: "II. Prerelease Software Disclaimer",
+    licenseSections: [
+      {
+        title: "1. Scope and parties",
+        paragraphs: [
+          "This agreement applies to your use of the SecretBridge open-source edition and its accompanying documentation, packages and interface. Copyright in project-owned material belongs to 数链创元（天津）信息技术有限责任公司; third-party material remains owned by its respective rightsholders.",
+          "This first-run notice explains applicable terms. It does not replace the GNU Affero General Public License version 3 or any applicable third-party license, and it does not restrict rights those licenses grant you by law. If terms conflict, the governing open-source license text controls.",
+          "This agreement adds no restriction to rights granted by the AGPL. The in-app acknowledgement records that you have read the prerelease risks and user responsibilities; it is not a condition for receiving the source-code license. You may continue to exercise applicable AGPL rights without using the application interface.",
+        ],
+      },
+      {
+        title: "2. Open-source and commercial licensing",
+        paragraphs: [
+          "Except for separately identified third-party material, SecretBridge source code is offered under AGPL-3.0-or-later. Subject to that license, you may run, study, copy, modify and redistribute the software. When you provide modified functionality to users over a network, you must meet the license's corresponding-source obligations.",
+          "Closed-source distribution, proprietary integration or commercial use outside the AGPL path requires a separately executed written commercial license from the copyright holder. An enquiry, quotation or intention to pay does not itself grant a license.",
+        ],
+      },
+      {
+        title: "3. Third-party components",
+        paragraphs: [
+          "The software includes dependencies and assets governed by their own licenses. You must also comply with the third-party notices, license texts and attribution requirements included with the package. SecretBridge's license does not expand third-party rights.",
+        ],
+      },
+      {
+        title: "4. Lawful, authorized and careful use",
+        paragraphs: [
+          "Use the software only with devices, accounts, networks, repositories, databases and services that you own or are expressly authorized to operate. Follow applicable law, organizational policy and target-service terms. Do not use it for unauthorized access, evading security controls, stealing secrets, damaging data or other unlawful or infringing conduct.",
+          "You are responsible for least-privilege credentials, checking targets and parameters, deciding whether to approve, limiting output and revoking or rotating a potentially exposed credential. A request from AI, automation or another person does not replace your judgment or authorization.",
+        ],
+      },
+      {
+        title: "5. Local data and privacy",
+        paragraphs: [
+          "SecretBridge is designed to run locally and store secret values in the operating-system credential store. This does not warrant that your operating system, browser, extensions, shell, third-party services or other software running as the same account are trustworthy. You remain responsible for device security, account access, backups and retention.",
+          "Publishing an Issue, log, screenshot or diagnostic is your decision to disclose that content to external services such as GitHub. Use synthetic credentials and remove private addresses, personal paths, tokens, business data and other sensitive information. Report vulnerabilities through the private channel.",
+        ],
+      },
+      {
+        title: "6. Updates, termination and term versions",
+        paragraphs: [
+          "You may stop using and uninstall the software at any time. Termination and reinstatement following an open-source license violation are governed by that license. During Beta, the project may change features, data formats and this notice; a changed agreement version will request acceptance again.",
+          "Your language choice and accepted version are stored only in this browser's local storage. They are not account registration, a remote electronic-signature service or telemetry. Clearing browser data or using another browser profile displays this notice again.",
+        ],
+      },
+    ],
+    disclaimerSections: [
+      {
+        title: "1. Prerelease status",
+        paragraphs: [
+          "This Beta is for public testing and improvement. It may contain defects, compatibility changes, performance problems or unfinished interactions. It includes no commitment to availability, response time, long-term support, migration compatibility or a service level, and should not be the sole tool for critical operations, production control or backups.",
+        ],
+      },
+      {
+        title: "2. Security boundary",
+        paragraphs: [
+          "Write-only credential entry, approval, output filtering and audit controls reduce accidental disclosure risk, but they are not an operating-system sandbox and cannot identify every secret or item of business-sensitive data. Malicious software able to run arbitrary code as the same OS account may bypass application controls and inspect processes, files or the credential store.",
+          "Do not disable TLS validation, SSH host verification, credential-store protection, firewalls or other safeguards to make a test pass. Before using real systems, independently review the threat model and use short-lived, least-privilege, revocable credentials.",
+        ],
+      },
+      {
+        title: "3. Operational and data risks",
+        paragraphs: [
+          "Command, HTTP, SSH, SFTP, Git and database tasks can change or delete data, incur charges, affect remote systems, or return information unsuitable for an AI. Check the preview before approval and maintain independent, restoration-tested backups for important data.",
+          "Upgrade, rollback and uninstall are not business-data recovery. Prereleases may reject earlier unpublished data directories or packages; each Release's notes and checksums define that version's delivery boundary.",
+        ],
+      },
+      {
+        title: "4. Third-party services and environments",
+        paragraphs: [
+          "The project does not control operating-system credential stores, browsers, package managers, model services, Git hosts, networks, databases or other third-party systems, and does not guarantee their continued availability, compatibility or security. Their providers are responsible for their own outages, changes and terms.",
+        ],
+      },
+      {
+        title: "5. No warranty",
+        paragraphs: [
+          'To the maximum extent permitted by applicable law, the software is provided "as is" and "as available," without express, implied or statutory warranties, including merchantability, fitness for a particular purpose, non-infringement, error-free or uninterrupted operation, preservation of data, or elimination of all security risk. Section 15 of the AGPL also applies.',
+        ],
+      },
+      {
+        title: "6. Limitation of liability",
+        paragraphs: [
+          "To the maximum extent permitted by applicable law, copyright holders, contributors and distributors are not liable for indirect, incidental, special, punitive or consequential loss arising from use or inability to use the software, including loss of profit, data, goodwill, opportunity or service. Section 16 of the AGPL also applies. Nothing excludes or limits liability that applicable law does not permit to be excluded or limited.",
+        ],
+      },
+      {
+        title: "7. Feedback and support",
+        paragraphs: [
+          "The public repository and community feedback do not create paid support or a commitment to fix. Before reporting, update to the latest Beta, reproduce with synthetic data and sanitize output. Use a public Issue for ordinary defects and a private security report for anything that may compromise secrets, privacy or a security boundary.",
+        ],
+      },
+    ],
+    acknowledgement:
+      "I have read and agree to the License Agreement and Disclaimer, understand that this is Beta software, and will use it carefully and only within my authorization.",
+    accept: "Agree and continue",
+    close: "Return to SecretBridge",
+    feedback: "Report a regular issue",
+    security: "Report a security issue privately",
+    sourceLicense: "Read the AGPL and licensing guide",
+    privacyNote:
+      "Never put real credentials, private addresses or business data in a public report.",
+  },
+};

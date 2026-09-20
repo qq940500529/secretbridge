@@ -3,7 +3,7 @@
 [Home](README.md) / Security
 
 > [!WARNING]
-> No supported public application release is available. Use only synthetic credentials when evaluating a source build or CI artifact. No independent security audit has been completed.
+> The supported public version is a Beta prerelease. Start with synthetic credentials and the package-specific Release notes; do not treat Beta availability as an independent security audit or a production-readiness claim.
 
 ## Report a vulnerability privately
 

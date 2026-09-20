@@ -2,12 +2,16 @@
 
 [Home](README.md) / Changelog
 
-SecretBridge has not published its first GitHub Release. This file records the current prerelease contract instead of preserving a development diary for every internal alpha. Pull requests and Git history remain the source for implementation history.
+This file records public release behavior rather than preserving a development diary for every internal build. Pull requests and Git history remain the source for implementation history.
 
-## Unreleased — 0.2.0-beta.4
+## Unreleased
+
+## 0.2.0-beta.5 — 2026-09-20
 
 ### Product
 
+- Added a bilingual first-run License Agreement and Disclaimer, versioned local consent, system-language defaults and a persistent language preference.
+- Added in-product links for sanitized public issue reports and private vulnerability reports.
 - Added local browser pairing, revocable page sessions, a searchable workbench and reconnectable platform terminals.
 - Added write-only native credential storage and controlled command, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL operations.
 - Added explicit approval, frozen parameters, single-use and time-window grants, idempotent execution, cancellation, bounded output and audit events.
@@ -31,16 +35,17 @@ SecretBridge has not published its first GitHub Release. This file records the c
 
 ### Documentation
 
+- Published the first community Beta with a user-led cross-platform testing guide and direct feedback routes.
 - Recommend permission-aware AI-assisted deployment while retaining complete manual commands and stop conditions.
 - Reorganize documentation by reader task, remove obsolete prototype wording and replace historical progress logs with current behavior and limitations.
 
 ### Known limitations
 
-- No public release or signed package exists yet.
-- Windows, Ubuntu and macOS still require release-candidate desktop evidence for credential stores, browser pairing, login/reboot recovery and assistive technology.
+- Beta packages are unsigned; operating systems may show an unknown-publisher warning.
+- Windows, Ubuntu and macOS still need broader community evidence for credential stores, browser pairing, login/reboot recovery and assistive technology across different machine configurations.
 - Ordinary terminals are not credential sandboxes. Software running with the same operating-system account may be able to bypass application controls.
 - The project does not support arbitrary SQL, arbitrary remote scripts, Git SSH, recursive SFTP or unrestricted credential export.
 
 ## Versioning before 1.0
 
-Until the first public release, database and package compatibility may be reset when doing so removes unsafe or unnecessary migration code. Each public release will receive a conventional dated changelog section and immutable tag.
+`0.2.0-beta.5` intentionally does not migrate databases or packages from unpublished development builds. Compatibility between public Betas is defined by each Release note until 1.0; keep independent backups and test upgrades with synthetic data. Each public release receives a dated changelog section and immutable tag.

@@ -28,6 +28,16 @@ export async function launchBrowser() {
   };
 }
 
+export async function acceptLegalConsent(page) {
+  const checkbox = page.getByRole("checkbox");
+  if (await checkbox.isVisible()) {
+    await checkbox.check();
+    await page
+      .getByRole("button", { name: /同意并继续|Agree and continue/u })
+      .click();
+  }
+}
+
 export function assertNoSeriousAccessibilityViolations(results, assert) {
   const violations = results.violations.filter((item) =>
     ["serious", "critical"].includes(item.impact),

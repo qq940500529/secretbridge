@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UI-only fixture: no actual service stop, credential writes or login registration.
 import assert from "node:assert/strict";
-import { launchBrowser } from "./browser_test_support.mjs";
+import { acceptLegalConsent, launchBrowser } from "./browser_test_support.mjs";
 const { browser } = await launchBrowser();
 try {
   for (const width of [1440, 390, 320]) {
@@ -57,6 +57,7 @@ try {
       await page.goto(
         `${process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799"}/?case=${width}-${english}#pair=synthetic-bootstrap`,
       );
+      await acceptLegalConsent(page);
       await page.getByText("已配对", { exact: true }).waitFor();
       if (english)
         await page.getByRole("button", { name: "切换到英文" }).click();

@@ -27,6 +27,9 @@ const renderedViews = [
   "TaskWorkspace.tsx",
   "ConnectionRelations.tsx",
   "DataMaintenanceView.tsx",
+  "LegalConsent.tsx",
+  "legal-copy.ts",
+  "SettingsView.tsx",
 ];
 
 describe("operator-facing copy", () => {
