@@ -1,0 +1,201 @@
+// SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import { useState } from "react";
+
+import {
+  confirmTotpSetup,
+  setBrowserAuthMethod,
+  startTotpSetup,
+  type TotpSetup,
+} from "./api";
+import type { Language } from "./preferences";
+
+export function BrowserAuthenticationSettings({
+  language,
+  sessionToken,
+  pinEnabled,
+  totpEnabled,
+  onChanged,
+}: {
+  language: Language;
+  sessionToken: string;
+  pinEnabled: boolean;
+  totpEnabled: boolean;
+  onChanged: (method: "pairing_link" | "pin" | "totp") => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [totpSetup, setTotpSetup] = useState<TotpSetup | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const zh = language === "zh-CN";
+  return (
+    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="m-0 text-lg font-semibold text-slate-950">
+        {zh ? "浏览器身份验证" : "Browser identity verification"}
+      </h2>
+      <p className="text-sm leading-6 text-slate-600">
+        {zh
+          ? "可使用本机 PIN 或身份验证器恢复浏览器访问。TOTP 密钥只保存在操作系统凭据库；请勿向 AI 提供 PIN、二维码或手动密钥。只有在确认具体审批后，才可把当前六位验证码交给 AI。"
+          : "Use a local PIN or authenticator to recover browser access. The TOTP key stays in the OS credential store. Never give an AI the PIN, QR code, or setup key; share only a current six-digit code after reviewing a specific approval."}
+      </p>
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <input
+          type="password"
+          minLength={6}
+          maxLength={64}
+          value={pin}
+          onChange={(event) => setPin(event.target.value)}
+          placeholder={zh ? "至少 6 个字符" : "At least 6 characters"}
+          className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
+        />
+        <button
+          type="button"
+          disabled={busy || pin.length < 6}
+          className="workbench-button"
+          onClick={async () => {
+            setBusy(true);
+            setMessage(null);
+            try {
+              await setBrowserAuthMethod(sessionToken, "pin", pin);
+              setPin("");
+              onChanged("pin");
+              setMessage(zh ? "PIN/口令已启用。" : "PIN/passphrase enabled.");
+            } catch {
+              setMessage(zh ? "保存失败。" : "Could not save.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {zh ? "设置或更换" : "Set or change"}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          className="workbench-button"
+          onClick={async () => {
+            setBusy(true);
+            setMessage(null);
+            try {
+              setTotpSetup(await startTotpSetup(sessionToken));
+              setTotpCode("");
+            } catch {
+              setMessage(zh ? "无法开始绑定。" : "Could not start enrollment.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {totpEnabled
+            ? zh
+              ? "更换身份验证器"
+              : "Replace authenticator"
+            : zh
+              ? "绑定身份验证器"
+              : "Add authenticator"}
+        </button>
+        {(pinEnabled || totpEnabled) && (
+          <button
+            type="button"
+            disabled={busy}
+            className="workbench-button"
+            onClick={async () => {
+              setBusy(true);
+              setMessage(null);
+              try {
+                await setBrowserAuthMethod(sessionToken, "pairing_link");
+                onChanged("pairing_link");
+                setMessage(
+                  zh
+                    ? "已改回一次性配对链接。"
+                    : "Switched to one-time pairing links.",
+                );
+              } catch {
+                setMessage(zh ? "修改失败。" : "Could not change the method.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {zh ? "改用配对链接" : "Use pairing links"}
+          </button>
+        )}
+      </div>
+      {totpSetup && (
+        <div className="mt-5 grid gap-5 rounded-2xl border border-cyan-200 bg-cyan-50/60 p-5 md:grid-cols-[auto_1fr]">
+          <img
+            src={totpSetup.qr_code_data_url}
+            alt={
+              zh
+                ? "SecretBridge 身份验证器绑定二维码"
+                : "SecretBridge authenticator enrollment QR code"
+            }
+            className="size-52 rounded-xl border border-white bg-white p-2 shadow-sm"
+          />
+          <div>
+            <h3 className="m-0 text-base font-semibold text-slate-950">
+              {zh ? "扫码或手动输入密钥" : "Scan or enter the key manually"}
+            </h3>
+            <p className="text-sm leading-6 text-slate-600">
+              {zh
+                ? "在身份验证器中添加基于时间的一次性密码（TOTP），然后输入生成的六位验证码完成绑定。绑定内容将在十分钟后失效。"
+                : "Add a time-based one-time password (TOTP) in your authenticator, then enter its six-digit code. This enrollment expires after ten minutes."}
+            </p>
+            <code className="block break-all rounded-lg bg-white px-3 py-2 text-sm font-semibold tracking-wider text-slate-900">
+              {totpSetup.manual_key.match(/.{1,4}/g)?.join(" ")}
+            </code>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+              <input
+                aria-label={zh ? "六位验证码" : "Six-digit code"}
+                value={totpCode}
+                onChange={(event) =>
+                  setTotpCode(event.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                autoComplete="one-time-code"
+                className="rounded-xl border border-slate-200 px-3.5 py-2.5"
+                placeholder={zh ? "六位验证码" : "Six-digit code"}
+              />
+              <button
+                type="button"
+                disabled={busy || totpCode.length !== 6}
+                className="workbench-button"
+                onClick={async () => {
+                  setBusy(true);
+                  setMessage(null);
+                  try {
+                    await confirmTotpSetup(sessionToken, totpCode);
+                    setTotpSetup(null);
+                    setTotpCode("");
+                    onChanged("totp");
+                    setMessage(
+                      zh
+                        ? "身份验证器已启用。验证码允许约两分钟的提交延迟，且每个验证码只能使用一次。"
+                        : "Authenticator enabled. Codes allow roughly two minutes of submission delay and can be used only once.",
+                    );
+                  } catch {
+                    setMessage(
+                      zh
+                        ? "验证码无效、已使用或绑定已过期，请重新开始绑定。"
+                        : "The code was invalid, already used, or enrollment expired. Start enrollment again.",
+                    );
+                    setTotpSetup(null);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {zh ? "验证并启用" : "Verify and enable"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {message && <p className="mb-0 mt-3 text-sm text-slate-600">{message}</p>}
+    </section>
+  );
+}

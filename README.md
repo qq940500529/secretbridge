@@ -4,7 +4,7 @@
 
 **Keep credentials local. Let explicit approval decide each operation.**
 
-[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.7) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
+[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.8) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge `0.2.0-beta.7` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> SecretBridge `0.2.0-beta.8` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Why SecretBridge
 
@@ -34,6 +34,7 @@ flowchart LR
 
 - **Write-only credential handling:** passwords, tokens and private keys live in the OS credential store; SQLite keeps references and public state.
 - **Explicit approval:** review the target, parameters, grant mode, lifetime and output scope before execution.
+- **Authenticator confirmation:** bind a standard TOTP authenticator by QR code or manual key, then confirm one reviewed approval from an AI conversation with a single-use six-digit code.
 - **Controlled connectors:** fixed programs, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL.
 - **Secure continuous terminals:** ordinary commands and human-approved credential commands can share one broker-owned shell; output is redacted before Web replay or MCP reads.
 - **Bounded results:** filter credential-task output before persistence; constrain HTTP and database fields and size.
@@ -66,7 +67,7 @@ You do not need to determine whether SecretBridge is already installed, choose a
 1. Save a disposable synthetic credential and confirm that the UI cannot read it back.
 2. Register a fixed connection and its trust settings.
 3. Define a task, ordinary parameters, credential slots and result scope.
-4. Let an AI or user request approval; only the user decides in the Web console.
+4. Let an AI or user request approval; decide in the Web console, or reply with a current authenticator code so the AI can relay that one-time confirmation through MCP.
 5. Run the approved operation and inspect its bounded result and audit events.
 6. Delete synthetic credentials and stop the broker when the evaluation ends.
 
@@ -90,7 +91,7 @@ Report a reproducible ordinary defect through the [Beta bug form](https://github
 
 ## Security boundary
 
-- MCP cannot read secrets or approve its own requests.
+- MCP cannot read secrets, setup keys, QR codes or PINs. It can only relay a user-supplied, single-use TOTP code for one identified pending approval; without that code it cannot approve its own request.
 - TLS, SSH host verification and target-system permissions must not be disabled to make a test pass.
 - Output filtering reduces accidental echo risk; it is not a program sandbox and cannot decide whether all business data is safe to share with a model.
 - Malicious software already running arbitrary code as the credential owner may bypass application controls and access that account's processes, files or credential store.

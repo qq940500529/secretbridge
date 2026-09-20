@@ -27,10 +27,11 @@ import {
   getStatus,
   pair,
   pairWithPin,
+  pairWithTotp,
   revokePageSession,
-  setBrowserAuthMethod,
   type ServiceStatus,
 } from "./api";
+import { BrowserAuthenticationSettings } from "./BrowserAuthenticationSettings";
 import { consumePairingToken } from "./pairing";
 import { BackgroundServiceView } from "./BackgroundServiceView";
 import { ISSUE_URL, LegalConsent } from "./LegalConsent";
@@ -229,6 +230,7 @@ export function App() {
   );
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [pinEnabled, setPinEnabled] = useState(false);
+  const [totpEnabled, setTotpEnabled] = useState(false);
   const [activePage, setActivePage] = useState<Page>("operations");
   const [taskContext, setTaskContext] = useState<{
     targetId?: string;
@@ -294,7 +296,10 @@ export function App() {
         }
 
         const methods = await getBrowserAuthMethods();
-        if (active) setPinEnabled(methods.pin_enabled);
+        if (active) {
+          setPinEnabled(methods.pin_enabled);
+          setTotpEnabled(methods.totp_enabled);
+        }
       } catch {
         if (!active) return;
         setConnection("offline");
@@ -477,7 +482,11 @@ export function App() {
                     language={language}
                     sessionToken={sessionToken}
                     pinEnabled={pinEnabled}
-                    onChanged={setPinEnabled}
+                    totpEnabled={totpEnabled}
+                    onChanged={(method) => {
+                      setPinEnabled(method === "pin");
+                      setTotpEnabled(method === "totp");
+                    }}
                   />
                 )}
                 {sessionToken && (
@@ -580,6 +589,7 @@ export function App() {
                 page={text[activePage]}
                 language={language}
                 pinEnabled={pinEnabled}
+                totpEnabled={totpEnabled}
                 onPin={async (pin) => {
                   setAuthentication("pairing");
                   try {
@@ -594,6 +604,22 @@ export function App() {
                   } catch {
                     setAuthentication("error");
                     throw new Error("pin_failed");
+                  }
+                }}
+                onTotp={async (code) => {
+                  setAuthentication("pairing");
+                  try {
+                    const response = await pairWithTotp(code);
+                    await getSession(response.session_token);
+                    setSessionToken(response.session_token);
+                    window.sessionStorage.setItem(
+                      PAGE_SESSION_KEY,
+                      response.session_token,
+                    );
+                    setAuthentication("paired");
+                  } catch {
+                    setAuthentication("error");
+                    throw new Error("totp_failed");
                   }
                 }}
               />
@@ -662,13 +688,17 @@ function PairingRequired({
   page,
   language,
   pinEnabled,
+  totpEnabled,
   onPin,
+  onTotp,
 }: {
   text: Copy;
   page: string;
   language: Language;
   pinEnabled: boolean;
+  totpEnabled: boolean;
   onPin: (pin: string) => Promise<void>;
+  onTotp: (code: string) => Promise<void>;
 }) {
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
@@ -687,7 +717,7 @@ function PairingRequired({
           {text.futureModule}
         </h1>
         <p className="mb-0 mt-3 leading-7 text-slate-600">{text.futureBody}</p>
-        {pinEnabled && (
+        {(pinEnabled || totpEnabled) && (
           <form
             className="mx-auto mt-6 max-w-sm space-y-3 text-left"
             onSubmit={async (event) => {
@@ -695,7 +725,8 @@ function PairingRequired({
               setBusy(true);
               setFailed(false);
               try {
-                await onPin(pin);
+                if (totpEnabled) await onTotp(pin);
+                else await onPin(pin);
                 setPin("");
               } catch {
                 setFailed(true);
@@ -708,15 +739,23 @@ function PairingRequired({
               htmlFor="browser-pin"
               className="block text-sm font-semibold text-slate-700"
             >
-              {zh ? "本机 PIN 或口令" : "Local PIN or passphrase"}
+              {totpEnabled
+                ? zh
+                  ? "身份验证器验证码"
+                  : "Authenticator code"
+                : zh
+                  ? "本机 PIN 或口令"
+                  : "Local PIN or passphrase"}
             </label>
             <input
               id="browser-pin"
-              type="password"
+              type={totpEnabled ? "text" : "password"}
               minLength={6}
-              maxLength={64}
+              maxLength={totpEnabled ? 6 : 64}
+              inputMode={totpEnabled ? "numeric" : undefined}
+              pattern={totpEnabled ? "[0-9]{6}" : undefined}
               required
-              autoComplete="current-password"
+              autoComplete={totpEnabled ? "one-time-code" : "current-password"}
               value={pin}
               onChange={(event) => setPin(event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5"
@@ -744,94 +783,6 @@ function PairingRequired({
           </form>
         )}
       </div>
-    </section>
-  );
-}
-
-function BrowserAuthenticationSettings({
-  language,
-  sessionToken,
-  pinEnabled,
-  onChanged,
-}: {
-  language: Language;
-  sessionToken: string;
-  pinEnabled: boolean;
-  onChanged: (enabled: boolean) => void;
-}) {
-  const [pin, setPin] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const zh = language === "zh-CN";
-  return (
-    <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="m-0 text-lg font-semibold text-slate-950">
-        {zh ? "浏览器身份验证" : "Browser identity verification"}
-      </h2>
-      <p className="text-sm leading-6 text-slate-600">
-        {zh
-          ? "PIN/口令保存在操作系统凭据库。启用后，服务重启或页面会话失效时无需生成新的配对链接。不要把它交给 AI。"
-          : "The PIN/passphrase is stored in the OS credential store. After enabling it, a restart or expired page session can recover without a new pairing link. Never share it with an AI."}
-      </p>
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <input
-          type="password"
-          minLength={6}
-          maxLength={64}
-          value={pin}
-          onChange={(event) => setPin(event.target.value)}
-          placeholder={zh ? "至少 6 个字符" : "At least 6 characters"}
-          className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
-        />
-        <button
-          type="button"
-          disabled={busy || pin.length < 6}
-          className="workbench-button"
-          onClick={async () => {
-            setBusy(true);
-            setMessage(null);
-            try {
-              await setBrowserAuthMethod(sessionToken, "pin", pin);
-              setPin("");
-              onChanged(true);
-              setMessage(zh ? "PIN/口令已启用。" : "PIN/passphrase enabled.");
-            } catch {
-              setMessage(zh ? "保存失败。" : "Could not save.");
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          {zh ? "设置或更换" : "Set or change"}
-        </button>
-        {pinEnabled && (
-          <button
-            type="button"
-            disabled={busy}
-            className="workbench-button"
-            onClick={async () => {
-              setBusy(true);
-              setMessage(null);
-              try {
-                await setBrowserAuthMethod(sessionToken, "pairing_link");
-                onChanged(false);
-                setMessage(
-                  zh
-                    ? "已改回一次性配对链接。"
-                    : "Switched to one-time pairing links.",
-                );
-              } catch {
-                setMessage(zh ? "修改失败。" : "Could not change the method.");
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {zh ? "改用配对链接" : "Use pairing links"}
-          </button>
-        )}
-      </div>
-      {message && <p className="mb-0 mt-3 text-sm text-slate-600">{message}</p>}
     </section>
   );
 }

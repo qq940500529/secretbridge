@@ -11,7 +11,7 @@ flowchart LR
     A["AI / MCP"] --> C{"是否需要凭据"}
     C -->|否| W["terminal_write"]
     C -->|是| R["request_command：程序、参数、凭据占位符"]
-    R --> H{"用户在 Web 审批"}
+    R --> H{"用户在 Web 审批或提供 TOTP"}
     H -->|拒绝或过期| X["不执行"]
     H -->|批准| I["代理从系统凭据库临时取密"]
     W --> T["同一个安全终端进程"]
@@ -22,7 +22,7 @@ flowchart LR
 
 - 普通命令：连接终端后通过 `secretbridge_terminal_write` 写入，不要在输入中放置秘密。
 - 凭据命令：调用 `secretbridge_request_command`，提交绝对程序路径、逐项参数、终端 ID 和凭据占位符。SecretBridge 自动生成待审批草案，不要求用户预先建立任务模板。
-- 审批只能由本机用户在 Web 控制台完成。AI 不得操作、检查或自动化 Web 控制台，也不得索要页面 PIN。
+- 审批决定仍由用户作出。用户可在本机 Web 控制台操作，也可在核对具体请求后主动回复当前 TOTP 验证码，由 AI 通过 MCP 转交。AI 不得操作、检查或自动化 Web 控制台，不得索要页面 PIN、二维码或 TOTP 手动密钥，也不得保存或复用验证码。
 - 批准后，代理在目标终端中执行命令。秘密通过标准输入、单独参数、临时环境变量或受管临时文件短暂注入；命令文本和 Shell 历史不包含秘密原文。
 - 会话一旦使用过某个秘密，该秘密的脱敏模式会保留到终端关闭，避免后续命令回显旧值。
 
@@ -42,6 +42,7 @@ flowchart LR
 | `secretbridge_terminal_close` | 终止并移除会话 |
 | `secretbridge_list_catalog` | 读取凭据与连接的非秘密元数据 |
 | `secretbridge_request_command` | 为现有终端创建含凭据占位符的待审批命令 |
+| `secretbridge_confirm_approval` | 使用用户主动提供的单次 TOTP 验证码确认一个指定的待审批请求 |
 
 Shell 可能为 `powershell`、`cmd`、`bash` 或 `zsh`，以能力查询结果为准。启动环境变量不会保存，但仍不得填写密码、令牌或私钥。
 

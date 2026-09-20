@@ -6,6 +6,25 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.2.0-beta.8 — 2026-09-20
+
+### Product
+
+- Add standard six-digit TOTP enrollment with an in-product QR code and manual setup key.
+- Allow TOTP to replace the local browser PIN for session recovery.
+- Add `secretbridge_confirm_approval`, which lets an AI relay a user-provided one-time code for one identified, version-matched pending approval without operating the Web console.
+
+### Security and reliability
+
+- Keep the TOTP seed exclusively in the operating-system credential store; SQLite records the selected mode, last accepted time step and fixed non-secret audit metadata only.
+- Accept a bounded delayed-code window for AI conversation latency, persist the replay guard across service restarts, and retain the existing five-failure cooldown.
+- Record bounded, fixed-shape enrollment, verification, throttling and disablement events without storing codes or setup material.
+- Never expose the setup key or QR code through MCP. Fixed tool instructions prohibit requesting, repeating, retaining or reusing a code and continue to prohibit AI control of the Web console.
+
+### Compatibility
+
+- Advance the catalog to schema 19. Public Beta 7 catalogs are upgraded in place; the release remains prerelease software and independent backups are recommended.
+
 ## 0.2.0-beta.7 — 2026-09-20
 
 ### Product

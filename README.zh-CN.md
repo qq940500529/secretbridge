@@ -4,7 +4,7 @@
 
 **让凭据留在本机，让授权决定操作。**
 
-[English](README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.7) · [文档](docs/README.md) · [部署](docs/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](SECURITY.md)
+[English](README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.8) · [文档](docs/README.md) · [部署](docs/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](SECURITY.md)
 
 [![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge `0.2.0-beta.7` 是面向个人、单机使用的公开预发行版。请先使用合成凭据、保留独立备份，并阅读[许可协议与免责协议](docs/最终用户许可与免责声明.md)。它不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
+> SecretBridge `0.2.0-beta.8` 是面向个人、单机使用的公开预发行版。请先使用合成凭据、保留独立备份，并阅读[许可协议与免责协议](docs/最终用户许可与免责声明.md)。它不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
 
 ## 它解决什么问题
 
@@ -34,6 +34,7 @@ flowchart LR
 
 - **写入而不回读**：密码、令牌和私钥保存在操作系统凭据库；SQLite 只记录引用与状态。
 - **明确审批**：执行前核对目标、参数、授权方式、有效期和结果范围。
+- **身份验证器确认**：通过二维码或手动密钥绑定标准 TOTP 身份验证器；用户核对审批后，可在 AI 对话中回复一次性六位验证码来确认该请求。
 - **受控连接器**：固定程序、HTTP、SSH、SFTP、Git HTTPS、PostgreSQL 和 MySQL。
 - **安全连续终端**：普通命令与经用户批准的凭据命令可复用同一个代理托管 Shell；输出进入 Web 或 MCP 前先脱敏。
 - **受限结果**：凭据任务在保存前过滤输出，数据库和 HTTP 可限制返回字段与规模。
@@ -66,7 +67,7 @@ flowchart LR
 1. 在“凭据”保存一次性测试凭据，确认页面不能回读。
 2. 在“连接”登记固定目标和信任设置。
 3. 在“任务”定义操作、普通参数、凭据插槽和结果范围。
-4. AI 或用户申请授权；用户只在 Web 页面批准、拒绝或撤销。
+4. AI 或用户申请授权；在 Web 页面决定，或核对请求后回复当前身份验证器验证码，由 AI 通过 MCP 转交这一次确认。
 5. 启动运行并查看受限结果和审计事件。
 6. 不再需要时删除合成凭据并停止服务。
 
@@ -90,7 +91,7 @@ flowchart LR
 
 ## 安全边界
 
-- MCP 不能读取秘密或替用户作出审批决定。
+- MCP 不能读取秘密、绑定密钥、二维码或 PIN。它只能为一个明确的待审批请求转交用户主动提供且仅可使用一次的 TOTP 验证码；没有验证码时不能批准自己的请求。
 - TLS、SSH 主机指纹和目标系统权限不能为了通过测试而关闭。
 - 输出过滤降低意外回显风险，但不等于程序沙箱，也不能判断所有业务数据是否适合发送给模型。
 - 能以同一操作系统账号执行任意代码的恶意程序，可能绕过应用边界访问进程、文件或凭据库。

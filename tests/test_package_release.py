@@ -20,6 +20,20 @@ SPEC.loader.exec_module(package_release)
 
 
 class PackageReleaseTests(unittest.TestCase):
+    def test_embedded_mit_readme_is_accepted_as_packaged_license_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            readme = directory / "Readme.markdown"
+            readme.write_text(
+                "MIT License\nPermission is hereby granted, free of charge\n"
+                'THE SOFTWARE IS PROVIDED "AS IS"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                package_release.local_rust_license_files({"readme": "Readme.markdown"}, directory),
+                [readme],
+            )
+
     def test_dirty_checkout_is_rejected_for_release(self):
         with (
             tempfile.TemporaryDirectory() as temporary,
@@ -94,6 +108,24 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertIn("license fixture", notice)
         self.assertEqual(request.call_count, 2)
         sleep.assert_called_once_with(0.25)
+        package_release.upstream_license.cache_clear()
+
+    def test_nayuki_license_falls_back_to_pinned_readme(self):
+        package_release.upstream_license.cache_clear()
+        payload = json.dumps({"encoding": "base64", "content": "bGljZW5zZSBmaXh0dXJl"}).encode()
+        with (
+            patch.object(package_release.shutil, "which", return_value=None),
+            patch.object(
+                package_release,
+                "download_upstream_license",
+                side_effect=[None] * 8 + [payload],
+            ) as download,
+        ):
+            notice = package_release.upstream_license(
+                "https://github.com/nayuki/QR-Code-generator", "a" * 40
+            )
+        self.assertIn("license fixture", notice)
+        self.assertIn("Readme.markdown", download.call_args.args[0])
         package_release.upstream_license.cache_clear()
 
     def test_sbom_contains_native_and_web_runtime_components(self):

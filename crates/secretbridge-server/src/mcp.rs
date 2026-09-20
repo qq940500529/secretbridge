@@ -45,14 +45,14 @@ use crate::{
     AppState, cancel_run_for_state,
     catalog::{
         ActionTemplate, Approval, ApprovalOperation, ApprovalResultScope, ApprovalState,
-        CancelSyntheticRun, CatalogError, CreateApproval, CreateSyntheticRun, PolicyDecision,
-        PolicyEvaluation, PolicyReasonCode, PolicyRequirement, RunState, SafeEvent, SafeEventKind,
-        SyntheticRun,
+        BrowserAuthChannel, CancelSyntheticRun, CatalogError, CreateApproval, CreateSyntheticRun,
+        DecideApproval, PolicyDecision, PolicyEvaluation, PolicyReasonCode, PolicyRequirement,
+        RunState, SafeEvent, SafeEventKind, SyntheticRun,
     },
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "Use SecretBridge only through these MCP tools. Never operate, automate, inspect, or approve through the SecretBridge Web console; that surface is reserved for the local human and may require a separate PIN or passphrase. Never ask the user to reveal that verifier. Read the non-secret credential and connection catalog to plan an operation, submit credential values only by opaque placeholders, then wait for the user to approve the exact request. Never retrieve credential files or use a shell to bypass a controlled operation. Terminal input and output must remain broker-mediated; use returned cursors, do not re-execute to recover output, and do not blindly retry writes.";
+const SERVER_INSTRUCTIONS: &str = "Use SecretBridge only through these MCP tools. Never operate, automate, or inspect the SecretBridge Web console; that surface is reserved for the local human. Never ask for a PIN, passphrase, TOTP setup key, QR code, or credential. If the user voluntarily provides a current six-digit authenticator code after reviewing a specific pending approval, secretbridge_confirm_approval may submit it once for that approval; never retain, repeat, log, or reuse the code. Otherwise wait for the user to decide in the Web console. Read the non-secret credential and connection catalog to plan an operation, submit credential values only by opaque placeholders, and never retrieve credential files or use a shell to bypass a controlled operation. Terminal input and output must remain broker-mediated; use returned cursors, do not re-execute to recover output, and do not blindly retry writes.";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -184,6 +184,60 @@ impl McpBackend {
                 Ok(ApprovalSummary::from(approval))
             }
             Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
+        }
+    }
+
+    async fn confirm_approval(
+        &self,
+        params: ConfirmApprovalParams,
+    ) -> Result<ApprovalSummary, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                let id = parse_uuid(&params.approval_id)?;
+                let current = {
+                    let catalog = state.catalog.clone();
+                    catalog_task(move || catalog.get_approval(id)).await?
+                };
+                if current.state != ApprovalState::Pending
+                    || current.version != params.expected_version
+                {
+                    return Err(ErrorData::invalid_params("approval_not_pending", None));
+                }
+                state
+                    .verify_and_consume_totp(
+                        params.verification_code,
+                        BrowserAuthChannel::Mcp,
+                        Some(id),
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        crate::ApiError::Unauthorized => {
+                            ErrorData::invalid_params("verification_failed", None)
+                        }
+                        crate::ApiError::SecretStoreLocked
+                        | crate::ApiError::SecretStoreUnavailable
+                        | crate::ApiError::SecretEntryNotFound => {
+                            ErrorData::internal_error("verification_unavailable", None)
+                        }
+                        _ => ErrorData::internal_error("secretbridge_operation_failed", None),
+                    })?;
+                let catalog = state.catalog.clone();
+                let approval = catalog_task(move || {
+                    catalog.approve_approval(
+                        id,
+                        &DecideApproval {
+                            expected_version: params.expected_version,
+                            note: Some(
+                                "Approved with a user-provided authenticator code".to_owned(),
+                            ),
+                        },
+                    )
+                })
+                .await?;
+                let _ = state.changes.send(());
+                Ok(ApprovalSummary::from(approval))
+            }
+            Self::Remote(client) => client.call(OP_CONFIRM_APPROVAL, &params).await,
         }
     }
 
@@ -541,6 +595,17 @@ impl SecretBridgeMcp {
     }
 
     #[tool(
+        name = "secretbridge_confirm_approval",
+        description = "Confirm exactly one pending approval with a current six-digit TOTP code that the user voluntarily supplied after reviewing that request. Never ask for or accept a setup key, QR code, PIN, passphrase, or credential; never retain, echo, or reuse the code. Codes have a bounded delay allowance and are rejected after one use."
+    )]
+    async fn confirm_approval(
+        &self,
+        Parameters(params): Parameters<ConfirmApprovalParams>,
+    ) -> Result<McpJson<ApprovalSummary>, ErrorData> {
+        Ok(McpJson(self.backend.confirm_approval(params).await?))
+    }
+
+    #[tool(
         name = "secretbridge_request_command",
         description = "Submit an exact non-shell command and opaque credential placeholders for execution in an existing secure terminal after human approval. A user-created template is not required. This never accepts secret values and cannot approve or execute the draft; read the eventual result only with secretbridge_terminal_read."
     )]
@@ -673,6 +738,7 @@ const OP_LIST_TEMPLATES: &str = "list_action_templates";
 const OP_LIST_CATALOG: &str = "list_catalog";
 const OP_EVALUATE_POLICY: &str = "evaluate_policy";
 const OP_REQUEST_APPROVAL: &str = "request_approval";
+const OP_CONFIRM_APPROVAL: &str = "confirm_approval";
 const OP_REQUEST_COMMAND: &str = "request_command";
 const OP_GET_APPROVAL: &str = "get_approval";
 const OP_CREATE_RUN: &str = "create_run";
@@ -1256,6 +1322,11 @@ async fn dispatch_bridge_request(
                 .request_approval(parse_bridge_payload(payload)?)
                 .await?,
         ),
+        OP_CONFIRM_APPROVAL => serialize_bridge_payload(
+            backend
+                .confirm_approval(parse_bridge_payload(payload)?)
+                .await?,
+        ),
         OP_REQUEST_COMMAND => serialize_bridge_payload(
             backend
                 .request_command(parse_bridge_payload(payload)?)
@@ -1319,6 +1390,7 @@ fn safe_bridge_error_code(error: ErrorData) -> String {
         "not_found"
         | "approval_consumed"
         | "approval_not_usable"
+        | "approval_not_pending"
         | "capacity_exceeded"
         | "credential_reference_not_found"
         | "invalid_request"
@@ -1328,6 +1400,7 @@ fn safe_bridge_error_code(error: ErrorData) -> String {
         | "policy_denied"
         | "resource_in_use"
         | "version_conflict"
+        | "verification_failed"
         | "terminal_attach_required"
         | "terminal_input_required"
         | "terminal_closed"
@@ -1637,6 +1710,19 @@ struct RequestApprovalParams {
     action_template_id: String,
     #[schemars(description = "Approval lifetime in seconds, from 60 through 3600")]
     expires_in_seconds: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConfirmApprovalParams {
+    #[schemars(description = "Pending approval UUID returned by SecretBridge")]
+    approval_id: String,
+    #[schemars(description = "Current optimistic version returned with that pending approval")]
+    expected_version: u64,
+    #[schemars(
+        description = "Six-digit one-time authenticator code supplied by the user for this approval"
+    )]
+    verification_code: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]

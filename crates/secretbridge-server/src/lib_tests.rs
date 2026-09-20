@@ -9,6 +9,7 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use secretbridge_core::ConfigurationStorage;
+use totp_rs::{Builder as TotpBuilder, Secret as TotpSecret};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -236,6 +237,150 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         .await
         .expect("router response");
     assert_eq!(response_json(methods).await["pin_enabled"], false);
+}
+
+fn totp_code(secret: &str, step_offset: u64) -> String {
+    let totp = TotpBuilder::new()
+        .with_secret(TotpSecret::try_from_base32(secret).expect("base32 test secret"))
+        .with_skew(0)
+        .build()
+        .expect("test TOTP");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("current time")
+        .as_secs();
+    totp.generate(now + step_offset * crate::totp_auth::STEP_SECONDS)
+        .to_string()
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "TOTP enrollment, replay, recovery, audit and disablement form one lifecycle"
+)]
+async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
+    let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    let app = router(state.clone());
+    let token = pair_test_session(&app, &bootstrap).await;
+    let setup = app
+        .clone()
+        .oneshot(authenticated_request(
+            "POST",
+            "/api/v1/session/totp/setup",
+            &token,
+            Some(ORIGIN),
+        ))
+        .await
+        .expect("start TOTP setup");
+    assert_eq!(setup.status(), StatusCode::OK);
+    let setup = response_json(setup).await;
+    let manual_key = setup["manual_key"].as_str().expect("manual setup key");
+    assert!(
+        setup["qr_code_data_url"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("data:image/png;base64,"))
+    );
+    let enrollment_code = totp_code(manual_key, 0);
+    let confirmed = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "POST",
+            "/api/v1/session/totp/confirm",
+            &token,
+            ORIGIN,
+            &serde_json::json!({ "code": enrollment_code }).to_string(),
+        ))
+        .await
+        .expect("confirm TOTP setup");
+    assert_eq!(confirmed.status(), StatusCode::NO_CONTENT);
+
+    let methods = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session/methods")
+                .body(Body::empty())
+                .expect("methods request"),
+        )
+        .await
+        .expect("methods response");
+    let methods = response_json(methods).await;
+    assert_eq!(methods["totp_enabled"], true);
+    assert!(!methods.to_string().contains(manual_key));
+
+    let replay = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/totp")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "code": enrollment_code }).to_string(),
+                ))
+                .expect("replay request"),
+        )
+        .await
+        .expect("replay response");
+    assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+
+    let next_code = totp_code(manual_key, 1);
+    let paired = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/totp")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "code": next_code }).to_string(),
+                ))
+                .expect("TOTP pair request"),
+        )
+        .await
+        .expect("TOTP pair response");
+    assert_eq!(paired.status(), StatusCode::OK);
+    assert!(!response_json(paired).await.to_string().contains(manual_key));
+
+    let events = app
+        .clone()
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/session/auth-events",
+            &token,
+            Some(ORIGIN),
+        ))
+        .await
+        .expect("TOTP audit events");
+    assert_eq!(events.status(), StatusCode::OK);
+    let events = response_json(events).await.to_string();
+    assert!(events.contains("enrollment_started"));
+    assert!(events.contains("enrollment_succeeded"));
+    assert!(events.contains("verification_failed"));
+    assert!(events.contains("verification_succeeded"));
+    assert!(!events.contains(manual_key));
+    assert!(!events.contains(&enrollment_code));
+    assert!(!events.contains(&next_code));
+
+    let disabled = app
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pairing_link"}"#,
+        ))
+        .await
+        .expect("disable TOTP");
+    assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+    assert!(
+        state
+            .secret_store
+            .get(super::BROWSER_TOTP_CREDENTIAL_ID)
+            .is_err()
+    );
 }
 
 #[tokio::test]

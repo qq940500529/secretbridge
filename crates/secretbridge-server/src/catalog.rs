@@ -22,7 +22,9 @@ pub(crate) mod maintenance;
 mod rows;
 mod schema;
 
-pub use browser_auth::BrowserAuthMode;
+pub use browser_auth::{
+    BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind, BrowserAuthMode,
+};
 use rows::{credential_from_row, target_from_row};
 
 pub(crate) const SCHEMA_VERSION: i64 = secretbridge_core::SCHEMA_VERSION;

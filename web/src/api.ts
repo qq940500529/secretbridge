@@ -165,7 +165,35 @@ export interface PairResponse {
 
 export interface BrowserAuthMethods {
   pin_enabled: boolean;
+  totp_enabled: boolean;
   pairing_link_enabled: boolean;
+}
+
+export type BrowserAuthEventKind =
+  | "enrollment_started"
+  | "enrollment_succeeded"
+  | "verification_succeeded"
+  | "verification_failed"
+  | "rate_limited"
+  | "disabled";
+
+export interface BrowserAuthEvent {
+  id: number;
+  kind: BrowserAuthEventKind;
+  channel: "browser" | "mcp" | "settings";
+  approval_id?: string | null;
+  created_at_unix_ms: number;
+}
+
+export interface BrowserAuthEventListResponse {
+  items: BrowserAuthEvent[];
+}
+
+export interface TotpSetup {
+  manual_key: string;
+  qr_code_data_url: string;
+  expires_in_seconds: number;
+  accepted_past_steps: number;
 }
 
 export async function getBrowserAuthMethods(): Promise<BrowserAuthMethods> {
@@ -185,6 +213,56 @@ export async function pairWithPin(pin: string): Promise<PairResponse> {
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin }),
+    }),
+  );
+}
+
+export async function pairWithTotp(code: string): Promise<PairResponse> {
+  return readJson<PairResponse>(
+    await fetch("/api/v1/session/totp", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    }),
+  );
+}
+
+export async function startTotpSetup(token: string): Promise<TotpSetup> {
+  return readJson<TotpSetup>(
+    await fetch("/api/v1/session/totp/setup", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionHeaders(token),
+    }),
+  );
+}
+
+export async function confirmTotpSetup(
+  token: string,
+  code: string,
+): Promise<void> {
+  await requireOk(
+    await fetch("/api/v1/session/totp/confirm", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ code }),
+    }),
+  );
+}
+
+export async function listBrowserAuthEvents(
+  token: string,
+): Promise<BrowserAuthEventListResponse> {
+  return readJson<BrowserAuthEventListResponse>(
+    await fetch("/api/v1/session/auth-events", {
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionHeaders(token),
     }),
   );
 }
