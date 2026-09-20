@@ -16,6 +16,7 @@ repository = "https://github.com/qq940500529/secretbridge"
 [workspace.dependencies]
 axum = { version = "=0.8.9", features = ["json", "ws"] }
 futures-util = "=0.3.34"
+hex = "=0.4.3"
 http-body-util = "=0.1.5"
 keyring = "=4.2.0"
 portable-pty = "=0.9.0"

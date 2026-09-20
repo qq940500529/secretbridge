@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 axum.workspace = true
+hex.workspace = true
 keyring.workspace = true
 portable-pty.workspace = true
 reqwest.workspace = true

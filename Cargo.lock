@@ -3216,6 +3216,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures-util",
+ "hex",
  "http-body-util",
  "keyring",
  "mysql_async",
