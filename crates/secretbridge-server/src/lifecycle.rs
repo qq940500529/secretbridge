@@ -75,12 +75,8 @@ fn controller() -> Result<BrokerController> {
 }
 pub(super) async fn stop() -> Result<()> {
     let controller = controller()?;
-    if controller.status().await.is_err() {
-        return if controller.is_reachable().await {
-            Err("legacy_broker_requires_manual_stop")
-        } else {
-            Ok(())
-        };
+    if wait_for_runtime_or_shutdown(&controller).await?.is_none() {
+        return Ok(());
     }
     controller.stop().await.map_err(|_| "broker_stop_failed")?;
     tokio::time::timeout(Duration::from_secs(20), async {
@@ -93,14 +89,11 @@ pub(super) async fn stop() -> Result<()> {
 }
 async fn start(open: bool) -> Result<RuntimeStatus> {
     let controller = controller()?;
-    if let Ok(status) = controller.status().await {
+    if let Some(status) = wait_for_runtime_or_shutdown(&controller).await? {
         if open {
             controller.open().await.map_err(|_| "browser_open_failed")?;
         }
         return Ok(status);
-    }
-    if controller.is_reachable().await {
-        return Err("legacy_broker_requires_manual_stop");
     }
     let (executable, web) = installation::active_paths()?.unwrap_or((
         env::current_exe().map_err(|_| "executable_unavailable")?,
@@ -115,6 +108,28 @@ async fn start(open: bool) -> Result<RuntimeStatus> {
         controller.open().await.map_err(|_| "browser_open_failed")?;
     }
     Ok(status)
+}
+
+/// Distinguishes an older reachable broker from a current broker that is between
+/// closing its runtime-control listener and finishing process shutdown. The latter
+/// is a normal lifecycle transition on Unix and must not make an immediate upgrade
+/// look like an unsupported legacy installation.
+async fn wait_for_runtime_or_shutdown(
+    controller: &BrokerController,
+) -> Result<Option<RuntimeStatus>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Ok(status) = controller.status().await {
+            return Ok(Some(status));
+        }
+        if !controller.is_reachable().await {
+            return Ok(None);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("legacy_broker_requires_manual_stop");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 pub(super) async fn launch(executable: &Path, web: &Path) -> Result<RuntimeStatus> {
     let version = executable_version(executable)?;
