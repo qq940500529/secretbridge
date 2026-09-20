@@ -31,6 +31,7 @@ flowchart TD
 | 本机固定程序 | [凭据命令任务](凭据命令任务.md) · [参数与授权](参数化任务与授权.md) |
 | HTTP | [HTTP 凭据任务](HTTP凭据任务.md) |
 | SSH | [SSH 凭据任务](SSH凭据任务.md) |
+| Telnet 旧设备（默认关闭） | [Telnet 凭据任务](Telnet凭据任务.md) |
 | SFTP 与 Git HTTPS | [文件传输与 Git 任务](文件传输与Git任务.md) |
 | PostgreSQL 与 MySQL | [数据库凭据任务](数据库凭据任务.md) |
 

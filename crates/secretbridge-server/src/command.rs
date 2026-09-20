@@ -33,6 +33,8 @@ pub struct CommandConfig {
     #[serde(default)]
     pub ssh: Option<crate::ssh_task::SshConfig>,
     #[serde(default)]
+    pub telnet: Option<crate::telnet_task::TelnetConfig>,
+    #[serde(default)]
     pub git: Option<crate::git_task::GitConfig>,
     #[serde(default)]
     pub parameters: Vec<crate::parameters::ParameterDefinition>,
@@ -66,6 +68,7 @@ impl CommandConfig {
         crate::parameters::validate(&self.parameters)?;
         if usize::from(self.http.is_some())
             + usize::from(self.ssh.is_some())
+            + usize::from(self.telnet.is_some())
             + usize::from(self.git.is_some())
             + usize::from(self.database.is_some())
             > 1
@@ -75,6 +78,7 @@ impl CommandConfig {
         if self.terminal_id.is_some()
             && (self.http.is_some()
                 || self.ssh.is_some()
+                || self.telnet.is_some()
                 || self.git.is_some()
                 || self.database.is_some())
         {
@@ -88,6 +92,9 @@ impl CommandConfig {
         }
         if let Some(ssh) = &self.ssh {
             return ssh.validate(self);
+        }
+        if let Some(telnet) = &self.telnet {
+            return telnet.validate(self);
         }
         if let Some(http) = &self.http {
             return http.validate(self);
@@ -314,46 +321,17 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
-    if let Some(database) = &config.database {
-        crate::database_task::drive(
-            state,
-            id,
-            database,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
-        return;
-    }
-    if let Some(ssh) = &config.ssh {
-        crate::ssh_task::drive(
-            state,
-            id,
-            ssh,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
-        return;
-    }
-    if let Some(http) = &config.http {
-        crate::http_task::drive(
-            state,
-            id,
-            http,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
+    if drive_protocol(&ProtocolExecution {
+        state,
+        id,
+        config: &config,
+        parameters: &parameters,
+        secrets: &secrets,
+        cancellation,
+        limit,
+    })
+    .await
+    {
         return;
     }
     if drive_in_terminal(
@@ -385,6 +363,80 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         let _ = state.changes.send(());
     })
     .await;
+}
+
+struct ProtocolExecution<'a> {
+    state: &'a AppState,
+    id: Uuid,
+    config: &'a CommandConfig,
+    parameters: &'a crate::parameters::ParameterValues,
+    secrets: &'a [Zeroizing<String>],
+    cancellation: &'a CancellationToken,
+    limit: Duration,
+}
+
+async fn drive_protocol(execution: &ProtocolExecution<'_>) -> bool {
+    let ProtocolExecution {
+        state,
+        id,
+        config,
+        parameters,
+        secrets,
+        cancellation,
+        limit,
+    } = execution;
+    if let Some(database) = &config.database {
+        crate::database_task::drive(
+            state,
+            *id,
+            database,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(ssh) = &config.ssh {
+        crate::ssh_task::drive(
+            state,
+            *id,
+            ssh,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(telnet) = &config.telnet {
+        crate::telnet_task::drive(
+            state,
+            *id,
+            telnet,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(http) = &config.http {
+        crate::http_task::drive(
+            state,
+            *id,
+            http,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else {
+        return false;
+    }
+    true
 }
 
 async fn load_command_secrets(

@@ -22,6 +22,7 @@ const renderedViews = [
   "ParameterFields.tsx",
   "HttpEditor.tsx",
   "SshEditor.tsx",
+  "TelnetEditor.tsx",
   "CredentialSecretInput.tsx",
   "Workbench.tsx",
   "TaskWorkspace.tsx",

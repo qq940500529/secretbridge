@@ -371,6 +371,7 @@ export interface CommandConfig {
   git?: GitConfig | null;
   http?: HttpConfig | null;
   ssh?: SshConfig | null;
+  telnet?: TelnetConfig | null;
   parameters?: ParameterDefinition[];
   program: string;
   working_directory: string;
@@ -408,6 +409,19 @@ export interface SshConfig {
   arguments: Array<
     { kind: "literal"; value: string } | { kind: "parameter"; name: string }
   >;
+}
+export interface TelnetConfig {
+  host: string;
+  port: number;
+  username: string;
+  password_slot: string;
+  login_prompt: string;
+  password_prompt: string;
+  command_prompt: string;
+  authentication_failure_prompt: string | null;
+  commands: string[];
+  logout_command: string;
+  max_output_bytes: number;
 }
 export interface TransferConfig {
   direction: "upload" | "download";

@@ -162,9 +162,36 @@ try {
   assert.deepEqual(items[2].command.database.columns, ["number"]);
   assert.equal(items[2].command.git, null);
   assert.equal(items[2].command.slots[0].injection, "protocol");
+
+  await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
+  await page.getByLabel("模板名称").fill("Telnet UI 验证");
+  await page.getByLabel("连接分组").selectOption("synthetic-target");
+  await page.getByLabel("内置受控操作").selectOption("command_execution");
+  await page.getByLabel("执行方式").selectOption("telnet");
+  await page.getByLabel("固定主机地址").fill("legacy.example.com");
+  await page.getByLabel("固定登录账号").fill("operator");
+  await page.getByLabel("密码凭据引用").selectOption("synthetic-password");
+  await page.getByLabel("账号提示符").fill("login: ");
+  await page.getByLabel("密码提示符").fill("Password: ");
+  await page.getByLabel("命令提示符").fill("legacy> ");
+  await page
+    .getByLabel("固定命令脚本（每行一条）")
+    .fill("show status\nshow version");
+  await page.getByLabel("输出上限（字节）").fill("32768");
+  await page.getByRole("button", { name: "添加模板", exact: true }).click();
+  await page.getByRole("button", { name: /Telnet UI 验证/ }).waitFor();
+  assert.equal(items.length, 4);
+  assert.equal(items[3].command.telnet.host, "legacy.example.com");
+  assert.deepEqual(items[3].command.telnet.commands, [
+    "show status",
+    "show version",
+  ]);
+  assert.equal(items[3].command.telnet.max_output_bytes, 32768);
+  assert.equal(items[3].command.slots[0].injection, "protocol");
+  assert.equal(items[3].command.ssh, null);
   assert.deepEqual(errors, []);
   console.log(
-    "Connector UI smoke passed: interactive SFTP, Git and database configuration and submitted payloads.",
+    "Connector UI smoke passed: interactive SFTP, Git, database and Telnet configuration and submitted payloads.",
   );
 } finally {
   await browser.close();

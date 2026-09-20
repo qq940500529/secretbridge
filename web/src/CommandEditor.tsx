@@ -6,6 +6,7 @@ import type { CommandConfig, CredentialReference, CredentialSlot } from "./api";
 import { ParameterEditor } from "./ParameterEditor";
 import { HttpEditor, emptyHttp } from "./HttpEditor";
 import { SshEditor, emptySsh } from "./SshEditor";
+import { TelnetEditor, emptyTelnet } from "./TelnetEditor";
 import { GitEditor, emptyGit } from "./GitEditor";
 import { DatabaseEditor, emptyDatabase } from "./DatabaseEditor";
 
@@ -48,9 +49,11 @@ export function CommandEditor({
                 ? "sftp"
                 : value.ssh
                   ? "ssh"
-                  : value.http
-                    ? "http"
-                    : "program"
+                  : value.telnet
+                    ? "telnet"
+                    : value.http
+                      ? "http"
+                      : "program"
         }
         onChange={(e) =>
           onChange({
@@ -72,6 +75,7 @@ export function CommandEditor({
                       },
                     }
                   : null,
+            telnet: e.target.value === "telnet" ? emptyTelnet : null,
             git: e.target.value === "git" ? emptyGit : null,
             parameters: [],
             program: "",
@@ -85,6 +89,7 @@ export function CommandEditor({
         <option value="program">{zh ? "本机程序" : "Local program"}</option>
         <option value="http">HTTP / HTTPS</option>
         <option value="ssh">SSH</option>
+        <option value="telnet">Telnet</option>
         <option value="sftp">
           {zh ? "SFTP 文件传输" : "SFTP file transfer"}
         </option>
@@ -148,6 +153,19 @@ export function CommandEditor({
             zh={zh}
           />
         )}
+      </fieldset>
+    );
+  if (value.telnet)
+    return (
+      <fieldset className="mt-5 space-y-4 border-t border-slate-200 pt-5">
+        <legend className="px-1 text-sm font-semibold">Telnet</legend>
+        {selector}
+        <TelnetEditor
+          config={value}
+          onChange={onChange}
+          credentials={credentials}
+          zh={zh}
+        />
       </fieldset>
     );
   if (value.http)

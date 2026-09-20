@@ -23,6 +23,7 @@ mod sftp_task;
 mod ssh_task;
 #[cfg(test)]
 mod stability_acceptance;
+mod telnet_task;
 mod terminal;
 mod terminal_control;
 

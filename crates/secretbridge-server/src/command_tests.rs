@@ -52,6 +52,7 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         database: None,
         http: None,
         ssh: None,
+        telnet: None,
         git: None,
         parameters: Vec::new(),
         program: program.to_string_lossy().into_owned(),

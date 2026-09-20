@@ -1927,6 +1927,13 @@ fn policy_evaluation(
             if config.validate().is_err() {
                 reasons.push(PolicyReasonCode::TargetIncompatible);
             }
+            if config
+                .telnet
+                .as_ref()
+                .is_some_and(|telnet| !telnet.matches_target(config, target))
+            {
+                reasons.push(PolicyReasonCode::TargetIncompatible);
+            }
             for slot in &config.slots {
                 match credential_by_id(connection, slot.credential_id)? {
                     None => reasons.push(PolicyReasonCode::CredentialMissing),

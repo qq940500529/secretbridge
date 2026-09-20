@@ -224,6 +224,7 @@ impl McpBackend {
                         database: None,
                         http: None,
                         ssh: None,
+                        telnet: None,
                         git: None,
                         parameters: Vec::new(),
                         program: params.program,
@@ -1831,6 +1832,12 @@ impl From<ActionTemplate> for TemplateSummary {
                 "git"
             } else if template.command.as_ref().is_some_and(|c| c.ssh.is_some()) {
                 "ssh"
+            } else if template
+                .command
+                .as_ref()
+                .is_some_and(|c| c.telnet.is_some())
+            {
+                "telnet"
             } else if template.command.as_ref().is_some_and(|c| c.http.is_some()) {
                 "http"
             } else if template.command.is_some() {
