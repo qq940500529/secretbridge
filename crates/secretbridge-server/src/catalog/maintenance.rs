@@ -315,7 +315,7 @@ fn bundle_digest(bundle: &ConfigurationBundle) -> Result<String, CatalogError> {
     if bytes.len() > MAX_CONFIGURATION_BYTES {
         return Err(CatalogError::Invalid);
     }
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 pub(crate) fn inspect_backup(bytes: &[u8]) -> Result<(BackupReport, Catalog), CatalogError> {

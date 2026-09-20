@@ -303,7 +303,7 @@ fn checksum(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 pub(super) fn active_paths() -> Result<Option<(PathBuf, PathBuf)>> {
     let Some(installation) = load()? else {

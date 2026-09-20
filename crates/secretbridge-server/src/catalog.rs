@@ -1369,7 +1369,7 @@ impl Catalog {
         request: &CreateSyntheticRun,
     ) -> Result<CreateRunOutcome, CatalogError> {
         let idempotency_key = normalize_idempotency_key(&request.idempotency_key)?;
-        let idempotency_key_hash = format!("{:x}", Sha256::digest(idempotency_key.as_bytes()));
+        let idempotency_key_hash = hex::encode(Sha256::digest(idempotency_key.as_bytes()));
         let mut connection = self.lock();
         let now = now_unix_ms_i64()?;
         expire_approvals(&connection, now)?;

@@ -65,7 +65,7 @@ fn digest(path: &Path) -> Result<String> {
         return Err("startup_file_changed");
     }
     let bytes = fs::read(path).map_err(|_| "startup_file_changed")?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 pub(super) struct Snapshot(Vec<(PathBuf, Option<Vec<u8>>)>);
 impl Snapshot {
