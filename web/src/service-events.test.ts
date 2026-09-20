@@ -12,8 +12,12 @@ class FakeSocket {
   onerror: (() => void) | null = null;
   send = vi.fn();
   close = vi.fn(() => this.onclose?.());
-  constructor(public url: string) { FakeSocket.instances.push(this); }
-  message(type: string) { this.onmessage?.({ data: JSON.stringify({ type }) }); }
+  constructor(public url: string) {
+    FakeSocket.instances.push(this);
+  }
+  message(type: string) {
+    this.onmessage?.({ data: JSON.stringify({ type }) });
+  }
 }
 
 beforeEach(() => {
@@ -22,7 +26,10 @@ beforeEach(() => {
   vi.stubGlobal("window", { location: { href: "http://127.0.0.1:8787/" } });
   vi.stubGlobal("WebSocket", FakeSocket);
 });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("live service changes", () => {
   it("authenticates in the first frame, never in the URL, and coalesces invalidations", () => {
@@ -31,7 +38,9 @@ describe("live service changes", () => {
     const socket = FakeSocket.instances[0];
     expect(socket.url).toBe("ws://127.0.0.1:8787/api/v1/events");
     socket.onopen?.();
-    expect(socket.send).toHaveBeenCalledWith(JSON.stringify({ type: "authenticate", token: "test-session" }));
+    expect(socket.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "authenticate", token: "test-session" }),
+    );
     socket.message("changed");
     vi.advanceTimersByTime(100);
     expect(changed).not.toHaveBeenCalled();

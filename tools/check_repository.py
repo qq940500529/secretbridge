@@ -5,43 +5,85 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import re
 import sys
 import unicodedata
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 REQUIRED = (
-    "README.md", "README.zh-CN.md", "LICENSE", "SECURITY.md",
-    "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "ROADMAP.md",
-    "CHANGELOG.md", "THIRD_PARTY_NOTICES.md",
-    "COPYRIGHT.md", "LICENSING.md", "COMMERCIAL_LICENSE.md",
-    "docs/README.md", "docs/使用指南.md", "docs/开发者入门.md",
-    "docs/依赖许可风险评估.md", "docs/贡献与再许可.md",
-    "docs/发行物验证与SBOM.md", "docs/依赖漏洞与发行门槛.md", "docs/自动化安全验收.md",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "ROADMAP.md",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "COPYRIGHT.md",
+    "LICENSING.md",
+    "COMMERCIAL_LICENSE.md",
+    "docs/README.md",
+    "docs/使用指南.md",
+    "docs/开发者入门.md",
+    "docs/依赖许可风险评估.md",
+    "docs/贡献与再许可.md",
+    "docs/发行物验证与SBOM.md",
+    "docs/依赖漏洞与发行门槛.md",
+    "docs/自动化安全验收.md",
     "security/dependency-vulnerability-policy.json",
-    "Cargo.toml", "Cargo.lock", "package.json", "pnpm-lock.yaml",
-    "pnpm-workspace.yaml", "rust-toolchain.toml",
+    "Cargo.toml",
+    "Cargo.lock",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "rust-toolchain.toml",
     "tools/check_dependency_licenses.py",
     "tools/verify_reproducible_packages.py",
     ".github/workflows/repository-checks.yml",
 )
 SPECIAL_NAMES = {
-    "LICENSE", "Cargo.lock", ".gitignore", ".gitattributes",
-    ".editorconfig", "CODEOWNERS",
+    "LICENSE",
+    "Cargo.lock",
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+    ".node-version",
+    ".prettierignore",
+    "CODEOWNERS",
 }
 TEXT_SUFFIXES = {
-    ".css", ".html", ".json", ".md", ".py", ".rs", ".toml",
-    ".ts", ".tsx", ".mjs", ".yml", ".yaml", ".ps1", ".sh",
+    ".css",
+    ".html",
+    ".json",
+    ".md",
+    ".py",
+    ".rs",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".mjs",
+    ".yml",
+    ".yaml",
+    ".ps1",
+    ".sh",
 }
-SKIP_PARTS = {".git", "__pycache__", "dist", "node_modules", "target"}
+SKIP_PARTS = {".git", ".ruff_cache", "__pycache__", "dist", "node_modules", "target"}
+MAX_RUST_SOURCE_LINES = 2_500
+MAX_MARKDOWN_LINES = 240
 PATTERNS = {
     "private-key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "github-token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
     "aws-access-key": re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
-    "credential-url": re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.I),
-    "personal-path": re.compile(r"[A-Za-z]:[\\/](?:Users|文档)[\\/]|/(?:Users|home)/[A-Za-z0-9_.-]+/"),
-    "private-ip": re.compile(r"(?<![\d.])(?:10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?![\d.])"),
+    "credential-url": re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:]+:[^\s/@]+@", re.IGNORECASE),
+    "personal-path": re.compile(
+        r"[A-Za-z]:[\\/](?:Users|文档)[\\/]|/(?:Users|home)/[A-Za-z0-9_.-]+/"
+    ),
+    "private-ip": re.compile(
+        r"(?<![\d.])(?:10\.(?:\d{1,3}\.){2}\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(?![\d.])"
+    ),
 }
 
 
@@ -51,8 +93,9 @@ def markdown_structure(content: str) -> tuple[str, list[str]]:
     fence = None
     for line in content.splitlines():
         if fence is not None:
-            if re.fullmatch(r" {0,3}" + re.escape(fence[0]) +
-                            "{" + str(len(fence)) + r",}\s*", line):
+            if re.fullmatch(
+                r" {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*", line
+            ):
                 fence = None
             continue
         opening = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
@@ -63,7 +106,7 @@ def markdown_structure(content: str) -> tuple[str, list[str]]:
     errors = ["unclosed-fence"] if fence is not None else []
     body = "\n".join(visible)
     depth = 0
-    for match in re.finditer(r"<(/?)details\b[^>]*>", body, re.I):
+    for match in re.finditer(r"<(/?)details\b[^>]*>", body, re.IGNORECASE):
         depth += -1 if match[1] else 1
         if depth < 0:
             errors.append("unbalanced-details")
@@ -80,12 +123,13 @@ def markdown_anchors(content: str) -> set[str]:
     an explicit anchor and a rendering review.
     """
     body, _ = markdown_structure(content)
-    anchors = set(re.findall(r'<a\s+(?:name|id)=["\x27]([^"\x27]+)["\x27]', body, re.I))
+    anchors = set(re.findall(r'<a\s+(?:name|id)=["\x27]([^"\x27]+)["\x27]', body, re.IGNORECASE))
     generated = set()
-    for heading in re.findall(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", body, re.M):
+    for heading in re.findall(r"^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$", body, re.MULTILINE):
         plain = re.sub(r"<[^>]+>", "", heading).replace("`", "")
-        slug = "".join(c for c in plain.lower()
-                       if c in "-_ " or unicodedata.category(c)[0] in "LNM")
+        slug = "".join(
+            c for c in plain.lower() if c in "-_ " or unicodedata.category(c)[0] in "LNM"
+        )
         slug = slug.replace(" ", "-")
         candidate, suffix = slug, 0
         while candidate in generated:
@@ -110,6 +154,11 @@ def inspect_file(root: Path, path: Path) -> list[str]:
     except (UnicodeError, OSError):
         return [f"{label}: unreadable-text"]
     errors = [f"{label}: {name}" for name, pattern in PATTERNS.items() if pattern.search(content)]
+    line_count = len(content.splitlines())
+    if path.suffix == ".rs" and line_count > MAX_RUST_SOURCE_LINES:
+        errors.append(f"{label}: oversized-rust-module")
+    if path.suffix == ".md" and line_count > MAX_MARKDOWN_LINES:
+        errors.append(f"{label}: oversized-document")
     if path.suffix == ".md":
         body, structure_errors = markdown_structure(content)
         errors.extend(f"{label}: {rule}" for rule in structure_errors)
@@ -118,7 +167,9 @@ def inspect_file(root: Path, path: Path) -> list[str]:
             parsed = urlsplit(link)
             if parsed.scheme or parsed.netloc:
                 continue
-            target = (path.parent / unquote(parsed.path)).resolve() if parsed.path else path.resolve()
+            target = (
+                (path.parent / unquote(parsed.path)).resolve() if parsed.path else path.resolve()
+            )
             if not target.is_relative_to(root.resolve()):
                 errors.append(f"{label}: link-outside-repository")
             elif not target.exists():

@@ -10,10 +10,7 @@ export function readPairingToken(hash: string): string | null {
   return token || null;
 }
 
-export function urlWithoutFragment(
-  pathname: string,
-  search: string,
-): string {
+export function urlWithoutFragment(pathname: string, search: string): string {
   return `${pathname}${search}`;
 }
 

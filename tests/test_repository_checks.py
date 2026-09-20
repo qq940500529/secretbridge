@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Use generated synthetic strings, never real credentials."""
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from tools.check_repository import (
-    PATTERNS, check_repository, inspect_file, markdown_anchors, markdown_structure,
+    PATTERNS,
+    check_repository,
+    inspect_file,
+    markdown_anchors,
+    markdown_structure,
 )
 
 
@@ -20,16 +24,16 @@ class RepositoryChecks(unittest.TestCase):
             return inspect_file(root, path)
 
     def test_explicit_local_anchor(self):
-        self.assertEqual([], self.check_markdown(
-            '<a name="overview"></a>\n[ok](#overview)'))
+        self.assertEqual([], self.check_markdown('<a name="overview"></a>\n[ok](#overview)'))
 
     def test_missing_local_fragment(self):
-        self.assertIn("sample.md: missing-fragment",
-                      self.check_markdown("[no](#missing)"))
+        self.assertIn("sample.md: missing-fragment", self.check_markdown("[no](#missing)"))
 
     def test_unicode_heading_and_duplicate_slugs(self):
-        self.assertEqual({"开始", "开始-1", "a", "a-1", "a-1-1"},
-                         markdown_anchors("# 开始\n## 开始\n## A\n## A\n## A-1"))
+        self.assertEqual(
+            {"开始", "开始-1", "a", "a-1", "a-1-1"},
+            markdown_anchors("# 开始\n## 开始\n## A\n## A\n## A-1"),
+        )
 
     def test_cross_document_fragment(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,11 +109,29 @@ class RepositoryChecks(unittest.TestCase):
     def test_application_source_types_are_checked_as_text(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("main.rs", "App.tsx", "styles.css", "Cargo.toml", "fixture.ps1", "fixture.sh", "fixture.mjs"):
+            for name in (
+                "main.rs",
+                "App.tsx",
+                "styles.css",
+                "Cargo.toml",
+                "fixture.ps1",
+                "fixture.sh",
+                "fixture.mjs",
+            ):
                 with self.subTest(name=name):
                     path = root / name
                     path.write_text("synthetic", encoding="utf-8")
                     self.assertEqual([], inspect_file(root, path))
+
+    def test_oversized_modules_and_documents_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rust = root / "large.rs"
+            rust.write_text("// line\n" * 2501, encoding="utf-8")
+            self.assertIn("large.rs: oversized-rust-module", inspect_file(root, rust))
+            document = root / "large.md"
+            document.write_text("text\n" * 241, encoding="utf-8")
+            self.assertIn("large.md: oversized-document", inspect_file(root, document))
 
     def test_required_files(self):
         with tempfile.TemporaryDirectory() as directory:

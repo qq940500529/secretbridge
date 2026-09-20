@@ -3,7 +3,7 @@
 
 use std::{error::Error, fmt};
 
-use keyring::Entry;
+use keyring::{Entry, Error as KeyringError};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -11,12 +11,20 @@ const KEYRING_SERVICE: &str = "com.shulianchuangyuan.secretbridge";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecretStoreError {
+    NotFound,
+    LockedOrDenied,
     Unavailable,
 }
 
 impl fmt::Display for SecretStoreError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("the operating-system credential store is unavailable")
+        formatter.write_str(match self {
+            Self::NotFound => "the credential entry does not exist",
+            Self::LockedOrDenied => {
+                "the operating-system credential store is locked or denied access"
+            }
+            Self::Unavailable => "the operating-system credential store is unavailable",
+        })
     }
 }
 
@@ -32,9 +40,17 @@ pub trait SecretStore: Send + Sync {
 pub struct NativeSecretStore;
 
 impl NativeSecretStore {
+    fn map_error(error: &KeyringError) -> SecretStoreError {
+        match error {
+            KeyringError::NoEntry => SecretStoreError::NotFound,
+            KeyringError::NoStorageAccess(_) => SecretStoreError::LockedOrDenied,
+            _ => SecretStoreError::Unavailable,
+        }
+    }
+
     fn entry(credential_id: Uuid) -> Result<Entry, SecretStoreError> {
         Entry::new(KEYRING_SERVICE, &credential_id.to_string())
-            .map_err(|_| SecretStoreError::Unavailable)
+            .map_err(|error| Self::map_error(&error))
     }
 }
 
@@ -42,20 +58,20 @@ impl SecretStore for NativeSecretStore {
     fn set(&self, credential_id: Uuid, secret: &str) -> Result<(), SecretStoreError> {
         Self::entry(credential_id)?
             .set_password(secret)
-            .map_err(|_| SecretStoreError::Unavailable)
+            .map_err(|error| Self::map_error(&error))
     }
 
     fn get(&self, credential_id: Uuid) -> Result<Zeroizing<String>, SecretStoreError> {
         Self::entry(credential_id)?
             .get_password()
             .map(Zeroizing::new)
-            .map_err(|_| SecretStoreError::Unavailable)
+            .map_err(|error| Self::map_error(&error))
     }
 
     fn delete(&self, credential_id: Uuid) -> Result<(), SecretStoreError> {
         Self::entry(credential_id)?
             .delete_credential()
-            .map_err(|_| SecretStoreError::Unavailable)
+            .map_err(|error| Self::map_error(&error))
     }
 }
 
@@ -86,7 +102,7 @@ impl SecretStore for MemorySecretStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&credential_id)
             .cloned()
-            .ok_or(SecretStoreError::Unavailable)
+            .ok_or(SecretStoreError::NotFound)
     }
 
     fn delete(&self, credential_id: Uuid) -> Result<(), SecretStoreError> {
@@ -95,7 +111,7 @@ impl SecretStore for MemorySecretStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&credential_id)
             .map(|_| ())
-            .ok_or(SecretStoreError::Unavailable)
+            .ok_or(SecretStoreError::NotFound)
     }
 }
 

@@ -5,16 +5,16 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import json
 import os
-from pathlib import Path
 import socket
 import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
+from pathlib import Path
 from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,14 +41,46 @@ def available_port() -> int:
 
 def rss_mib(process_id: int) -> float:
     if sys.platform == "win32":
-        command = [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            f"(Get-Process -Id {process_id}).WorkingSet64",
+        import ctypes
+        from ctypes import wintypes
+
+        class _ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("page_fault_count", wintypes.DWORD),
+                ("peak_working_set_size", ctypes.c_size_t),
+                ("working_set_size", ctypes.c_size_t),
+                ("quota_peak_paged_pool_usage", ctypes.c_size_t),
+                ("quota_paged_pool_usage", ctypes.c_size_t),
+                ("quota_peak_non_paged_pool_usage", ctypes.c_size_t),
+                ("quota_non_paged_pool_usage", ctypes.c_size_t),
+                ("pagefile_usage", ctypes.c_size_t),
+                ("peak_pagefile_usage", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        psapi.GetProcessMemoryInfo.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(_ProcessMemoryCounters),
+            wintypes.DWORD,
         ]
-        raw = subprocess.check_output(command, text=True, timeout=10).strip()
-        return int(raw) / 1024 / 1024
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x0400 | 0x0010, False, process_id)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            counters = _ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return counters.working_set_size / 1024 / 1024
+        finally:
+            kernel32.CloseHandle(handle)
     if sys.platform.startswith("linux"):
         status = Path(f"/proc/{process_id}/status").read_text(encoding="utf-8")
         line = next(item for item in status.splitlines() if item.startswith("VmRSS:"))
@@ -123,24 +155,21 @@ def measure(binary: Path, web_root: Path, rounds: int) -> dict[str, object]:
 
 
 def evaluate(metrics: dict[str, object], limits: dict[str, float]) -> list[str]:
-    return [
-        key
-        for key, limit in limits.items()
-        if float(metrics[key]) > limit
-    ]
+    return [key for key, limit in limits.items() if float(metrics[key]) > limit]
 
 
 def main() -> int:
-    default_binary = ROOT / "target" / "debug" / (
-        "secretbridge-server.exe" if os.name == "nt" else "secretbridge-server"
+    default_binary = (
+        ROOT
+        / "target"
+        / "debug"
+        / ("secretbridge-server.exe" if os.name == "nt" else "secretbridge-server")
     )
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=default_binary)
     parser.add_argument("--web-root", type=Path, default=ROOT / "web" / "dist")
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument(
-        "--output", type=Path, default=ROOT / "dist" / "personal-scale.json"
-    )
+    parser.add_argument("--output", type=Path, default=ROOT / "dist" / "personal-scale.json")
     args = parser.parse_args()
     if not args.binary.is_file() or not (args.web_root / "index.html").is_file():
         print("Build the broker and Web application before measuring.", file=sys.stderr)

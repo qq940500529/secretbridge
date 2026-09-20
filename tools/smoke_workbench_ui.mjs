@@ -169,6 +169,7 @@ try {
       };
     else if (path.endsWith("/events") || path === "/api/v1/safe-events")
       body = { items: [] };
+    else throw new Error(`Unexpected fixture request: ${method} ${path}`);
     await route.fulfill({ status, json: body });
   });
   await page.goto(
@@ -234,12 +235,31 @@ try {
   await add.click();
   await page.getByLabel("引用名称").fill("工作台测试密码");
   await page.getByRole("button", { name: "添加", exact: true }).click();
+  await drawer.waitFor({ state: "hidden" });
+  await page.waitForFunction(
+    (button) => document.activeElement === button,
+    addHandle,
+    { timeout: 2_000 },
+  );
   await page.getByLabel("输入新秘密值").fill("synthetic-secret-only");
   await page
     .getByRole("button", { name: "保存到系统凭据库", exact: true })
     .click();
   await page.getByText("已安全保存", { exact: true }).waitFor();
   assert.equal(await page.getByLabel("输入新秘密值").inputValue(), "");
+  const editCredential = page.getByRole("button", {
+    name: "编辑",
+    exact: true,
+  });
+  await editCredential.click();
+  await drawer.waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  const editHandle = await editCredential.elementHandle();
+  await page.waitForFunction(
+    (button) => document.activeElement === button,
+    editHandle,
+    { timeout: 2_000 },
+  );
   await nav("连接").click();
   await page.getByRole("button", { name: "新建连接", exact: true }).click();
   await page.getByLabel("连接名称").fill("工作台测试连接");
@@ -398,7 +418,11 @@ try {
     };
     const scaleDurations = {
       tasks_ms: await searchAndOpen("任务", "规模任务 199", "规模任务 199"),
-      connections_ms: await searchAndOpen("连接", "规模连接 099", "规模连接 099"),
+      connections_ms: await searchAndOpen(
+        "连接",
+        "规模连接 099",
+        "规模连接 099",
+      ),
       history_ms: await searchAndOpen("历史", "规模任务 199", "规模连接 099"),
     };
     console.log(

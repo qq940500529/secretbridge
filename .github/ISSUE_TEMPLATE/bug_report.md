@@ -11,17 +11,18 @@ assignees: ""
 
 ## Affected area
 
-Documentation / repository tooling / another area:
+Choose one: install/upgrade/uninstall, credential store, browser UI, terminal, HTTP, SSH/SFTP, Git, PostgreSQL/MySQL, MCP/IPC, backup/restore, documentation, repository tooling, or other.
 
 ## Environment
 
-Repository commit or version, OS/version and relevant tool versions:
+Repository commit or package version, OS/version, architecture, install method and relevant browser/tool versions:
 
 ## Reproduction
 
-1. Prepare synthetic input.
-2. Describe the operation.
-3. Describe the observed result.
+1. Start from a stated clean or existing configuration.
+2. Prepare synthetic input only.
+3. Describe the exact operation and whether it is reproducible after restart.
+4. Describe the observed result.
 
 ## Expected behavior
 
@@ -29,6 +30,11 @@ Repository commit or version, OS/version and relevant tool versions:
 
 Provide sanitized output only.
 
+## Data and cleanup
+
+State whether the report uses only synthetic credentials, whether any temporary service remains, and whether uninstall/data retention behaved as documented.
+
 ## Checks already performed
 
 For a documentation issue, include the affected page and section.
+For a package issue, state whether `verify-package` and the isolated lifecycle test passed. For a UI issue, include keyboard, zoom and browser observations when relevant.

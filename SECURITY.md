@@ -3,7 +3,7 @@
 [Home](README.md) / Security
 
 > [!WARNING]
-> No supported application release is available. Do not use real credentials with this design-stage project. No independent security audit has been completed.
+> No supported public application release is available. Use only synthetic credentials when evaluating a source build or CI artifact. No independent security audit has been completed.
 
 ## Report a vulnerability privately
 

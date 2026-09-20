@@ -18,7 +18,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 24
+          node-version-file: .node-version
       - name: Install locked dependency scanners
         shell: bash
         run: |
@@ -43,7 +43,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 24
+          node-version-file: .node-version
       - name: Build Web application
         run: |
           corepack enable
@@ -55,6 +55,12 @@ jobs:
           python tools/check_dependency_licenses.py
       - name: Build native application
         run: cargo build --release --locked
+      - name: Measure release personal-scale baseline
+        shell: bash
+        run: |
+          executable=target/release/secretbridge-server
+          if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
+          python tools/test_personal_scale.py --binary "$executable" --rounds 5 --output dist/release-personal-scale.json
       - name: Package executable, Web assets, SBOM and corresponding source twice
         shell: bash
         env:
@@ -71,10 +77,15 @@ jobs:
           for archive in dist/packages-a/*.zip dist/packages-a/*.tar.gz; do
             if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
           done
+      - name: Record release toolchain metadata
+        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
       - name: Retain unsigned native packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: secretbridge-${{ runner.os }}-${{ runner.arch }}
-          path: dist/packages-a/*
+          path: |
+            dist/packages-a/*
+            dist/ci-metadata.json
+            dist/release-personal-scale.json
           if-no-files-found: error
           retention-days: 30

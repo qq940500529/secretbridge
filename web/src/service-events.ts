@@ -4,7 +4,10 @@
 import { useEffect, useRef } from "react";
 
 /** Invalidation only: resource values continue to come from authenticated HTTP APIs. */
-export function subscribeServiceChanges(token: string, onChange: () => void): () => void {
+export function subscribeServiceChanges(
+  token: string,
+  onChange: () => void,
+): () => void {
   let stopped = false;
   let socket: WebSocket | null = null;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -32,7 +35,8 @@ export function subscribeServiceChanges(token: string, onChange: () => void): ()
       }
     };
     current.onmessage = (event) => {
-      if (stopped || socket !== current || typeof event.data !== "string") return;
+      if (stopped || socket !== current || typeof event.data !== "string")
+        return;
       try {
         const message = JSON.parse(event.data) as { type?: string };
         if (message.type === "ready") {
@@ -42,7 +46,9 @@ export function subscribeServiceChanges(token: string, onChange: () => void): ()
         } else if (message.type === "changed" && ready) {
           notify();
         }
-      } catch { /* Ignore malformed or unrelated notifications. */ }
+      } catch {
+        /* Ignore malformed or unrelated notifications. */
+      }
     };
     current.onerror = () => current.close();
     current.onclose = () => {
@@ -68,5 +74,8 @@ export function subscribeServiceChanges(token: string, onChange: () => void): ()
 export function useServiceChanges(token: string, onChange: () => void): void {
   const callback = useRef(onChange);
   callback.current = onChange;
-  useEffect(() => subscribeServiceChanges(token, () => callback.current()), [token]);
+  useEffect(
+    () => subscribeServiceChanges(token, () => callback.current()),
+    [token],
+  );
 }

@@ -31,4 +31,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Run bounded stability acceptance
-        run: python tools/test_stability_acceptance.py --profile soak --iterations "$STABILITY_ITERATIONS"
+        run: python tools/test_stability_acceptance.py --profile soak --iterations "$STABILITY_ITERATIONS" --with-databases
+      - name: Retain sanitized stability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: stability-soak-${{ runner.os }}-${{ runner.arch }}
+          path: dist/stability-acceptance.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -585,8 +585,12 @@ async fn request(
             let mut query = tx
                 .exec_iter(&sql, bound)
                 .await
-                .map_err(|_| "query_failed")?;
-            while let Some(row) = query.next().await.map_err(|_| "query_failed")? {
+                .map_err(|error| mysql_query_error(&error))?;
+            while let Some(row) = query
+                .next()
+                .await
+                .map_err(|error| mysql_query_error(&error))?
+            {
                 let values = row
                     .unwrap()
                     .into_iter()
@@ -633,6 +637,17 @@ fn mysql_value(value: mysql_async::Value) -> Result<Value, &'static str> {
             days * 24 + u32::from(hours)
         )),
     })
+}
+
+fn mysql_query_error(error: &mysql_async::Error) -> &'static str {
+    // ER_QUERY_TIMEOUT is returned when max_execution_time interrupts a SELECT.
+    // Older and newer MySQL releases race differently with the outer Tokio timeout,
+    // so normalize the explicit server signal to the same public result.
+    if matches!(error, mysql_async::Error::Server(server) if server.code == 3024) {
+        "timed_out"
+    } else {
+        "query_failed"
+    }
 }
 
 async fn cleanup(
@@ -726,8 +741,8 @@ pub async fn drive(
         () = cancellation.cancelled() => ("cancelled", json!({"kind":"database", "error_code":"cancelled"})),
         result = tokio::time::timeout(limit, request(database, config, parameters, secrets, &mut sessions, limit)) => match result {
             Ok(Ok(output)) => ("command_ok", output),
+            Ok(Err("timed_out")) | Err(_) => ("timed_out", json!({"kind":"database", "error_code":"timed_out"})),
             Ok(Err(code)) => ("command_failed", json!({"kind":"database", "error_code":code})),
-            Err(_) => ("timed_out", json!({"kind":"database", "error_code":"timed_out"})),
         }
     };
     output["cleanup_ok"] =

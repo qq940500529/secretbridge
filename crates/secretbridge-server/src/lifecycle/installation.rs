@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     env, fs,
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
 use uuid::Uuid;
@@ -122,18 +122,31 @@ fn save(root: &Path, installation: &Installation) -> Result<()> {
         "installation_write_failed"
     })
 }
-struct InstallLock(PathBuf);
+struct InstallLock {
+    file: fs::File,
+}
 impl InstallLock {
     fn acquire(root: &Path) -> Result<Self> {
         let path = root.join("installer.lock");
-        private_file(&path, b"SecretBridge installation in progress")
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|_| "installer_busy")?;
+        file.try_lock().map_err(|_| "installer_busy")?;
+        file.set_len(0).map_err(|_| "installer_busy")?;
+        file.write_all(b"SecretBridge installation in progress\n")
             .map_err(|_| "installer_busy")?;
-        Ok(Self(path))
+        file.sync_all().map_err(|_| "installer_busy")?;
+        Ok(Self { file })
     }
 }
 impl Drop for InstallLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
+        let _ = self.file.unlock();
     }
 }
 fn binary_name() -> &'static str {
@@ -177,7 +190,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
             .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
         || manifest.platform != env::consts::OS
         || manifest.architecture != env::consts::ARCH
-        || manifest.schema_version != 15
+        || manifest.schema_version != secretbridge_core::SCHEMA_VERSION
         || manifest.files.len() > 8192
     {
         return Err("package_incompatible");
@@ -525,6 +538,7 @@ pub(super) async fn uninstall(remove_configuration: bool) -> Result<()> {
     let _ = fs::remove_dir(releases);
     fs::remove_file(root.join("installation.json")).map_err(|_| "uninstall_failed")?;
     drop(lock);
+    let _ = fs::remove_file(root.join("installer.lock"));
     let _ = fs::remove_dir(&root);
     println!(
         "{}",
@@ -629,6 +643,21 @@ mod tests {
     }
 
     #[test]
+    fn stale_install_lock_file_is_reusable_but_live_lock_is_rejected() {
+        let root = std::env::temp_dir().join(format!("secretbridge-lock-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("installer.lock"), b"stale synthetic marker").unwrap();
+
+        let first = InstallLock::acquire(&root).expect("acquire stale lock file");
+        assert!(matches!(InstallLock::acquire(&root), Err("installer_busy")));
+        drop(first);
+        drop(InstallLock::acquire(&root).expect("reacquire released lock"));
+
+        fs::remove_file(root.join("installer.lock")).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
     fn sbom_must_match_package_version_and_target() {
         let root = std::env::temp_dir().join(format!("secretbridge-sbom-{}", Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
@@ -638,7 +667,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").into(),
             platform: env::consts::OS.into(),
             architecture: env::consts::ARCH.into(),
-            schema_version: 15,
+            schema_version: secretbridge_core::SCHEMA_VERSION,
             files: Vec::new(),
         };
         let mut sbom = serde_json::json!({

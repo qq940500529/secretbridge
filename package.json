@@ -1,7 +1,7 @@
 {
   "name": "secretbridge-workspace",
   "private": true,
-  "version": "0.2.0-beta.3",
+  "version": "0.2.0-beta.4",
   "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@11.23.0",
   "engines": {
@@ -11,6 +11,8 @@
   "scripts": {
     "build": "pnpm --dir web build",
     "dev:web": "pnpm --dir web dev",
+    "format:web": "prettier --write \"web/src/**/*.{ts,tsx,css}\" \"tools/*.mjs\"",
+    "format:web:check": "prettier --check \"web/src/**/*.{ts,tsx,css}\" \"tools/*.mjs\"",
     "test": "pnpm --dir web test",
     "test:browser": "python tools/test_browser_acceptance.py",
     "test:personal-scale": "python tools/test_personal_scale.py",
@@ -18,6 +20,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "prettier": "3.9.8"
   }
 }

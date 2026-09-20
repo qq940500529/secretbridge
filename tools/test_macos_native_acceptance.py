@@ -1,20 +1,20 @@
 # SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run the repeatable macOS native acceptance against a built package."""
+
 from __future__ import annotations
 
 import argparse
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import os
-from pathlib import Path
 import platform
 import subprocess
 import tarfile
 import tempfile
 import threading
 import zipfile
-
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,6 +36,7 @@ def run(label: str, command: list[str], *, env: dict[str, str] | None = None) ->
         command,
         cwd=ROOT,
         env=env,
+        check=False,
         capture_output=True,
         text=True,
         timeout=900,
@@ -54,7 +55,10 @@ def extract_archive(archive: Path, destination: Path) -> Path:
         with zipfile.ZipFile(archive) as bundle:
             for member in bundle.infolist():
                 candidate = (destination / member.filename).resolve()
-                if destination.resolve() not in candidate.parents and candidate != destination.resolve():
+                if (
+                    destination.resolve() not in candidate.parents
+                    and candidate != destination.resolve()
+                ):
                     raise RuntimeError("package archive contains an unsafe path")
             bundle.extractall(destination)
     elif archive.name.endswith(".tar.gz"):

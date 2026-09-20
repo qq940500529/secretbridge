@@ -6,9 +6,11 @@ import { EditorDialog, MasterDetail } from "./Workbench";
 import { CommandReview } from "./CommandReview";
 import {
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { CommandEditor, emptyCommand } from "./CommandEditor";
@@ -158,6 +160,7 @@ export function ActionTemplatesView({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const editorReturnFocus = useRef<HTMLElement | null>(null);
   const targetNames = useMemo(
     () => new Map(targets.map((target) => [target.id, target.name])),
     [targets],
@@ -218,7 +221,8 @@ export function ActionTemplatesView({
     setEnabled(true);
   }
 
-  function edit(item: ActionTemplate) {
+  function edit(item: ActionTemplate, trigger: HTMLElement) {
+    editorReturnFocus.current = trigger;
     setEditorOpen(true);
     setCommand(item.command ?? emptyCommand);
     setEditing(item);
@@ -308,9 +312,13 @@ export function ActionTemplatesView({
       <EditorDialog
         title={editing ? text.formEdit : text.formCreate}
         open={editorOpen}
-        onOpen={() => setEditorOpen(true)}
+        onOpen={() => {
+          editorReturnFocus.current = null;
+          setEditorOpen(true);
+        }}
         onClose={reset}
         busy={busy}
+        returnFocusTarget={editorReturnFocus.current}
       >
         {error && (
           <p role="alert" className="px-5 text-sm text-rose-700">
@@ -522,7 +530,9 @@ export function ActionTemplatesView({
                     <button
                       type="button"
                       aria-label={text.formEdit}
-                      onClick={() => edit(item)}
+                      onClick={(event: MouseEvent<HTMLButtonElement>) =>
+                        edit(item, event.currentTarget)
+                      }
                       className={iconClass}
                     >
                       <Pencil className="size-4" />

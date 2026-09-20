@@ -62,7 +62,8 @@ try {
     else if (path === "/api/v1/credential-references")
       body = { items: credentials };
     else if (path === "/api/v1/targets") body = { items: targets };
-    else if (path === "/api/v1/runs" || path === "/api/v1/approvals") body = { items: [] };
+    else if (path === "/api/v1/runs" || path === "/api/v1/approvals")
+      body = { items: [] };
     else if (path === "/api/v1/action-templates") {
       if (route.request().method() === "POST") {
         body = {
@@ -128,9 +129,7 @@ try {
   await page.getByLabel("认证用户名").fill("owner");
   await page.getByLabel("令牌凭据引用").selectOption("synthetic-token");
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
-  await page
-    .getByRole("button", { name: /Git UI 验证/ })
-    .waitFor();
+  await page.getByRole("button", { name: /Git UI 验证/ }).waitFor();
   assert.equal(items.length, 2);
   assert.equal(items[1].command.git.operation, "fetch");
   assert.equal(items[1].command.git.branch, "feature/task");
@@ -153,9 +152,7 @@ try {
   await page.getByLabel("允许返回的列（每行一项）").fill("number");
   await page.getByLabel("结果行数上限").fill("25");
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
-  await page
-    .getByRole("button", { name: /Database UI 验证/ })
-    .waitFor();
+  await page.getByRole("button", { name: /Database UI 验证/ }).waitFor();
   assert.equal(items.length, 3);
   assert.equal(items[2].command.database.engine, "mysql");
   assert.equal(items[2].command.database.operation, "query");

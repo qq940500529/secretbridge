@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import importlib.util
-from pathlib import Path
+import os
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +28,9 @@ class PersonalScaleTests(unittest.TestCase):
         metrics = {"startup_p95_ms": 12, "status_p95_ms": 3, "idle_rss_mib": 20}
         limits = {"startup_p95_ms": 10, "status_p95_ms": 5, "idle_rss_mib": 20}
         self.assertEqual(MODULE.evaluate(metrics, limits), ["startup_p95_ms"])
+
+    def test_current_process_rss_is_read_without_an_external_shell(self):
+        self.assertGreater(MODULE.rss_mib(os.getpid()), 0)
 
 
 if __name__ == "__main__":

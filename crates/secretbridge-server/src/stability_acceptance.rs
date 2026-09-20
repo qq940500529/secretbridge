@@ -3,7 +3,10 @@
 
 use crate::{
     AppState,
-    catalog::{CancelSyntheticRun, CreateApproval, CreateSyntheticRun, DecideApproval, RunState},
+    catalog::{
+        CancelSyntheticRun, CatalogError, CreateApproval, CreateSyntheticRun, DecideApproval,
+        RunState,
+    },
 };
 use serde_json::json;
 use std::time::Duration;
@@ -63,6 +66,26 @@ async fn wait_for_terminal_state(state: &AppState, id: Uuid) -> crate::command::
     })
     .await
     .expect("run reaches a terminal state")
+}
+
+async fn cancel_with_latest_version(state: &AppState, id: Uuid) {
+    for _ in 0..10 {
+        let current = state.catalog.get_synthetic_run(id).unwrap();
+        match crate::cancel_run_for_state(
+            state,
+            id,
+            CancelSyntheticRun {
+                expected_version: current.version,
+            },
+        )
+        .await
+        {
+            Ok(_) => return,
+            Err(CatalogError::VersionConflict) => tokio::task::yield_now().await,
+            Err(error) => panic!("cancelling an active run failed: {error:?}"),
+        }
+    }
+    panic!("run version did not settle after bounded cancellation retries");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -138,16 +161,7 @@ async fn parallel_cancellation_releases_capacity_and_follow_up_work_succeeds() {
     state.catalog.delete_target(probe.id).unwrap();
 
     for id in &ids {
-        let current = state.catalog.get_synthetic_run(*id).unwrap();
-        crate::cancel_run_for_state(
-            &state,
-            *id,
-            CancelSyntheticRun {
-                expected_version: current.version,
-            },
-        )
-        .await
-        .unwrap();
+        cancel_with_latest_version(&state, *id).await;
     }
     for id in ids {
         let page = wait_for_terminal_state(&state, id).await;

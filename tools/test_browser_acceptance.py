@@ -5,15 +5,15 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import json
 import os
-from pathlib import Path
 import shutil
 import socket
 import subprocess
 import sys
 import time
+from contextlib import closing
+from pathlib import Path
 from urllib.request import ProxyHandler, build_opener
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,14 +60,27 @@ def run_acceptance(browsers: list[str], output: Path) -> dict[str, object]:
         raise RuntimeError("Run pnpm install before browser acceptance")
     port = available_port()
     url = f"http://127.0.0.1:{port}"
-    preview = subprocess.Popen(
-        [node, str(vite), "--host", "127.0.0.1", "--port", str(port), "--strictPort"],
-        cwd=ROOT / "web",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
+    if not (ROOT / "web" / "dist" / "index.html").is_file():
+        raise RuntimeError("Run pnpm build before browser acceptance")
+    preview: subprocess.Popen[bytes] | None = None
     results: list[dict[str, object]] = []
+    failure: dict[str, str] | None = None
     try:
+        preview = subprocess.Popen(
+            [
+                node,
+                str(vite),
+                "preview",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "--strictPort",
+            ],
+            cwd=ROOT / "web",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
         wait_for_preview(url, preview)
         for browser, script in acceptance_plan(browsers):
             env = dict(
@@ -90,19 +103,29 @@ def run_acceptance(browsers: list[str], output: Path) -> dict[str, object]:
                     "duration_ms": round((time.monotonic() - started) * 1000, 1),
                 }
             )
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        TimeoutError,
+    ) as error:
+        failure = {"type": type(error).__name__, "message": str(error)[:500]}
     finally:
-        preview.terminate()
-        try:
-            preview.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            preview.kill()
-            preview.wait(timeout=5)
+        if preview is not None:
+            preview.terminate()
+            try:
+                preview.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                preview.kill()
+                preview.wait(timeout=5)
     report = {
         "format": "secretbridge-browser-acceptance",
         "format_version": 1,
         "browsers": browsers,
         "checks": results,
-        "passed": len(results) == len(acceptance_plan(browsers)),
+        "passed": failure is None and len(results) == len(acceptance_plan(browsers)),
+        "failure": failure,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -127,8 +150,11 @@ def main() -> int:
     browsers = list(dict.fromkeys(args.browsers or BROWSERS))
     try:
         report = run_acceptance(browsers, args.output)
-    except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired, TimeoutError) as error:
+    except (OSError, RuntimeError) as error:
         print(f"Browser acceptance failed: {error}", file=sys.stderr)
+        return 1
+    if not report["passed"]:
+        print(f"Browser acceptance failed: {report['failure']}", file=sys.stderr)
         return 1
     print(
         "Browser acceptance passed: "

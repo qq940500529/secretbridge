@@ -20,7 +20,8 @@ export function selectedBrowser() {
 export async function launchBrowser() {
   const name = selectedBrowser();
   const playwright = loadPlaywright();
-  const channel = name === "chromium" ? process.env.PLAYWRIGHT_CHANNEL : undefined;
+  const channel =
+    name === "chromium" ? process.env.PLAYWRIGHT_CHANNEL : undefined;
   return {
     browser: await playwright[name].launch({ headless: true, channel }),
     name,

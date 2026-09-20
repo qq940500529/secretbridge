@@ -1,22 +1,24 @@
 # SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run native package lifecycle acceptance in an isolated user/data directory."""
+
 from __future__ import annotations
+
 import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
 import tarfile
 import tempfile
 import time
-from urllib.request import ProxyHandler, build_opener
 import uuid
 import zipfile
 from contextlib import closing
+from pathlib import Path
+from urllib.request import ProxyHandler, build_opener
 
 
 def rehash(package: Path) -> None:
@@ -43,17 +45,35 @@ def accept(archive: Path) -> None:
             with tarfile.open(archive) as bundle:
                 bundle.extractall(extracted, filter="data")
         package = next(extracted.iterdir())
-        binary = package / "bin" / ("secretbridge-server.exe" if os.name == "nt" else "secretbridge-server")
+        binary = (
+            package
+            / "bin"
+            / ("secretbridge-server.exe" if os.name == "nt" else "secretbridge-server")
+        )
         data, install = workspace / "data", workspace / "installed"
-        env = dict(os.environ, SECRETBRIDGE_DATA_DIR=str(data), SECRETBRIDGE_INSTALL_DIR=str(install),
-                   SECRETBRIDGE_BIND="127.0.0.1:0", SECRETBRIDGE_WEB_ROOT=str(package / "web"),
-                   APPDATA=str(workspace / "appdata"), HOME=str(workspace / "home"),
-                   XDG_CONFIG_HOME=str(workspace / "xdg"))
+        env = dict(
+            os.environ,
+            SECRETBRIDGE_DATA_DIR=str(data),
+            SECRETBRIDGE_INSTALL_DIR=str(install),
+            SECRETBRIDGE_BIND="127.0.0.1:0",
+            SECRETBRIDGE_WEB_ROOT=str(package / "web"),
+            APPDATA=str(workspace / "appdata"),
+            HOME=str(workspace / "home"),
+            XDG_CONFIG_HOME=str(workspace / "xdg"),
+        )
         loopback_opener = build_opener(ProxyHandler({}))
 
         def run(*args: str | Path, success: bool = True) -> dict:
-            result = subprocess.run([str(binary), *(str(arg) for arg in args)], env=env, capture_output=True, timeout=45)
-            assert result.returncode == 0 if success else result.returncode != 0, result.stderr.decode(errors="replace")
+            result = subprocess.run(
+                [str(binary), *(str(arg) for arg in args)],
+                env=env,
+                check=False,
+                capture_output=True,
+                timeout=45,
+            )
+            assert result.returncode == 0 if success else result.returncode != 0, (
+                result.stderr.decode(errors="replace")
+            )
             return json.loads(result.stdout) if success and result.stdout else {}
 
         def web_text() -> str:
@@ -75,10 +95,15 @@ def accept(archive: Path) -> None:
             assert verification["platform"] in ("windows", "linux", "macos")
             # Detached launch survives return of the command, reuses its broker and persists data.
             first = run("start", "--no-open")
-            assert first["version"] == json.loads((package / "secretbridge-package.json").read_text())["version"]
+            assert (
+                first["version"]
+                == json.loads((package / "secretbridge-package.json").read_text())["version"]
+            )
             assert run("start", "--no-open")["process_id"] == first["process_id"]
             status = run("status")
-            assert status["running"] and not any(key in status["runtime"] for key in ("token", "bootstrap", "session_token"))
+            assert status["running"] and not any(
+                key in status["runtime"] for key in ("token", "bootstrap", "session_token")
+            )
             run("stop")
             wait_stopped()
             assert not run("status")["running"]
@@ -87,7 +112,10 @@ def accept(archive: Path) -> None:
             database = data / "secretbridge.sqlite3"
             reference = str(uuid.uuid4())
             with closing(sqlite3.connect(database)) as connection, connection:
-                connection.execute("INSERT INTO credential_references (id,name,kind,purpose,secret_state,secret_configured,created_at_unix_ms,updated_at_unix_ms,version) VALUES (?,?,?,NULL,'not_configured',0,1,1,1)", (reference, "delivery acceptance", "password"))
+                connection.execute(
+                    "INSERT INTO credential_references (id,name,kind,purpose,secret_state,secret_configured,created_at_unix_ms,updated_at_unix_ms,version) VALUES (?,?,?,NULL,'not_configured',0,1,1,1)",
+                    (reference, "delivery acceptance", "password"),
+                )
 
             run("install", package)
             assert run("install", package)["replayed"]
@@ -98,12 +126,17 @@ def accept(archive: Path) -> None:
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
             assert pointer["startup_files"]
-            print("Versioned installation and isolated login-startup registration passed.", flush=True)
-            saved_startup = {item["path"]: Path(item["path"]).read_bytes() for item in pointer["startup_files"]}
+            print(
+                "Versioned installation and isolated login-startup registration passed.", flush=True
+            )
+            saved_startup = {
+                item["path"]: Path(item["path"]).read_bytes() for item in pointer["startup_files"]
+            }
             if os.name == "nt":
                 assert any(path.endswith(".lnk") for path in saved_startup)
             elif os.uname().sysname == "Darwin":
                 import plistlib
+
                 for raw in saved_startup.values():
                     assert plistlib.loads(raw)["RunAtLoad"] is True
             else:
@@ -115,7 +148,10 @@ def accept(archive: Path) -> None:
             modified.write_bytes(original_contents + b"\nmodified by user\n")
             run("autostart", "off", success=False)
             assert modified.read_bytes().endswith(b"modified by user\n")
-            assert json.loads((install / "installation.json").read_text())["startup_files"] == pointer["startup_files"]
+            assert (
+                json.loads((install / "installation.json").read_text())["startup_files"]
+                == pointer["startup_files"]
+            )
             modified.write_bytes(original_contents)
 
             # Bad checksums are rejected before stopping the active process.
@@ -161,7 +197,10 @@ def accept(archive: Path) -> None:
             upgraded = workspace / "upgrade"
             shutil.copytree(package, upgraded)
             index = upgraded / "web" / "index.html"
-            index.write_text(index.read_text(encoding="utf-8") + "\n<!-- delivery upgrade -->\n", encoding="utf-8")
+            index.write_text(
+                index.read_text(encoding="utf-8") + "\n<!-- delivery upgrade -->\n",
+                encoding="utf-8",
+            )
             rehash(upgraded)
             run("install", upgraded)
             assert "delivery upgrade" in web_text()
@@ -173,7 +212,9 @@ def accept(archive: Path) -> None:
             run("start", "--no-open")
             assert run("status")["installation"]["active_release"] == original
             with closing(sqlite3.connect(database)) as connection:
-                assert connection.execute("SELECT name FROM credential_references WHERE id=?", (reference,)).fetchone() == ("delivery acceptance",)
+                assert connection.execute(
+                    "SELECT name FROM credential_references WHERE id=?", (reference,)
+                ).fetchone() == ("delivery acceptance",)
                 assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
             print("Upgrade, rollback and configuration-preserving restart passed.", flush=True)
 
@@ -192,10 +233,18 @@ def accept(archive: Path) -> None:
             result = run("uninstall", "--remove-configuration")
             assert result["system_credentials_retained"] and not result["data_retained"]
             assert not database.exists() and (data / "user-note.txt").exists()
-            print("Package acceptance passed: offline verification, SBOM validation, detached lifecycle, repeat install, checksum rejection, upgrade failure recovery, startup descriptors, upgrade/rollback, restart, retained data, explicit catalog removal.")
+            print(
+                "Package acceptance passed: offline verification, SBOM validation, detached lifecycle, repeat install, checksum rejection, upgrade failure recovery, startup descriptors, upgrade/rollback, restart, retained data, explicit catalog removal."
+            )
         finally:
             # Never target another user profile or terminate a process using a recorded PID.
-            subprocess.run([str(binary), "stop"], env=env, capture_output=True, timeout=30)
+            subprocess.run(
+                [str(binary), "stop"],
+                env=env,
+                check=False,
+                capture_output=True,
+                timeout=30,
+            )
             wait_stopped()
             time.sleep(0.2)
 

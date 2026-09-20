@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 import importlib.util
-from pathlib import Path
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -18,11 +17,14 @@ SPEC.loader.exec_module(MODULE)
 class BrowserAcceptanceTests(unittest.TestCase):
     def test_full_plan_runs_all_engines_and_chromium_only_surfaces(self):
         plan = MODULE.acceptance_plan(list(MODULE.BROWSERS))
-        self.assertEqual(plan[:3], [
-            ("chromium", "smoke_workbench_ui.mjs"),
-            ("firefox", "smoke_workbench_ui.mjs"),
-            ("webkit", "smoke_workbench_ui.mjs"),
-        ])
+        self.assertEqual(
+            plan[:3],
+            [
+                ("chromium", "smoke_workbench_ui.mjs"),
+                ("firefox", "smoke_workbench_ui.mjs"),
+                ("webkit", "smoke_workbench_ui.mjs"),
+            ],
+        )
         self.assertEqual(len(plan), 6)
 
     def test_restricted_plan_does_not_claim_chromium_coverage(self):

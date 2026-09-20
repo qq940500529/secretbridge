@@ -17,6 +17,7 @@ export function EditorDialog({
   onClose,
   busy = false,
   triggerIcon,
+  returnFocusTarget,
   children,
 }: {
   title: string;
@@ -25,6 +26,7 @@ export function EditorDialog({
   onClose: () => void;
   busy?: boolean;
   triggerIcon?: ReactNode;
+  returnFocusTarget?: HTMLElement | null;
   children: ReactNode;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -36,7 +38,7 @@ export function EditorDialog({
     if (open && element && !element.open) {
       // WebKit does not consistently focus buttons activated with a pointer,
       // so document.activeElement is not a reliable return target here.
-      returnFocus.current = trigger.current;
+      returnFocus.current = returnFocusTarget ?? trigger.current;
       element.showModal();
     }
     if (!open && element?.open) {
@@ -46,7 +48,7 @@ export function EditorDialog({
       element.close();
       requestAnimationFrame(() => target?.focus());
     }
-  }, [open]);
+  }, [open, returnFocusTarget]);
   return (
     <>
       <button

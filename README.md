@@ -2,123 +2,101 @@
 
 # SecretBridge · 密桥
 
-**Controlled credential use for AI-assisted operations.**
+**Keep credentials local. Let explicit approval decide each operation.**
 
-[简体中文](README.zh-CN.md) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
+[简体中文](README.zh-CN.md) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Contribute](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
-[![Commercial license available](https://img.shields.io/badge/commercial%20license-contact%20copyright%20holder-0A7B83)](COMMERCIAL_LICENSE.md)
-
-[![Rust](https://img.shields.io/badge/Rust%201.98-000000?logo=rust&logoColor=white)](Cargo.toml)
-[![Axum](https://img.shields.io/badge/Axum%200.8-2E3440)](crates/secretbridge-server/Cargo.toml)
-[![React](https://img.shields.io/badge/React%2019-20232A?logo=react&logoColor=61DAFB)](web/package.json)
-[![TypeScript](https://img.shields.io/badge/TypeScript%207-3178C6?logo=typescript&logoColor=white)](web/package.json)
-[![Vite](https://img.shields.io/badge/Vite%208-646CFF?logo=vite&logoColor=white)](web/package.json)
+[![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
+[![Node.js 24](https://img.shields.io/badge/Node.js-24-339933?logo=node.js&logoColor=white)](.node-version)
 
 </div>
 
 > [!IMPORTANT]
-> This is a local prototype under active feature development. It provides persistent terminals, an operating-system credential store, fixed program tasks and explicit single-use or time-window approvals. Named slots support stdin, child environment, arguments and temporary files; Web and MCP can read filtered run output incrementally. Secrets have no read/export tool or API. Ordinary terminals never receive injected credentials; output filtering is not a program sandbox. Ordinary parameters support types, required values, defaults, choices and length constraints; approval freezes the values, with optional time-limited repetition of the same task. More connectors remain in development.
+> SecretBridge is prerelease software for individual, single-machine use. No GitHub Release exists yet. Evaluate source builds only with synthetic credentials. There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
 
-## Why SecretBridge?
+## Why SecretBridge
 
-Giving an assistant a password also exposes that password to its surrounding context and tools. SecretBridge is designed to keep credential use behind a local, explicit authorization boundary: an assistant requests an operation; a trusted broker performs it; reviewed results return to the assistant.
-
-| Capability | Intended experience |
-| :--- | :--- |
-| Credential-use delegation | Configure credentials locally; expose approved operations, not a secret-reading API. |
-| Explicit approvals | Review the target, parameters, permissions and output scope before an operation starts. |
-| Persistent terminals | Reconnect to sessions without tying their lifetime to a window or one assistant request. |
-| Controlled results | Release approved fields and filtered output; retain an attributable audit trail. |
-| Cross-platform experience | A consistent browser console with native credential and process backends. |
-
-This public repository delivers the complete open-source edition for individual, single-machine use. A future proprietary enterprise edition will separately address organizational identity, centralized policy, managed nodes, multi-party approval and centralized audit; it is not a prerequisite for the open-source 1.0 release. See the [open-source and enterprise edition boundary](docs/开源版与企业版.md) (Chinese).
-
-One-time pairing, expiring/revocable page sessions and reconnectable real PTYs are implemented. The broker detects an installed platform shell, keeps the process alive across browser and MCP disconnects, and preserves bounded output for cursor-based replay. Terminal creation supports a session name, an existing absolute working directory and bounded ordinary environment variables. Web and MCP clients coordinate through input leases; approvals, runs and terminal lists refresh from live notifications. Credential metadata, targets, templates, approvals, runs and audit events are versioned in SQLite; passwords and API tokens are stored under opaque UUID entries in the OS credential store. The PostgreSQL adapter runs a fixed read-only check with certificate and hostname verification, supports an explicitly configured private CA file, and returns only enumerated status. MCP cannot decide approvals or read secrets. Ordinary terminals do not inject credentials or claim to sanitize arbitrary file or command output. See [AI terminals and realtime state](docs/AI终端与实时状态.md) and the [open-source roadmap](ROADMAP.md).
-
-## How it works
-
-The browser workbench groups Credentials, Connections, Tasks, Terminal, History and Settings into searchable master-detail workflows with right-side drawer editors. Connection details link to task authorization and recent execution results. See the [workbench guide](docs/工作台使用说明.md).
-
-Native [HTTP credential tasks](docs/HTTP凭据任务.md) support fixed endpoints, authentication slots in headers or JSON bodies, ordinary parameters and selected response fields without exposing tokens to an assistant or requiring curl. HTTPS uses platform trust roots; status-only results are the default.
-
-[SSH credential tasks](docs/SSH凭据任务.md) support explicitly trusted host fingerprints, password or Ed25519/ECDSA private-key authentication, fixed POSIX remote commands and redacted streaming output. [File transfer and Git tasks](docs/文件传输与Git任务.md) add single-file SFTP upload/download with explicit replacement, and Git HTTPS token authentication for remote-branch inspection, fetch and non-forced push. [Database credential tasks](docs/数据库凭据任务.md) provide PostgreSQL/MySQL connection checks, server versions and registered read-only queries with bound values, selected columns and precision-preserving table results. Git over SSH and unrestricted SQL consoles are not included.
-
-See [credential command tasks](docs/凭据命令任务.md) for execution and output, and [parameterized tasks and authorization](docs/参数化任务与授权.md) for defaults, confirmed values and repeated grants.
+Giving an AI a password puts that secret in conversation, command or logging context. SecretBridge changes the workflow: an AI requests a fixed operation, the user reviews it locally, and the broker uses the credential internally while returning only the approved result.
 
 ```mermaid
 flowchart LR
-    A["Assistant<br/>Operation request"] --> B["Policy and approval"]
-    U["User"] -->|"Approve scope"| B
-    B --> C["Local broker"]
-    K["Credential store"] -->|"Private use"| C
-    C --> D["Approved target"]
-    D --> E["Review output"]
-    E -->|"Allowed results only"| A
+    A["AI requests an operation"] --> B{"Local user approval"}
+    B -->|Reject| X["No execution"]
+    B -->|Approve| C["Local broker"]
+    K["OS credential store"] -->|Internal use only| C
+    C --> D["Fixed target and operation"]
+    D --> E["Filtered result and audit"]
+    E --> A
 ```
 
-The assistant does not receive the stored secret. Ordinary terminals and credential-bearing operations use separate execution paths; a credentialed session is not an unrestricted shell.
+## What it provides
 
-> [!NOTE]
-> SecretBridge limits the normal tools exposed to an assistant. Software that already has unrestricted code execution under the same operating-system account may still bypass the application and access that account's resources. See the [security model](docs/安全模型与验收.md).
+- **Write-only credential handling:** passwords, tokens and private keys live in the OS credential store; SQLite keeps references and public state.
+- **Explicit approval:** review the target, parameters, grant mode, lifetime and output scope before execution.
+- **Controlled connectors:** fixed programs, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL.
+- **Reconnectable terminals:** keep a real platform shell alive across browser or MCP disconnects without injecting SecretBridge credentials.
+- **Bounded results:** filter credential-task output before persistence; constrain HTTP and database fields and size.
+- **Traceable state:** version approvals, runs and fixed audit events; configuration changes invalidate stale grants.
+- **Local delivery:** background start/status/stop, login startup, upgrade, rollback, uninstall, backup and restore.
 
-## Choose a starting point
+The open-source edition focuses on individual local use. Organizational identity, central policy, managed nodes and multi-party approval are a separate enterprise direction, not a hidden prerequisite for open-source 1.0. See the [edition boundary](docs/开源版与企业版.md) (Chinese).
 
-Configuration migration, private SQLite backups and concise diagnostics are available in Settings. Import adds fresh references and templates after preflight; offline restoration only writes to a new data directory, preserving the original for rollback. Secrets must be entered again and outstanding authorizations are revoked. See [configuration migration and recovery](docs/配置迁移与备份恢复.md) — Chinese.
+## Quick start
 
-| Your goal | Start here |
-| :--- | :--- |
-| Understand the workflow and limitations | [User orientation](docs/使用指南.md) — Chinese |
-| Compare the open-source and future enterprise editions | [Edition boundary](docs/开源版与企业版.md) — Chinese |
-| Reproduce the native PostgreSQL TLS adapter test | [PostgreSQL live validation](docs/PostgreSQL实机验证.md) — Chinese |
-| Understand the complete future product | [Mature architecture and feature specification](docs/成熟态软件架构与功能说明.md) — Chinese |
-| Find the right technical document | [Documentation hub](docs/README.md) |
-| Contribute code, design or tests | [Contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) |
-| Review architecture and platform behavior | [Architecture](docs/开发设计.md) and [platform/UI specification](docs/跨平台与UI规范.md) |
-| Report a vulnerability privately | [Security policy](SECURITY.md) |
+For a first deployment, use a permission-aware local AI coding assistant that shows commands and stops on failed checks. The [AI-assisted deployment guide](docs/AI辅助部署.md) contains a copyable prompt, an AI-readable runbook and a complete manual alternative.
 
-The English and Chinese homepages cover the same product scope. Detailed engineering documents are currently in Simplified Chinese; English translations are welcome.
-
-## Run the development prototype
-
-The launcher starts a detached broker. Use `start --no-open`, `open`, `status` and `stop` for explicit control, or `--serve` for foreground debugging. Native versioned installation, upgrade/rollback, per-user login startup and data-retaining uninstall are described in the [delivery guide](docs/后台运行与安装交付.md). Portable packages include matching Web assets, corresponding source, license texts and a CycloneDX SBOM; `verify-package` validates an unpacked package before installation. See [artifact verification and SBOM](docs/发行物验证与SBOM.md). Packages are currently unsigned development builds.
-
-Install Node.js 24, pnpm 11 and the stable Rust 1.98 toolchain or newer:
+Manual builds require Node.js 24, pnpm 11 and Rust 1.98:
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm build
-cargo run -p secretbridge-server
+cargo build --release --locked -p secretbridge-server
+./target/release/secretbridge-server start --no-open
+./target/release/secretbridge-server open
 ```
 
-The service binds only to `127.0.0.1:8787` and opens the system browser. Its bootstrap token travels in the URL fragment and is removed immediately after the page consumes it. **Credentials** writes passwords and API tokens to the OS credential store without a read route. **Targets** stores validated PostgreSQL endpoint metadata but no connection string or password. **Policies**, **Approvals**, **Runs** and **Audit** drive a fixed PostgreSQL status check or offline synthetic check; neither accepts caller-provided SQL. **Terminal** starts a real platform shell: PowerShell or CMD on Windows, Bash on Linux, and Zsh on macOS. Ordinary terminal environment variables are process-local and are never populated from the credential store. The project uses a browser UI and does not plan to introduce a desktop shell.
+The Windows executable is `secretbridge-server.exe`. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link. See [installation and background operation](docs/后台运行与安装交付.md) for packages, upgrades and uninstall behavior.
 
-Start the long-lived broker once with no arguments, then configure the same executable as an MCP stdio bridge with the single argument `--mcp-stdio`. The bridge reserves stdout for JSON-RPC, sends diagnostics to stderr and connects to the broker through a token-authenticated Windows named pipe or Unix domain socket. Closing an MCP client stops only its bridge process; the Web console, run state and terminal sessions remain owned by the broker. See the [user guide](docs/使用指南.md#mcp-stdio) for startup order, the tool list and the current same-user security limitation.
+## Typical workflow
 
-## Platform targets
+1. Save a disposable synthetic credential and confirm that the UI cannot read it back.
+2. Register a fixed connection and its trust settings.
+3. Define a task, ordinary parameters, credential slots and result scope.
+4. Let an AI or user request approval; only the user decides in the Web console.
+5. Run the approved operation and inspect its bounded result and audit events.
+6. Delete synthetic credentials and stop the broker when the evaluation ends.
 
-| Platform | First validation baseline | Runtime status |
-| :--- | :--- | :--- |
-| Windows | Windows 11 · x64 | PowerShell and CMD PTY integration covered by automated acceptance |
-| Linux | Ubuntu 24.04 · x64 · GNOME/KDE | Bash PTY integration covered by automated acceptance |
-| macOS | macOS 14+ · arm64/x64 | Zsh PTY integration covered by automated acceptance |
+Detailed engineering documents are currently in Simplified Chinese. Start with the [documentation hub](docs/README.md) and [user guide](docs/使用指南.md).
 
-Other OS versions and architectures require separate validation. Actual support will be documented for each future release.
+## Validation targets
 
-## Contribute
+| Platform | Current baseline | Default shell |
+|---|---|---|
+| Windows | Windows 11 x64 | PowerShell / CMD |
+| Linux | Ubuntu 24.04 x64 | Bash |
+| macOS | macOS 14+ arm64/x64 | Zsh |
 
-The project is under active feature development, prioritizing immediate AI terminal control, credential injection, reusable tasks and common connectors. Contributions to cross-platform implementation, UI, testing and documentation are welcome. Read the [contributor guide](CONTRIBUTING.md) and [development setup](docs/开发者入门.md) before starting.
+Other versions and architectures are experimental until separately validated. Current packages are unsigned development artifacts; each future public release will state its supported environments.
 
-## License and community
+## Security boundary
 
-Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**.
+- MCP cannot read secrets or approve its own requests.
+- TLS, SSH host verification and target-system permissions must not be disabled to make a test pass.
+- Output filtering reduces accidental echo risk; it is not a program sandbox and cannot decide whether all business data is safe to share with a model.
+- Malicious software already running arbitrary code as the credential owner may bypass application controls and access that account's processes, files or credential store.
+- Use short-lived, least-privilege accounts for real systems and synthetic data in reports.
 
-This repository is open-source software licensed under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`). A separate written commercial license is required to use a modified version on proprietary terms, embed, link or package the code in commercial software that will not comply with the AGPL, or exercise rights beyond the open-source license. See [licensing](LICENSING.md), [commercial licensing](COMMERCIAL_LICENSE.md) and [copyright](COPYRIGHT.md).
+See the [security model](docs/安全模型与验收.md) and [automated security acceptance](docs/自动化安全验收.md). Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-Third-party components remain subject to their own terms under either licensing path. See [third-party notices](THIRD_PARTY_NOTICES.md) and the [dependency license assessment](docs/依赖许可风险评估.md).
+## Project links
 
-Contributions follow the [contribution guide](CONTRIBUTING.md) and [community standards](CODE_OF_CONDUCT.md). Report ordinary issues through [GitHub Issues](https://github.com/qq940500529/secretbridge/issues); report vulnerabilities through the private channel in [SECURITY.md](SECURITY.md).
+| Goal | Start here |
+|---|---|
+| Deploy and use | [Documentation](docs/README.md) |
+| See what remains | [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md) |
+| Develop locally | [Developer setup](docs/开发者入门.md) · [Architecture](docs/开发设计.md) |
+| Contribute | [Contribution guide](CONTRIBUTING.md) · [Code of conduct](CODE_OF_CONDUCT.md) |
+| Understand licensing | [Licensing](LICENSING.md) · [Commercial license](COMMERCIAL_LICENSE.md) |
 
----
-
-[Documentation](docs/README.md) · [Roadmap](ROADMAP.md) · [Changelog](CHANGELOG.md)
+Copyright (c) 2026 数链创元（天津）信息技术有限责任公司. Open-source code is licensed under `AGPL-3.0-or-later`; third-party components retain their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

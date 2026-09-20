@@ -271,15 +271,9 @@ export type ApprovalOperation =
   | "postgres_connection_check"
   | "command_execution";
 export type ApprovalResultScope =
-  | "status_only"
-  | "metadata_summary"
-  | "sanitized_output";
+  "status_only" | "metadata_summary" | "sanitized_output";
 export type ApprovalState =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "revoked"
-  | "expired";
+  "pending" | "approved" | "denied" | "revoked" | "expired";
 
 export interface ActionTemplate {
   command?: CommandConfig | null;
@@ -458,8 +452,7 @@ export interface ApprovalListResponse extends CatalogListResponse<Approval> {
   execution_enabled: true;
 }
 
-export interface ActionTemplateListResponse
-  extends CatalogListResponse<ActionTemplate> {
+export interface ActionTemplateListResponse extends CatalogListResponse<ActionTemplate> {
   execution_enabled: true;
 }
 
@@ -505,17 +498,11 @@ export interface PolicyEvaluation {
   result_scope: ApprovalResultScope;
   timeout_seconds: number;
   execution_mode:
-    | "synthetic_simulation"
-    | "controlled_postgres"
-    | "credential_command";
+    "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type RunState =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "cancelled"
-  | "failed";
+  "queued" | "running" | "succeeded" | "cancelled" | "failed";
 
 export interface SyntheticRun {
   id: string;
@@ -553,9 +540,7 @@ export interface CreateSyntheticRunResponse {
   run: SyntheticRun;
   replayed: boolean;
   execution_mode:
-    | "synthetic_simulation"
-    | "controlled_postgres"
-    | "credential_command";
+    "synthetic_simulation" | "controlled_postgres" | "credential_command";
 }
 
 export type SafeEventKind =
