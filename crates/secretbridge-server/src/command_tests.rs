@@ -7,6 +7,13 @@ use crate::catalog::{
     CreateTarget, DecideApproval,
 };
 
+// Starting Windows PowerShell can take more than ten seconds on a contended CI
+// runner. Keep successful integration fixtures comfortably above that startup
+// cost while the dedicated timeout tests below continue to use a one-second
+// limit and exercise the production timeout path.
+const SUCCESSFUL_COMMAND_TIMEOUT_SECONDS: u64 = 30;
+const COMMAND_COMPLETION_WAIT_SECONDS: u64 = 45;
+
 pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let (program, mut arguments) = if cfg!(windows) {
@@ -102,7 +109,7 @@ pub(crate) fn configure(state: &AppState, mode: &str, timeout: u64) -> (Uuid, Uu
 }
 
 async fn wait(state: &AppState, id: Uuid) -> OutputPage {
-    tokio::time::timeout(Duration::from_secs(20), async {
+    tokio::time::timeout(Duration::from_secs(COMMAND_COMPLETION_WAIT_SECONDS), async {
         loop {
             let page = state.catalog.output(id, 0).unwrap();
             if !matches!(page.state, RunState::Queued | RunState::Running) {
@@ -119,7 +126,11 @@ async fn wait(state: &AppState, id: Uuid) -> OutputPage {
 async fn real_program_uses_all_injections_without_persisting_plaintext() {
     for mode in ["stdin", "environment", "argument", "file"] {
         let (state, _) = AppState::new([]);
-        let (approval, credential) = configure(&state, mode, 10);
+        let (approval, credential) = configure(
+            &state,
+            mode,
+            SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
+        );
         assert!(matches!(
             state.catalog.delete_credential_reference(credential),
             Err(CatalogError::ResourceInUse)
@@ -401,7 +412,11 @@ fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
 #[tokio::test]
 async fn parameterized_commands_freeze_values_and_do_not_expand_them_again() {
     let (state, _) = AppState::new([]);
-    let (_, credential) = configure(&state, "argument", 10);
+    let (_, credential) = configure(
+        &state,
+        "argument",
+        SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
+    );
     let template = state.catalog.list_action_templates().unwrap().remove(0);
     let mut config = fixture("argument", credential);
     config.arguments.push("{{param:company}}".into());
@@ -412,7 +427,7 @@ async fn parameterized_commands_freeze_values_and_do_not_expand_them_again() {
     .unwrap();
     let update = serde_json::from_value(serde_json::json!({
         "target_id":template.target_id,"name":template.name,"operation":"command_execution",
-        "result_scope":"sanitized_output","timeout_seconds":10,"enabled":true,
+        "result_scope":"sanitized_output","timeout_seconds":SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,"enabled":true,
         "expected_version":template.version,"command":config
     }))
     .unwrap();
@@ -578,12 +593,16 @@ async fn web_parameter_approval_and_time_window_use_the_real_executor() {
     use axum::http::StatusCode;
     use serde_json::json;
     let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
-    let (_, credential) = configure(&state, "argument", 10);
+    let (_, credential) = configure(
+        &state,
+        "argument",
+        SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
+    );
     let template = state.catalog.list_action_templates().unwrap().remove(0);
     let mut config = fixture("argument", credential);
     config.arguments.push("{{param:company}}".into());
     config.parameters=serde_json::from_value(json!([{"name":"company","label":"公司","kind":"string","required":true,"default":"100","choices":["100","101"],"max_length":3}])).unwrap();
-    let update=serde_json::from_value(json!({"target_id":template.target_id,"name":template.name,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":10,"enabled":true,"expected_version":template.version,"command":config})).unwrap();
+    let update=serde_json::from_value(json!({"target_id":template.target_id,"name":template.name,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,"enabled":true,"expected_version":template.version,"command":config})).unwrap();
     state
         .catalog
         .update_action_template(template.id, &update)
