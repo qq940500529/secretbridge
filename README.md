@@ -44,19 +44,17 @@ The open-source edition focuses on individual local use. Organizational identity
 
 ## Quick start
 
-For a first deployment, use a permission-aware local AI coding assistant that shows commands and stops on failed checks. The [AI-assisted deployment guide](docs/AI辅助部署.md) contains a copyable prompt, an AI-readable runbook and a complete manual alternative.
+For a first deployment, give the prompt below to a permission-aware local AI coding assistant. It works from any directory or new conversation; an existing clone is not required.
 
-Manual builds require Node.js 24, pnpm 11 and Rust 1.98:
+```text
+Deploy SecretBridge from https://github.com/qq940500529/secretbridge on this machine.
 
-```sh
-pnpm install --frozen-lockfile
-pnpm build
-cargo build --release --locked -p secretbridge-server
-./target/release/secretbridge-server start --no-open
-./target/release/secretbridge-server open
+You may start from any directory; do not assume the repository is already cloned. First look for the latest published GitHub Release and, when it has a package for this platform, download it, verify its checksum and package metadata, and install it. If no suitable Release exists, clone the latest main branch into a new non-sensitive directory, read AGENTS.md and the deployment documents, then build and install with the pinned toolchain and lock files. Preserve existing files and ask before administrator access or changes outside the working directory. Never request or expose real credentials. After installation, start SecretBridge and confirm that status is healthy and the service listens only on loopback. Report the installed version or commit, install location and uninstall command.
 ```
 
-The Windows executable is `secretbridge-server.exe`. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link. See [installation and background operation](docs/后台运行与安装交付.md) for packages, upgrades and uninstall behavior.
+The [AI-assisted deployment guide](docs/AI辅助部署.md) explains permissions and safety boundaries and links to the AI-readable runbook. Review commands before allowing them to run. Maintainers who need full source and package acceptance should use the validation flow in that guide instead.
+
+You do not need to choose a package, prepare a checkout or install a toolchain yourself; the assistant handles those decisions and asks only when the operating system needs your approval. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link. Manual source builds, upgrades and uninstall behavior are documented in [installation and background operation](docs/后台运行与安装交付.md).
 
 ## Typical workflow
 
