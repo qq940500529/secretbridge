@@ -95,8 +95,10 @@ fn load_from(root: &Path, data_directory: &Path) -> Result<Option<Installation>>
         return Err("installation_invalid");
     }
     let record = root.join("installation.json");
-    if !record.exists() {
-        return Ok(None);
+    match fs::symlink_metadata(&record) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("installation_invalid"),
+        Ok(_) => {}
     }
     let installation: Installation = read_json(&record, 65536)?;
     if installation.format_version != 1
