@@ -320,8 +320,14 @@ pub(super) fn summary() -> Result<serde_json::Value> {
     let Some(installation) = load()? else {
         return Ok(serde_json::Value::Null);
     };
+    let binary = match &installation.active {
+        Some(active) => Some(
+            safe_path(&root()?, &format!("releases/{active}"))?.join(binary_name()),
+        ),
+        None => None,
+    };
     Ok(
-        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
+        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"binary":binary,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
     )
 }
 

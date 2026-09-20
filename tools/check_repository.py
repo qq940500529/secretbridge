@@ -207,22 +207,26 @@ def check_ai_deployment_entrypoints(root: Path) -> list[str]:
         "README.md": (
             PUBLIC_REPOSITORY_URL,
             "You may start from any directory",
+            "Reuse a healthy",
             "--mcp-stdio",
             "secretbridge_terminal_capabilities",
         ),
         "README.zh-CN.md": (
             PUBLIC_REPOSITORY_URL,
             "任意目录",
+            "直接复用",
             "--mcp-stdio",
             "secretbridge_terminal_capabilities",
         ),
         "docs/AI辅助部署.md": (
             PUBLIC_REPOSITORY_URL,
             "不需要预先克隆仓库",
+            "直接复用",
             "--mcp-stdio",
             "secretbridge_terminal_capabilities",
         ),
         "docs/AI部署执行指南.md": (
+            "Existing installation discovery",
             "--mcp-stdio",
             "secretbridge_terminal_capabilities",
         ),

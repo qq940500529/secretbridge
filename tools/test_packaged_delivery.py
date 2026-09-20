@@ -126,7 +126,9 @@ def accept(archive: Path) -> None:
             assert replayed["replayed"]
             assert replayed["binary"] == installed["binary"]
             assert run("status")["running"]
-            original = run("status")["installation"]["active_release"]
+            installed_status = run("status")["installation"]
+            assert installed_status["binary"] == installed["binary"]
+            original = installed_status["active_release"]
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
             assert pointer["startup_files"]

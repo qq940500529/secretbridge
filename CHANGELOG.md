@@ -6,8 +6,8 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
-- Complete AI-assisted and manual deployment with MCP host configuration, read-only bridge verification and upgrade/rollback path refresh guidance.
-- Return the active installed binary path from repeat installation and rollback results so automation can maintain MCP configuration without inspecting private installation metadata.
+- Complete AI-assisted and manual deployment with existing-install discovery, MCP host configuration, read-only bridge verification and upgrade/rollback path refresh guidance.
+- Return the active installed binary path from status, repeat installation and rollback results so automation can reuse one installation across AI clients and conversations.
 
 ## 0.2.0-beta.5 — 2026-09-20
 

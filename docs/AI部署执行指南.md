@@ -4,7 +4,7 @@ This file is an execution contract for local automation agents. User-facing cont
 
 ## Scope
 
-Install, start and inspect SecretBridge on the current user account, using the latest suitable GitHub Release when available and the latest `main` source otherwise. Connect the installed stdio bridge to the user's MCP-capable AI host and verify a read-only tool when that host can be identified safely. Never publish, merge, create a release, modify network security, or delete pre-existing user data unless the user separately requests that action.
+Discover and reuse a healthy SecretBridge installation on the current user account before acquiring anything. Install the latest suitable GitHub Release only when no usable installation exists, and use latest `main` source only when no suitable package exists. Connect the active stdio bridge to the user's MCP-capable AI host and verify a read-only tool when that host can be identified safely. Never publish, merge, create a release, modify network security, or delete pre-existing user data unless the user separately requests that action.
 
 ## Non-negotiable rules
 
@@ -15,11 +15,22 @@ Install, start and inspect SecretBridge on the current user account, using the l
 5. Do not bypass tests, signatures/checksums, browser warnings, OS credential-store controls or file permissions.
 6. Redact account names, host names, private addresses and personal paths from any shared report.
 
+## Existing installation discovery
+
+Changing AI application, model or conversation must not create another SecretBridge installation. Before network acquisition:
+
+- Inspect a `secretbridge` entry already present in the current MCP host and check whether its explicit `command` exists.
+- Check PATH and only the documented platform-default installation record from `docs/后台运行与安装交付.md`. Do not recursively search a home directory, other drives or unrelated application settings.
+- Run `status` with a candidate executable. A non-null `installation.binary` is the authoritative active command. Reuse it when status is healthy; when it is installed but stopped, start it with that active binary instead of installing again.
+- Do not upgrade merely because this is a new agent or conversation. Explain and obtain approval before upgrading an installed version.
+- If an existing MCP entry or environment indicates a custom installation but its path cannot be established, ask the user once for that location. Stop rather than creating a default duplicate.
+
 ## Package or source acquisition
 
 The canonical repository is `https://github.com/qq940500529/secretbridge`. The agent may begin outside a checkout:
 
-- Check the latest GitHub Release first. If it includes an archive for the current platform and architecture, download that archive and its published digest, verify both the digest and `verify-package`, and use the packaged installation path.
+- Skip acquisition entirely when discovery found a healthy, suitable installation.
+- Otherwise check the latest GitHub Release first. If it includes an archive for the current platform and architecture, download that archive and its published digest, verify both the digest and `verify-package`, and use the packaged installation path.
 - If there is no suitable published package, clone the latest `main` branch into a new directory that contains no secrets or unrelated user files.
 - If a checkout exists, verify its `origin`, branch, commit and working-tree status before using it. Never discard unrelated changes or silently switch the requested revision.
 - After entering the checkout, read the required repository documents before installing dependencies or changing the machine.
@@ -32,7 +43,7 @@ The canonical repository is `https://github.com/qq940500529/secretbridge`. The a
 - Record the selected Release tag, asset and digest. For a source fallback, record `git status --short`, current branch and `git rev-parse HEAD` instead.
 - Confirm the intended commit with the user if a source fallback is not a clean trusted checkout.
 - Record OS/version and architecture. For a source fallback, also record the versions pinned by `rust-toolchain.toml`, `.node-version`, `package.json` and `tools/requirements-dev.txt`.
-- Inspect existing SecretBridge status without stopping or replacing it.
+- Record whether discovery found and reused an existing installation. Inspect its status without stopping or replacing it.
 - Present planned install/data directories and whether login autostart will be changed.
 
 ### 2. Quality gates
@@ -54,7 +65,7 @@ Skip this phase when installing a verified published package. For a source fallb
 - Extract to a new temporary directory; reject path traversal and symlinks outside it.
 - Run the packaged executable's `verify-package` before `install`.
 - Install only to the user-approved absolute directory.
-- Capture the absolute `binary` value from the successful `install` JSON response. Do not use a temporary extraction path or a source-tree `target` binary for persistent MCP configuration.
+- Capture the absolute active path from `status.installation.binary` for a reused installation or `binary` from a successful `install`. Do not use a temporary extraction path or a source-tree `target` binary for persistent MCP configuration.
 - Check `status`, loopback-only listening, `open`, browser pairing, stop/start and the documented login-start descriptor.
 - Do not claim desktop, credential-store, reboot or accessibility acceptance unless actually observed on that platform.
 
@@ -93,7 +104,7 @@ For an ordinary deployment, success is a healthy `status` response and a loopbac
 - Remove only temporary directories, disposable services and synthetic credentials created by this run.
 - Stop test processes and confirm no test listener remains.
 - State whether the installed application and user data were intentionally retained.
-- Report commit, package version, platform, checks passed/failed/limited, MCP host and read-only verification state, rollback path and exact uninstall command. Never include secret values or identity-bearing machine details.
+- Report whether an existing installation was reused or a new one was installed, plus commit, package version, platform, checks passed/failed/limited, MCP host and read-only verification state, rollback path and exact uninstall command. Never include secret values or identity-bearing machine details.
 
 ## Success condition
 
