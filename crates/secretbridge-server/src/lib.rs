@@ -68,11 +68,11 @@ use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 use catalog::{
-    ActionTemplate, Approval, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
-    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
-    CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation,
-    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
-    UpdateCredentialReference, UpdateTarget,
+    ActionTemplate, Approval, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError,
+    CatalogOpenError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
+    CreateRunOutcome, CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval,
+    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target,
+    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use credential_service::{CredentialService, CredentialServiceError};
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
@@ -937,7 +937,10 @@ async fn pair(
 async fn browser_auth_methods(
     State(state): State<AppState>,
 ) -> Result<Json<BrowserAuthMethodsResponse>, ApiError> {
-    let mode = state.catalog.browser_auth_mode().map_err(map_catalog_error)?;
+    let mode = state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?;
     Ok(Json(BrowserAuthMethodsResponse {
         pin_enabled: mode == BrowserAuthMode::Pin,
         pairing_link_enabled: true,
@@ -955,14 +958,21 @@ async fn pair_with_pin(
     Json(request): Json<PinPairRequest>,
 ) -> Result<Json<PairResponse>, ApiError> {
     validate_origin(&headers, &state)?;
-    if state.catalog.browser_auth_mode().map_err(map_catalog_error)? != BrowserAuthMode::Pin
+    if state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?
+        != BrowserAuthMode::Pin
         || !valid_browser_pin(&request.pin)
     {
         return Err(ApiError::Unauthorized);
     }
     {
         let attempts = state.pin_attempts.lock().await;
-        if attempts.blocked_until.is_some_and(|until| until > Instant::now()) {
+        if attempts
+            .blocked_until
+            .is_some_and(|until| until > Instant::now())
+        {
             return Err(ApiError::Unauthorized);
         }
     }
@@ -1002,7 +1012,10 @@ async fn set_browser_auth_method(
     let store = state.secret_store.clone();
     match request.method {
         BrowserAuthMethod::Pin => {
-            let pin = request.pin.filter(|value| valid_browser_pin(value)).ok_or(ApiError::BadRequest)?;
+            let pin = request
+                .pin
+                .filter(|value| valid_browser_pin(value))
+                .ok_or(ApiError::BadRequest)?;
             task::spawn_blocking(move || store.set(BROWSER_PIN_CREDENTIAL_ID, &pin))
                 .await
                 .map_err(|_| ApiError::Internal)?
@@ -2072,6 +2085,10 @@ async fn handle_client_message(
             code: "input_too_large",
             message: "The terminal input is too large.",
         },
+        Ok(Err(TerminalError::Busy)) => ServerTerminalMessage::Error {
+            code: "approved_command_running",
+            message: "An approved command currently owns terminal input.",
+        },
         _ => ServerTerminalMessage::Error {
             code: "terminal_operation_failed",
             message: "The terminal operation failed.",
@@ -2107,7 +2124,8 @@ async fn require_session(state: &AppState, headers: &HeaderMap) -> Result<u64, A
 fn map_terminal_error(error: TerminalError) -> ApiError {
     match error {
         TerminalError::Capacity => ApiError::TerminalCapacity,
-        TerminalError::InvalidInput
+        TerminalError::Busy
+        | TerminalError::InvalidInput
         | TerminalError::InvalidSize
         | TerminalError::InvalidEnvironment
         | TerminalError::InvalidName

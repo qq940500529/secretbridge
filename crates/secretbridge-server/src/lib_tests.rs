@@ -75,6 +75,74 @@ async fn status_exposes_current_runtime_capabilities() {
 }
 
 #[tokio::test]
+async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
+    let (app, bootstrap) = test_app();
+    let token = pair_test_session(&app, &bootstrap).await;
+    let configured = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pin","pin":"synthetic-local-pin"}"#,
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(configured.status(), StatusCode::NO_CONTENT);
+
+    let methods = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session/methods")
+                .body(Body::empty())
+                .expect("methods request"),
+        )
+        .await
+        .expect("router response");
+    let methods = response_json(methods).await;
+    assert_eq!(methods["pin_enabled"], true);
+    assert!(!methods.to_string().contains("synthetic-local-pin"));
+
+    let incorrect = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"incorrect-pin"}"#))
+                .expect("incorrect PIN request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(incorrect.status(), StatusCode::UNAUTHORIZED);
+
+    let paired = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"synthetic-local-pin"}"#))
+                .expect("PIN request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(paired.status(), StatusCode::OK);
+    let paired = response_json(paired).await;
+    assert!(
+        paired["session_token"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(!paired.to_string().contains("synthetic-local-pin"));
+}
+
+#[tokio::test]
 async fn credential_secret_is_write_only_versioned_and_clearable() {
     let (app, bootstrap) = test_app();
     let token = pair_test_session(&app, &bootstrap).await;

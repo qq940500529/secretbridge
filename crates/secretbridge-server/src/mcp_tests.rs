@@ -22,6 +22,131 @@ use crate::{
 
 const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
 
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one MCP scenario keeps catalog discovery, command drafting, and terminal validation contiguous"
+)]
+async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_terminal() {
+    let (state, _) = AppState::new([]);
+    let credential = state
+        .catalog
+        .create_credential_reference(
+            &serde_json::from_value(json!({
+                "name": "Dynamic MCP credential",
+                "kind": "password",
+                "purpose": "Synthetic MCP test",
+                "address": "service.example.test",
+                "username": "synthetic-user"
+            }))
+            .expect("credential request"),
+        )
+        .expect("create credential metadata");
+    state
+        .secret_store
+        .set(credential.id, "synthetic-dynamic-secret")
+        .expect("store synthetic secret");
+    state
+        .catalog
+        .set_credential_secret_state(credential.id, credential.version, true)
+        .expect("mark synthetic secret available");
+    let target = state
+        .catalog
+        .create_target(&CreateTarget {
+            name: "Dynamic MCP connection".to_owned(),
+            kind: TargetKind::HttpService,
+            environment: TargetEnvironment::Test,
+            description: None,
+            address: Some("service.example.test:22".to_owned()),
+            username: Some("synthetic-user".to_owned()),
+            allow_insecure_protocol: false,
+            credential_reference_id: Some(credential.id),
+            postgres: None,
+        })
+        .expect("create connection metadata");
+    let terminal = state
+        .terminals
+        .create(&crate::terminal::CreateTerminal {
+            rows: 24,
+            cols: 100,
+            shell: None,
+            name: Some("MCP secure terminal".to_owned()),
+            working_directory: None,
+            environment: BTreeMap::new(),
+        })
+        .expect("create secure terminal");
+    let (client, server_handle) = connect(state.clone()).await;
+
+    let catalog = client
+        .call_tool(CallToolRequestParams::new("secretbridge_list_catalog"))
+        .await
+        .expect("list safe catalog");
+    let catalog = catalog.structured_content.expect("catalog content");
+    assert_eq!(catalog["credentials"][0]["address"], "service.example.test");
+    assert_eq!(catalog["connections"][0]["username"], "synthetic-user");
+
+    let executable = std::env::current_exe()
+        .expect("test executable")
+        .to_string_lossy()
+        .into_owned();
+    let directory = std::env::current_dir()
+        .expect("current directory")
+        .to_string_lossy()
+        .into_owned();
+    let requested = client
+        .call_tool(
+            CallToolRequestParams::new("secretbridge_request_command").with_arguments(arguments(
+                json!({
+                    "name": "Dynamic approved command",
+                    "connection_id": target.id,
+                    "terminal_id": terminal.id,
+                    "program": executable.clone(),
+                    "working_directory": directory.clone(),
+                    "arguments": ["{{password}}"],
+                    "credential_slots": [{
+                        "name": "password",
+                        "credential_id": credential.id,
+                        "injection": "argument"
+                    }],
+                    "authorization_mode": "once",
+                    "expires_in_seconds": 300,
+                    "timeout_seconds": 30
+                }),
+            )),
+        )
+        .await
+        .expect("request command without a user-created template");
+    let approval = requested.structured_content.expect("approval content");
+    assert_eq!(approval["state"], "pending");
+
+    let missing_terminal = client
+        .call_tool(
+            CallToolRequestParams::new("secretbridge_request_command").with_arguments(arguments(
+                json!({
+                    "name": "Missing terminal",
+                    "connection_id": target.id,
+                    "terminal_id": Uuid::new_v4(),
+                    "program": executable,
+                    "working_directory": directory,
+                    "arguments": [],
+                    "credential_slots": [],
+                    "authorization_mode": "once",
+                    "expires_in_seconds": 300,
+                    "timeout_seconds": 30
+                }),
+            )),
+        )
+        .await;
+    assert!(missing_terminal.is_err());
+
+    client.cancel().await.expect("stop MCP client");
+    server_handle.await.expect("join MCP server");
+    state
+        .terminals
+        .remove(terminal.id)
+        .expect("remove secure terminal");
+}
+
 async fn connect(
     state: AppState,
 ) -> (
@@ -69,6 +194,10 @@ fn arguments(value: Value) -> Map<String, Value> {
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the complete public tool and schema allowlist is reviewed in one test"
+)]
 async fn advertises_only_the_bounded_tool_surface() {
     let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
     let (client, server_handle) = connect(state).await;
@@ -86,9 +215,11 @@ async fn advertises_only_the_bounded_tool_surface() {
             "secretbridge_get_approval",
             "secretbridge_get_run",
             "secretbridge_list_action_templates",
+            "secretbridge_list_catalog",
             "secretbridge_list_run_events",
             "secretbridge_read_run_output",
             "secretbridge_request_approval",
+            "secretbridge_request_command",
             "secretbridge_terminal_attach",
             "secretbridge_terminal_capabilities",
             "secretbridge_terminal_close",
@@ -104,6 +235,7 @@ async fn advertises_only_the_bounded_tool_surface() {
 
     let expected_properties = BTreeMap::from([
         ("secretbridge_list_action_templates", vec![]),
+        ("secretbridge_list_catalog", vec![]),
         ("secretbridge_evaluate_policy", vec!["id"]),
         (
             "secretbridge_request_approval",
@@ -112,6 +244,21 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "authorization_mode",
                 "expires_in_seconds",
                 "parameters",
+            ],
+        ),
+        (
+            "secretbridge_request_command",
+            vec![
+                "arguments",
+                "authorization_mode",
+                "connection_id",
+                "credential_slots",
+                "expires_in_seconds",
+                "name",
+                "program",
+                "terminal_id",
+                "timeout_seconds",
+                "working_directory",
             ],
         ),
         ("secretbridge_get_approval", vec!["id"]),

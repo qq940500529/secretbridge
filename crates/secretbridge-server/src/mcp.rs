@@ -194,6 +194,16 @@ impl McpBackend {
         match self {
             Self::Local(state) => {
                 let target_id = parse_uuid(&params.connection_id)?;
+                let terminal_id = parse_uuid(&params.terminal_id)?;
+                if !state.terminals.list().into_iter().any(|terminal| {
+                    terminal.id == terminal_id
+                        && terminal.status == crate::terminal::TerminalStatus::Running
+                }) {
+                    return Err(ErrorData::invalid_params(
+                        "secure_terminal_not_running",
+                        None,
+                    ));
+                }
                 let catalog = state.catalog.clone();
                 let target = catalog_task({
                     let catalog = catalog.clone();
@@ -210,7 +220,7 @@ impl McpBackend {
                 }
                 let template = crate::catalog::CreateActionTemplate {
                     command: Some(crate::command::CommandConfig {
-                        terminal_id: Some(parse_uuid(&params.terminal_id)?),
+                        terminal_id: Some(terminal_id),
                         database: None,
                         http: None,
                         ssh: None,
@@ -245,7 +255,7 @@ impl McpBackend {
                 })
                 .await?;
                 let request = CreateApproval {
-                    parameters: Default::default(),
+                    parameters: std::collections::BTreeMap::default(),
                     authorization_mode: params.authorization_mode,
                     action_template_id: created.id,
                     reason: Some("One-time command requested through MCP".to_owned()),
@@ -259,7 +269,8 @@ impl McpBackend {
                 {
                     Ok(approval) => approval,
                     Err(error) => {
-                        let _ = catalog_task(move || catalog.delete_action_template(created.id)).await;
+                        let _ =
+                            catalog_task(move || catalog.delete_action_template(created.id)).await;
                         return Err(error);
                     }
                 };
@@ -375,7 +386,7 @@ async fn open_console_for_human(state: &AppState) {
 impl SecretBridgeMcp {
     #[tool(
         name = "secretbridge_read_run_output",
-        description = "Read sanitized stdout/stderr for an approved credential-backed command run. cursor is the last chunk sequence; continue with next_cursor. wait_ms=0..5000; retention gaps are explicit. Never re-execute a command to recover output."
+        description = "Read sanitized stdout/stderr for an isolated approved run. Commands submitted to a secure terminal keep their output in that terminal and must be read with secretbridge_terminal_read. cursor is the last chunk sequence; continue with next_cursor. Never re-execute a command to recover output."
     )]
     async fn read_run_output(
         &self,
@@ -385,7 +396,7 @@ impl SecretBridgeMcp {
     }
     #[tool(
         name = "secretbridge_terminal_capabilities",
-        description = "Discover supported ordinary system shells and terminal limits. No credentials are injected."
+        description = "Discover supported secure continuous shells and terminal limits. Credential values are injected only by an approved SecretBridge command request, never by terminal creation."
     )]
     async fn terminal_capabilities(&self) -> Result<McpJson<serde_json::Value>, ErrorData> {
         self.terminal(TerminalRequest::Capabilities).await
@@ -401,7 +412,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_create",
-        description = "Create a real persistent terminal for ordinary commands. Environment and paths must contain no secrets. Creation does not grant input; attach next."
+        description = "Create one broker-owned secure continuous terminal for ordinary commands and later human-approved credential commands. Environment and paths must contain no secrets. Creation does not grant input; attach next."
     )]
     async fn terminal_create(
         &self,
@@ -423,7 +434,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_read",
-        description = "Read bounded ordinary output after a byte cursor. max_bytes=1..16384; wait_ms=0..5000. Continue with next_cursor; truncated reports a retention gap; bytes provide lossless decoding and text is a UTF-8 preview. Never re-execute a command to recover output."
+        description = "Read broker-redacted terminal output after a byte cursor; this is the only AI-readable terminal result path. max_bytes=1..16384; wait_ms=0..5000. Continue with next_cursor; truncated reports a retention gap; bytes provide lossless decoding and text is a UTF-8 preview. Never re-execute a command to recover output."
     )]
     async fn terminal_read(
         &self,
@@ -530,7 +541,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_command",
-        description = "Submit an exact non-shell command draft and credential placeholders for human approval without requiring a pre-existing template. This never accepts secret values and cannot approve or execute the draft."
+        description = "Submit an exact non-shell command and opaque credential placeholders for execution in an existing secure terminal after human approval. A user-created template is not required. This never accepts secret values and cannot approve or execute the draft; read the eventual result only with secretbridge_terminal_read."
     )]
     async fn request_command(
         &self,
@@ -1634,13 +1645,17 @@ struct RequestCommandParams {
     name: String,
     #[schemars(description = "Connection UUID returned by secretbridge_list_catalog")]
     connection_id: String,
-    #[schemars(description = "Running secure-terminal UUID returned by secretbridge_terminal_list")]
+    #[schemars(
+        description = "Running secure-terminal UUID returned by secretbridge_terminal_list"
+    )]
     terminal_id: String,
     #[schemars(description = "Absolute executable path; never a shell command string")]
     program: String,
     #[schemars(description = "Existing absolute working directory")]
     working_directory: String,
-    #[schemars(description = "Exact argv items; credential placeholders must occupy a complete item")]
+    #[schemars(
+        description = "Exact argv items; credential placeholders must occupy a complete item"
+    )]
     arguments: Vec<String>,
     #[serde(default)]
     #[schemars(description = "Opaque credential bindings and injection modes; no secret values")]

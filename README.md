@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge `0.2.0-beta.6` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
+> SecretBridge `0.2.0-beta.6` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Why SecretBridge
 
@@ -35,7 +35,7 @@ flowchart LR
 - **Write-only credential handling:** passwords, tokens and private keys live in the OS credential store; SQLite keeps references and public state.
 - **Explicit approval:** review the target, parameters, grant mode, lifetime and output scope before execution.
 - **Controlled connectors:** fixed programs, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL.
-- **Reconnectable terminals:** keep a real platform shell alive across browser or MCP disconnects without injecting SecretBridge credentials.
+- **Secure continuous terminals:** ordinary commands and human-approved credential commands can share one broker-owned shell; output is redacted before Web replay or MCP reads.
 - **Bounded results:** filter credential-task output before persistence; constrain HTTP and database fields and size.
 - **Traceable state:** version approvals, runs and fixed audit events; configuration changes invalidate stale grants.
 - **Local delivery:** background start/status/stop, login startup, upgrade, rollback, uninstall, backup and restore.

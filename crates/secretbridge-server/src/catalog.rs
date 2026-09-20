@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub(crate) mod maintenance;
 mod browser_auth;
+pub(crate) mod maintenance;
 mod rows;
 mod schema;
 

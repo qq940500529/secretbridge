@@ -368,7 +368,9 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
         connection.execute_batch(&migration)?;
         connection.pragma_update(None, "foreign_keys", true)?;
         if connection
-            .query_row("PRAGMA foreign_key_check", [], |row| row.get::<_, String>(0))
+            .query_row("PRAGMA foreign_key_check", [], |row| {
+                row.get::<_, String>(0)
+            })
             .optional()?
             .is_some()
         {

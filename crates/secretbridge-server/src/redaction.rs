@@ -64,7 +64,8 @@ impl Redactor {
             if secret.is_empty() {
                 continue;
             }
-            self.patterns.push(Zeroizing::new(secret.as_bytes().to_vec()));
+            self.patterns
+                .push(Zeroizing::new(secret.as_bytes().to_vec()));
             self.patterns.push(Zeroizing::new(
                 secret.encode_utf16().flat_map(u16::to_le_bytes).collect(),
             ));

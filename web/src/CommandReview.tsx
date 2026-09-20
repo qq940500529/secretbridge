@@ -168,6 +168,14 @@ export function CommandReview({
         {zh ? "查看将执行的程序与插槽" : "Review program and credential slots"}
       </summary>
       <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-[6rem_1fr]">
+        {config.terminal_id && (
+          <>
+            <dt className="text-slate-500">
+              {zh ? "安全终端" : "Secure terminal"}
+            </dt>
+            <dd className="m-0 break-all font-mono">{config.terminal_id}</dd>
+          </>
+        )}
         <dt className="text-slate-500">{zh ? "程序" : "Program"}</dt>
         <dd className="m-0 break-all font-mono">{config.program}</dd>
         <dt className="text-slate-500">{zh ? "工作目录" : "Directory"}</dt>
@@ -199,6 +207,13 @@ export function CommandReview({
           ))}
         </dd>
       </dl>
+      {config.terminal_id && (
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "批准后命令会在这个既有终端进程中继续执行；凭据由代理临时注入，终端回放与 MCP 读取只能看到脱敏结果。"
+            : "After approval, the command continues in this existing terminal process. The broker injects credentials temporarily, and terminal replay or MCP reads expose only redacted output."}
+        </p>
+      )}
     </details>
   );
 }

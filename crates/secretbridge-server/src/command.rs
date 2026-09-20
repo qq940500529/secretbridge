@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
+    fmt::Write as _,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -304,25 +305,9 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         return;
     };
     let parameters = context.approval.parameters;
-    let mut secrets = Vec::new();
-    for slot in &config.slots {
-        let store = state.secret_store.clone();
-        let credential_id = slot.credential_id;
-        let Ok(Ok(secret)) = tokio::task::spawn_blocking(move || store.get(credential_id)).await
-        else {
-            let _ = state
-                .catalog
-                .complete_command_run(id, "credential_unavailable", None);
-            return;
-        };
-        if secret.is_empty() {
-            let _ = state
-                .catalog
-                .complete_command_run(id, "credential_unavailable", None);
-            return;
-        }
-        secrets.push(secret);
-    }
+    let Some(secrets) = load_command_secrets(state, id, &config).await else {
+        return;
+    };
     let remaining = context
         .approval
         .expires_at_unix_ms
@@ -371,20 +356,17 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         .await;
         return;
     }
-    if let Some(terminal_id) = config.terminal_id {
-        let (status, exit) = execute_in_terminal(
-            state,
-            id,
-            terminal_id,
-            &config,
-            &secrets,
-            cancellation,
-            limit,
-            &parameters,
-        )
-        .await;
-        let _ = state.catalog.complete_command_run(id, status, exit);
-        let _ = state.changes.send(());
+    if drive_in_terminal(
+        state,
+        id,
+        &config,
+        &secrets,
+        cancellation,
+        limit,
+        &parameters,
+    )
+    .await
+    {
         return;
     }
     let state = state.clone();
@@ -405,46 +387,99 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
     .await;
 }
 
-async fn execute_in_terminal(
+async fn load_command_secrets(
     state: &AppState,
     run_id: Uuid,
-    terminal_id: Uuid,
+    config: &CommandConfig,
+) -> Option<Vec<Zeroizing<String>>> {
+    let mut secrets = Vec::new();
+    for slot in &config.slots {
+        let store = state.secret_store.clone();
+        let credential_id = slot.credential_id;
+        let Ok(Ok(secret)) = tokio::task::spawn_blocking(move || store.get(credential_id)).await
+        else {
+            let _ = state
+                .catalog
+                .complete_command_run(run_id, "credential_unavailable", None);
+            return None;
+        };
+        if secret.is_empty() {
+            let _ = state
+                .catalog
+                .complete_command_run(run_id, "credential_unavailable", None);
+            return None;
+        }
+        secrets.push(secret);
+    }
+    Some(secrets)
+}
+
+async fn drive_in_terminal(
+    state: &AppState,
+    run_id: Uuid,
     config: &CommandConfig,
     secrets: &[Zeroizing<String>],
     cancellation: &CancellationToken,
     limit: Duration,
     parameters: &crate::parameters::ParameterValues,
-) -> (&'static str, Option<i32>) {
+) -> bool {
+    let Some(terminal_id) = config.terminal_id else {
+        return false;
+    };
+    let (status, exit) = execute_in_terminal(TerminalExecution {
+        state,
+        run_id,
+        terminal_id,
+        config,
+        secrets,
+        cancellation,
+        limit,
+        parameters,
+    })
+    .await;
+    let _ = state.catalog.complete_command_run(run_id, status, exit);
+    let _ = state.changes.send(());
+    true
+}
+
+struct TerminalExecution<'a> {
+    state: &'a AppState,
+    run_id: Uuid,
+    terminal_id: Uuid,
+    config: &'a CommandConfig,
+    secrets: &'a [Zeroizing<String>],
+    cancellation: &'a CancellationToken,
+    limit: Duration,
+    parameters: &'a crate::parameters::ParameterValues,
+}
+
+async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str, Option<i32>) {
+    let TerminalExecution {
+        state,
+        run_id,
+        terminal_id,
+        config,
+        secrets,
+        cancellation,
+        limit,
+        parameters,
+    } = execution;
     if cancellation.is_cancelled() || limit.is_zero() || config.validate().is_err() {
         return ("cancelled", None);
     }
-    let Ok((shell, mut events)) = state.terminals.broker_channel(terminal_id) else {
+    let Ok(broker) = state.terminals.begin_broker(terminal_id) else {
         return ("command_failed", None);
     };
-    if state
-        .terminals
-        .add_redaction_secrets(terminal_id, secrets)
-        .is_err()
-    {
-        return ("command_failed", None);
-    }
+    let shell = broker.shell();
+    let mut events = broker.subscribe();
+    broker.add_redaction_secrets(secrets);
     let mut files = TemporaryFiles { paths: Vec::new() };
     let Some(command) = terminal_command(
-        state,
-        run_id,
-        shell,
-        config,
-        secrets,
-        parameters,
-        &mut files,
+        state, run_id, shell, config, secrets, parameters, &mut files,
     ) else {
         return ("command_failed", None);
     };
-    if state
-        .terminals
-        .broker_write(terminal_id, command.as_bytes())
-        .is_err()
-    {
+    if broker.write(command.as_bytes()).is_err() {
         return ("command_failed", None);
     }
 
@@ -455,11 +490,11 @@ async fn execute_in_terminal(
     let result = loop {
         tokio::select! {
             () = cancellation.cancelled() => {
-                let _ = state.terminals.broker_write(terminal_id, &[3]);
+                let _ = broker.write(&[3]);
                 break ("cancelled", None);
             }
             () = &mut deadline => {
-                let _ = state.terminals.broker_write(terminal_id, &[3]);
+                let _ = broker.write(&[3]);
                 break ("timed_out", None);
             }
             event = events.recv() => match event {
@@ -577,9 +612,10 @@ fn terminal_command_posix(
             command.push_str(&quote(argument));
         }
     }
-    command.push_str(&format!(
-        "; __sb_ec=$?; printf '\\n{marker}:%s\\n' \"$__sb_ec\"\n"
-    ));
+    let _ = writeln!(
+        command,
+        "; __sb_ec=$?; printf '\\n{marker}:%s\\n' \"$__sb_ec\""
+    );
     Some(Zeroizing::new(command))
 }
 
@@ -590,7 +626,10 @@ fn terminal_command_powershell(
     marker: &str,
 ) -> Option<Zeroizing<String>> {
     let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
-    let mut command = format!("Set-Location -LiteralPath {}; ", quote(&config.working_directory));
+    let mut command = format!(
+        "Set-Location -LiteralPath {}; ",
+        quote(&config.working_directory)
+    );
     let mut restore = String::new();
     let mut stdin = None;
     for (index, (slot, path)) in config.slots.iter().zip(secret_paths).enumerate() {
@@ -598,15 +637,18 @@ fn terminal_command_powershell(
         match slot.injection {
             Injection::Environment => {
                 let variable = slot.environment_variable.as_deref()?;
-                command.push_str(&format!("$__sb_old_{index}=$env:{variable};$env:{variable}=[IO.File]::ReadAllText({path});"));
-                restore.push_str(&format!("$env:{variable}=$__sb_old_{index};"));
+                let _ = write!(
+                    command,
+                    "$__sb_old_{index}=$env:{variable};$env:{variable}=[IO.File]::ReadAllText({path});"
+                );
+                let _ = write!(restore, "$env:{variable}=$__sb_old_{index};");
             }
             Injection::Stdin => stdin = Some(path),
             Injection::Argument | Injection::File | Injection::Protocol => {}
         }
     }
     if let Some(path) = stdin {
-        command.push_str(&format!("[IO.File]::ReadAllText({path}) | "));
+        let _ = write!(command, "[IO.File]::ReadAllText({path}) | ");
     }
     command.push_str("& ");
     command.push_str(&quote(&config.program));
@@ -629,9 +671,10 @@ fn terminal_command_powershell(
             command.push_str(&quote(argument));
         }
     }
-    command.push_str(&format!(
+    let _ = write!(
+        command,
         ";$__sb_ec=$LASTEXITCODE;{restore}Write-Output \"{marker}:$__sb_ec\"\r\n"
-    ));
+    );
     Some(Zeroizing::new(command))
 }
 
