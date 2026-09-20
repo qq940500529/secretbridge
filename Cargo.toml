@@ -26,7 +26,7 @@ russh-sftp = "=3.0.0"
 base64 = "=0.22.1"
 mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
 rand = "=0.10.2"
-rmcp = { version = "=3.3.0", default-features = false, features = ["macros", "server", "transport-io"] }
+rmcp = { version = "=3.4.0", default-features = false, features = ["macros", "server", "transport-io"] }
 rusqlite = { version = "=0.40.2", features = ["bundled", "backup", "serialize"], default-features = false }
 schemars = "=1.2.2"
 rustls-tokio-postgres = { version = "=0.5.1", default-features = false, features = ["channel-binding", "platform-verifier", "ring", "tls12"] }
@@ -36,7 +36,7 @@ sha2 = "=0.11.0"
 subtle = "=2.6.1"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-postgres = "=0.7.18"
-tokio-tungstenite = "=0.29.0"
+tokio-tungstenite = "=0.30.0"
 tokio-util = { version = "=0.7.19", features = ["rt"] }
 tower = { version = "=0.5.3", features = ["util"] }
 tower-http = { version = "=0.7.1", features = ["fs", "set-header", "trace"] }
