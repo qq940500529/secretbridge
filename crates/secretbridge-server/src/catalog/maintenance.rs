@@ -18,7 +18,7 @@ use super::{
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
-const TABLES: [&str; 10] = [
+const TABLES: [&str; 11] = [
     "credential_references",
     "targets",
     "action_templates",
@@ -29,6 +29,7 @@ const TABLES: [&str; 10] = [
     "run_output",
     "configuration_imports",
     "browser_auth_settings",
+    "browser_sessions",
 ];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -304,6 +305,10 @@ impl Catalog {
     pub(crate) fn backup_bytes(&self) -> Result<Vec<u8>, CatalogError> {
         let mut connection = storage(Connection::open_in_memory())?;
         copy_database(&self.lock(), &mut connection)?;
+        storage(connection.execute_batch(
+            "DELETE FROM browser_sessions;
+             UPDATE browser_auth_settings SET mode='pairing_link';",
+        ))?;
         let bytes = storage(connection.serialize("main"))?;
         if bytes.len() > MAX_BACKUP_BYTES {
             return Err(CatalogError::Invalid);

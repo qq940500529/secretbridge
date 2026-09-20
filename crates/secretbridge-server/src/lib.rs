@@ -40,6 +40,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
     extract::{
@@ -226,13 +227,20 @@ impl AppState {
         (state, bootstrap_token)
     }
 
-    async fn issue_session(&self) -> (String, u64) {
+    async fn issue_session(&self) -> Result<(String, u64), ApiError> {
         let token = new_token();
+        let digest = token_digest(&token);
+        let expires_at_unix_ms = now_unix_ms().saturating_add(
+            u64::try_from(SESSION_TTL.as_millis()).map_err(|_| ApiError::Internal)?,
+        );
+        self.catalog
+            .store_browser_session(&digest, expires_at_unix_ms)
+            .map_err(map_catalog_error)?;
         self.session_tokens
             .write()
             .await
-            .insert(token_digest(&token), Instant::now() + SESSION_TTL);
-        (token, SESSION_TTL.as_secs())
+            .insert(digest, Instant::now() + SESSION_TTL);
+        Ok((token, SESSION_TTL.as_secs()))
     }
 
     /// Enables authenticated native lifecycle control without exposing it as an MCP tool.
@@ -248,16 +256,6 @@ impl AppState {
     pub async fn shutdown_operations(&self) {
         if let Some(control) = &self.runtime_control {
             control.stopping.cancel();
-        }
-        let sessions: Vec<_> = self
-            .session_tokens
-            .write()
-            .await
-            .drain()
-            .map(|(digest, _)| digest)
-            .collect();
-        for digest in sessions {
-            let _ = self.session_revocations.send(digest);
         }
         for (_, token) in self.run_cancellations.active.lock().await.values() {
             token.cancel();
@@ -288,25 +286,39 @@ impl AppState {
         let now = Instant::now();
         let mut sessions = self.session_tokens.write().await;
         sessions.retain(|_, expires_at| *expires_at > now);
-        sessions
+        if let Some(remaining) = sessions
             .get(digest)
             .map(|expires_at| expires_at.saturating_duration_since(now).as_secs())
+        {
+            return Some(remaining);
+        }
+        let remaining = self
+            .catalog
+            .browser_session_remaining(digest, now_unix_ms())
+            .ok()
+            .flatten()?;
+        sessions.insert(*digest, now + Duration::from_secs(remaining));
+        Some(remaining)
     }
 
     async fn revoke(&self, token: &str) -> bool {
         let digest = token_digest(token);
-        let removed = self.session_tokens.write().await.remove(&digest).is_some();
+        let cached = self.session_tokens.write().await.remove(&digest).is_some();
+        let persisted = self
+            .catalog
+            .revoke_browser_session(&digest)
+            .unwrap_or(false);
+        let removed = cached || persisted;
         if removed {
             let _ = self.session_revocations.send(digest);
         }
         removed
     }
 
-    async fn active_session_count(&self) -> usize {
-        let now = Instant::now();
-        let mut sessions = self.session_tokens.write().await;
-        sessions.retain(|_, expires_at| *expires_at > now);
-        sessions.len()
+    fn active_session_count(&self) -> usize {
+        self.catalog
+            .active_browser_session_count(now_unix_ms())
+            .unwrap_or_default()
     }
 }
 
@@ -522,6 +534,7 @@ struct ErrorResponse {
     message: &'static str,
 }
 
+#[derive(Debug)]
 enum ApiError {
     ApprovalConsumed,
     ApprovalNotUsable,
@@ -904,7 +917,7 @@ fn apply_security_headers(router: Router) -> Router {
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
-    let paired = state.active_session_count().await > 0;
+    let paired = state.active_session_count() > 0;
     let mut status = StatusResponse::controlled_operations(paired, state.configuration_storage);
     status.background_control_enabled = state.runtime_control.is_some();
     Json(status)
@@ -926,7 +939,7 @@ async fn pair(
     bootstrap.take();
     drop(bootstrap);
 
-    let (session_token, expires_in_seconds) = state.issue_session().await;
+    let (session_token, expires_in_seconds) = state.issue_session().await?;
     Ok(Json(PairResponse {
         session_token,
         token_type: "Bearer",
@@ -950,6 +963,21 @@ async fn browser_auth_methods(
 fn valid_browser_pin(pin: &str) -> bool {
     let length = pin.chars().count();
     (6..=64).contains(&length) && !pin.chars().any(char::is_control)
+}
+
+fn hash_browser_pin(pin: &str) -> Option<String> {
+    Argon2::default()
+        .hash_password(pin.as_bytes())
+        .ok()
+        .map(|hash| hash.to_string())
+}
+
+fn verify_browser_pin(pin: &str, encoded: &str) -> bool {
+    PasswordHash::new(encoded).is_ok_and(|hash| {
+        Argon2::default()
+            .verify_password(pin.as_bytes(), &hash)
+            .is_ok()
+    })
 }
 
 async fn pair_with_pin(
@@ -977,13 +1005,15 @@ async fn pair_with_pin(
         }
     }
     let store = state.secret_store.clone();
-    let expected = task::spawn_blocking(move || store.get(BROWSER_PIN_CREDENTIAL_ID))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_secret_store_error)?;
-    let matches: bool = token_digest(&request.pin)
-        .ct_eq(&token_digest(expected.as_str()))
-        .into();
+    let pin = request.pin;
+    let matches = task::spawn_blocking(move || {
+        store
+            .get(BROWSER_PIN_CREDENTIAL_ID)
+            .map(|expected| verify_browser_pin(&pin, expected.as_str()))
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_secret_store_error)?;
     if !matches {
         let mut attempts = state.pin_attempts.lock().await;
         attempts.failures = attempts.failures.saturating_add(1);
@@ -994,7 +1024,7 @@ async fn pair_with_pin(
         return Err(ApiError::Unauthorized);
     }
     *state.pin_attempts.lock().await = PinAttempts::default();
-    let (session_token, expires_in_seconds) = state.issue_session().await;
+    let (session_token, expires_in_seconds) = state.issue_session().await?;
     Ok(Json(PairResponse {
         session_token,
         token_type: "Bearer",
@@ -1016,10 +1046,13 @@ async fn set_browser_auth_method(
                 .pin
                 .filter(|value| valid_browser_pin(value))
                 .ok_or(ApiError::BadRequest)?;
-            task::spawn_blocking(move || store.set(BROWSER_PIN_CREDENTIAL_ID, &pin))
-                .await
-                .map_err(|_| ApiError::Internal)?
-                .map_err(map_secret_store_error)?;
+            task::spawn_blocking(move || {
+                let encoded = hash_browser_pin(&pin).ok_or(SecretStoreError::Unavailable)?;
+                store.set(BROWSER_PIN_CREDENTIAL_ID, &encoded)
+            })
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .map_err(map_secret_store_error)?;
             state
                 .catalog
                 .set_browser_auth_mode(BrowserAuthMode::Pin)

@@ -705,7 +705,7 @@ async fn web_parameter_approval_and_time_window_use_the_real_executor() {
         .catalog
         .update_action_template(template.id, &update)
         .unwrap();
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     for parameters in [
         json!({"company":100}),
         json!({"company":"102"}),
@@ -790,7 +790,7 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
         .catalog
         .append_output(run.id, "stdout", "[REDACTED]")
         .unwrap();
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let mut changes = state.changes.subscribe();
     for (provided_origin, provided_token, body, expected) in [
         (

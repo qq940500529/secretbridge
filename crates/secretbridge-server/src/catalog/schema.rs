@@ -70,6 +70,11 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              );
              INSERT INTO browser_auth_settings(singleton, mode, updated_at_unix_ms)
                 VALUES(1, 'pairing_link', 0);
+             CREATE TABLE browser_sessions (
+                token_digest BLOB PRIMARY KEY NOT NULL CHECK (length(token_digest) = 32),
+                expires_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE INDEX browser_sessions_expiry_idx ON browser_sessions(expires_at_unix_ms);
              CREATE TABLE action_templates (
                 id TEXT PRIMARY KEY NOT NULL,
                 target_id TEXT NOT NULL REFERENCES targets(id) ON DELETE RESTRICT,
@@ -376,6 +381,19 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
         {
             return Err(CatalogOpenError::Database(rusqlite::Error::InvalidQuery));
         }
+    }
+    if version < 18 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE IF NOT EXISTS browser_sessions (
+                token_digest BLOB PRIMARY KEY NOT NULL CHECK (length(token_digest) = 32),
+                expires_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS browser_sessions_expiry_idx
+                ON browser_sessions(expires_at_unix_ms);
+             PRAGMA user_version = 18;
+             COMMIT;",
+        )?;
     }
     Ok(())
 }

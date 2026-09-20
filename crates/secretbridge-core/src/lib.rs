@@ -8,7 +8,7 @@ use serde::Serialize;
 pub const API_VERSION: &str = "v1";
 pub const PRODUCT_NAME: &str = "SecretBridge";
 /// Current on-disk catalog schema used by the server and delivery tooling.
-pub const SCHEMA_VERSION: i64 = 17;
+pub const SCHEMA_VERSION: i64 = 18;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

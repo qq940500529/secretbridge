@@ -890,7 +890,7 @@ async fn real_database_web_configuration_approval_execute_and_read() {
             .into_iter()
             .find(|t| t.id == template)
             .unwrap();
-        let (token, _) = state.issue_session().await;
+        let (token, _) = state.issue_session().await.expect("issue session");
         let (status, created) = web_request(&state, &token, "/api/v1/action-templates", json!({"name":"Web query","target_id":template.target_id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":5,"command":template.command})).await;
         assert_eq!(status, StatusCode::CREATED);
         let (status, _) = web_request(

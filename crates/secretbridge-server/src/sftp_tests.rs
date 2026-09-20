@@ -512,7 +512,7 @@ async fn web_creates_sftp_and_git_templates_approves_executes_and_reads_results(
             .into_iter()
             .find(|t| t.id == template)
             .unwrap();
-        let (token, _) = state.issue_session().await;
+        let (token, _) = state.issue_session().await.expect("issue session");
         let (status, template) = web_request(&state, &token, "/api/v1/action-templates", json!({"name":"Web connector fixture","target_id":current.target_id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":10,"command":current.command})).await;
         assert_eq!(status, StatusCode::CREATED, "{template}");
         let (status, approval) = web_request(

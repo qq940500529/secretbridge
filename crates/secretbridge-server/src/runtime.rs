@@ -124,7 +124,7 @@ mod tests {
         let (mut state, _) = AppState::new([ORIGIN.to_owned()]);
         let cancellation = CancellationToken::new();
         state.enable_runtime_control(ORIGIN.into(), cancellation.clone());
-        let (session, _) = state.issue_session().await;
+        let (session, _) = state.issue_session().await.expect("issue session");
         let app = crate::router(state);
         for (origin, token, expected) in [
             (ORIGIN, "wrong", StatusCode::UNAUTHORIZED),
@@ -178,10 +178,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_cancels_owned_runs_revokes_sessions_and_rejects_late_creation() {
+    async fn shutdown_cancels_owned_runs_preserves_sessions_and_rejects_late_creation() {
         let (mut state, _) = AppState::new([ORIGIN.to_owned()]);
         state.enable_runtime_control(ORIGIN.into(), CancellationToken::new());
-        let (session, _) = state.issue_session().await;
+        let (session, _) = state.issue_session().await.expect("issue session");
         let run = uuid::Uuid::new_v4();
         let token = CancellationToken::new();
         state
@@ -196,7 +196,7 @@ mod tests {
         });
         state.shutdown_operations().await;
         assert!(token.is_cancelled());
-        assert!(state.authenticate(&session).await.is_none());
+        assert!(state.authenticate(&session).await.is_some());
         assert!(handle(&state, RuntimeRequest::Open).await.is_err());
         let response = crate::router(state)
             .oneshot(

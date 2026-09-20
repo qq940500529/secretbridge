@@ -17,6 +17,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 mod browser_auth;
+mod browser_session;
 pub(crate) mod maintenance;
 mod rows;
 mod schema;

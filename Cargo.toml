@@ -14,6 +14,7 @@ authors = ["数链创元（天津）信息技术有限责任公司"]
 repository = "https://github.com/qq940500529/secretbridge"
 
 [workspace.dependencies]
+argon2 = "=0.6.0"
 axum = { version = "=0.8.9", features = ["json", "ws"] }
 futures-util = "=0.3.34"
 hex = "=0.4.3"
