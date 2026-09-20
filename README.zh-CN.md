@@ -4,7 +4,7 @@
 
 **让凭据留在本机，让授权决定操作。**
 
-[English](README.md) · [文档](docs/README.md) · [部署](docs/AI辅助部署.md) · [贡献](CONTRIBUTING.md) · [安全](SECURITY.md)
+[English](README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.5) · [文档](docs/README.md) · [部署](docs/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](SECURITY.md)
 
 [![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge 是面向个人、单机使用的预发行软件，尚未发布 GitHub Release。评估源码构建时只使用合成凭据。它不提供凭据读取／导出接口；普通终端不是凭据隔离沙箱。
+> SecretBridge `0.2.0-beta.5` 是面向个人、单机使用的公开预发行版。请先使用合成凭据、保留独立备份，并阅读[许可协议与免责协议](docs/最终用户许可与免责声明.md)。它不提供凭据读取／导出接口；普通终端不是凭据隔离沙箱。
 
 ## 它解决什么问题
 
@@ -75,7 +75,13 @@ flowchart LR
 | Linux | Ubuntu 24.04 x64 | Bash |
 | macOS | macOS 14+ arm64/x64 | Zsh |
 
-其他版本和架构属于实验性环境，必须单独验证。当前发行包未签名；正式支持状态以每个公开 Release 的说明为准。
+其他版本和架构属于实验性环境，必须单独验证。Beta 安装包尚未签名；支持状态和已知限制以每个公开 Release 的说明为准。
+
+## 参与 Beta 测试
+
+更广泛的实机验证现由社区用户共同完成。安装最新 Beta 后，请只使用合成数据，在自己的环境中检查安装、浏览器配对、凭据库写入／覆盖／删除、批准与拒绝、输出脱敏、重启或登录恢复、升级／回滚和卸载。不得为通过测试而关闭 TLS、SSH 主机验证、凭据库保护或其他系统安全机制。
+
+可复现的普通缺陷请使用 [Beta 问题表单](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md)。请提供包版本、平台、安装方式、已脱敏的复现步骤和清理结果；不要提交真实凭据、私人地址、用户路径或业务记录。可能属于漏洞的问题请使用[私密安全报告](https://github.com/qq940500529/secretbridge/security/advisories/new)。
 
 ## 安全边界
 
@@ -96,5 +102,7 @@ flowchart LR
 | 建立开发环境 | [开发者入门](docs/开发者入门.md) · [开发设计](docs/开发设计.md) |
 | 提交代码或文档 | [贡献指南](CONTRIBUTING.md) · [行为准则](CODE_OF_CONDUCT.md) |
 | 了解许可 | [许可说明](LICENSING.md) · [商业许可](COMMERCIAL_LICENSE.md) |
+| 查看首次运行条款 | [许可协议与免责协议](docs/最终用户许可与免责声明.md) |
+| 反馈问题 | [公开缺陷报告](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [私密安全报告](https://github.com/qq940500529/secretbridge/security/advisories/new) |
 
 Copyright (c) 2026 数链创元（天津）信息技术有限责任公司。开源代码采用 `AGPL-3.0-or-later`；第三方组件遵循各自许可，参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

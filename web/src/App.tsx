@@ -9,6 +9,7 @@ import {
   FileClock,
   KeyRound,
   Languages,
+  MessageSquareWarning,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
@@ -29,6 +30,15 @@ import {
 } from "./api";
 import { consumePairingToken } from "./pairing";
 import { BackgroundServiceView } from "./BackgroundServiceView";
+import { ISSUE_URL, LegalConsent } from "./LegalConsent";
+import {
+  hasCurrentLegalConsent,
+  initialLanguage,
+  storeLanguage,
+  storeLegalConsent,
+  type Language,
+} from "./preferences";
+import { SettingsView } from "./SettingsView";
 
 const TerminalView = lazy(() =>
   import("./TerminalView").then((module) => ({ default: module.TerminalView })),
@@ -57,7 +67,6 @@ const HistoryWorkspace = lazy(() =>
   })),
 );
 
-type Language = "zh-CN" | "en";
 type Connection = "checking" | "online" | "offline";
 type Authentication = "unpaired" | "pairing" | "paired" | "error";
 type Page =
@@ -101,6 +110,7 @@ interface Copy {
   primaryNavigation: string;
   switchLanguage: string;
   connectionStatus: string;
+  feedback: string;
 }
 
 const copy: Record<Language, Copy> = {
@@ -143,6 +153,7 @@ const copy: Record<Language, Copy> = {
     primaryNavigation: "主导航",
     switchLanguage: "切换到英文",
     connectionStatus: "连接状态",
+    feedback: "反馈问题",
   },
   en: {
     credentials: "Credentials",
@@ -184,6 +195,7 @@ const copy: Record<Language, Copy> = {
     primaryNavigation: "Primary navigation",
     switchLanguage: "Switch to Chinese",
     connectionStatus: "Connection status",
+    feedback: "Feedback",
   },
 };
 
@@ -201,9 +213,9 @@ function stateLabel(value: Connection | Authentication, text: Copy): string {
 }
 
 export function App() {
-  const [language, setLanguage] = useState<Language>(() =>
-    navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en",
-  );
+  const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [legalAccepted, setLegalAccepted] = useState(hasCurrentLegalConsent);
+  const [legalOpen, setLegalOpen] = useState(() => !hasCurrentLegalConsent());
   const [connection, setConnection] = useState<Connection>("checking");
   const [authentication, setAuthentication] =
     useState<Authentication>("unpaired");
@@ -220,6 +232,15 @@ export function App() {
   const [disconnectError, setDisconnectError] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const text = copy[language];
+
+  function changeLanguage(nextLanguage: Language) {
+    setLanguage(nextLanguage);
+    storeLanguage(nextLanguage);
+  }
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
 
   useEffect(() => {
     let active = true;
@@ -355,32 +376,42 @@ export function App() {
                 label={stateLabel(authentication, text)}
               />
             </div>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setLanguage((current) =>
-                      current === "zh-CN" ? "en" : "zh-CN",
-                    )
-                  }
-                  className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 shadow-sm transition hover:border-cyan-300 hover:text-cyan-700"
-                  aria-label={text.switchLanguage}
-                >
-                  <Languages className="size-4" aria-hidden="true" />
-                  {language === "zh-CN" ? "EN" : "中文"}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content
-                  sideOffset={8}
-                  className="rounded-lg bg-slate-900 px-3 py-2 text-xs text-white shadow-xl"
-                >
-                  {text.switchLanguage}
-                  <Tooltip.Arrow className="fill-slate-900" />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
+            <div className="flex items-center gap-2">
+              <a
+                href={ISSUE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 no-underline shadow-sm transition hover:border-cyan-300 hover:text-cyan-700"
+                aria-label={text.feedback}
+              >
+                <MessageSquareWarning className="size-4" aria-hidden="true" />
+                <span className="hidden sm:inline">{text.feedback}</span>
+              </a>
+              <Tooltip.Root>
+                <Tooltip.Trigger asChild>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      changeLanguage(language === "zh-CN" ? "en" : "zh-CN")
+                    }
+                    className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-600 shadow-sm transition hover:border-cyan-300 hover:text-cyan-700"
+                    aria-label={text.switchLanguage}
+                  >
+                    <Languages className="size-4" aria-hidden="true" />
+                    {language === "zh-CN" ? "EN" : "中文"}
+                  </button>
+                </Tooltip.Trigger>
+                <Tooltip.Portal>
+                  <Tooltip.Content
+                    sideOffset={8}
+                    className="rounded-lg bg-slate-900 px-3 py-2 text-xs text-white shadow-xl"
+                  >
+                    {text.switchLanguage}
+                    <Tooltip.Arrow className="fill-slate-900" />
+                  </Tooltip.Content>
+                </Tooltip.Portal>
+              </Tooltip.Root>
+            </div>
           </header>
 
           <main
@@ -390,7 +421,13 @@ export function App() {
           >
             {activePage === "settings" ? (
               <>
-                <SettingsView text={text} status={serviceStatus} />
+                <SettingsView
+                  text={text}
+                  status={serviceStatus}
+                  language={language}
+                  onLanguageChange={changeLanguage}
+                  onReviewLegal={() => setLegalOpen(true)}
+                />
                 {sessionToken && serviceStatus?.background_control_enabled && (
                   <BackgroundServiceView
                     sessionToken={sessionToken}
@@ -501,6 +538,19 @@ export function App() {
             )}
           </main>
         </div>
+        {legalOpen && (
+          <LegalConsent
+            language={language}
+            canClose={legalAccepted}
+            onLanguageChange={changeLanguage}
+            onAccept={() => {
+              storeLegalConsent();
+              setLegalAccepted(true);
+              setLegalOpen(false);
+            }}
+            onClose={() => setLegalOpen(false)}
+          />
+        )}
       </div>
     </Tooltip.Provider>
   );
@@ -542,85 +592,6 @@ function StatusPill({
       <Icon className={`size-4 ${pending ? "animate-pulse" : ""}`} />
       {label}
     </span>
-  );
-}
-
-function SettingsView({
-  text,
-  status,
-}: {
-  text: Copy;
-  status: ServiceStatus | null;
-}) {
-  return (
-    <>
-      <div className="mb-7 flex flex-wrap items-end justify-between gap-5">
-        <div>
-          <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">
-            {text.overview}
-          </h1>
-          <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600">
-            {text.subtitle}
-          </p>
-        </div>
-        <span className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-600">
-          <span className="size-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.12)]" />
-          {text.localOnly}
-        </span>
-      </div>
-
-      <section className="enterprise-surface">
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h2 className="m-0 text-base font-semibold text-slate-900">
-            {text.statusTitle}
-          </h2>
-          <Activity className="size-5 text-cyan-600" aria-hidden="true" />
-        </div>
-        <dl className="divide-y divide-slate-200">
-          <StatusDatum
-            label={text.apiVersion}
-            value={status?.api_version ?? "—"}
-          />
-          <StatusDatum
-            label={text.runtimeMode}
-            value={
-              status?.mode === "controlled_operations"
-                ? text.controlledOperations
-                : status?.mode === "credential_configuration"
-                  ? text.credentialConfiguration
-                  : status?.mode === "synthetic_only"
-                    ? text.syntheticOnly
-                    : "—"
-            }
-          />
-          <StatusDatum
-            label={text.configurationStorage}
-            value={
-              status?.configuration_storage === "sqlite"
-                ? text.localDatabase
-                : status?.configuration_storage === "memory_only"
-                  ? text.memoryOnly
-                  : "—"
-            }
-          />
-          <StatusDatum
-            label={text.realCredentials}
-            value={
-              status?.real_credentials_enabled ? text.enabled : text.disabled
-            }
-          />
-        </dl>
-      </section>
-    </>
-  );
-}
-
-function StatusDatum({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-1 px-5 py-3 sm:grid-cols-[14rem_1fr] sm:items-center">
-      <dt className="text-sm font-medium text-slate-500">{label}</dt>
-      <dd className="m-0 text-sm font-semibold text-slate-900">{value}</dd>
-    </div>
   );
 }
 

@@ -3204,14 +3204,14 @@ dependencies = [
 
 [[package]]
 name = "secretbridge-core"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "secretbridge-server"
-version = "0.2.0-beta.4"
+version = "0.2.0-beta.5"
 dependencies = [
  "axum",
  "base64 0.23.1",

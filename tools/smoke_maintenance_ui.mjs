@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // UI-only synthetic fixture: no credential-store writes or business connections.
 import assert from "node:assert/strict";
-import { launchBrowser } from "./browser_test_support.mjs";
+import { acceptLegalConsent, launchBrowser } from "./browser_test_support.mjs";
 const { browser } = await launchBrowser();
 try {
   const page = await browser.newPage({
@@ -106,6 +106,7 @@ try {
     (process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799") +
       "/#pair=synthetic-bootstrap",
   );
+  await acceptLegalConsent(page);
   const nav = (name) =>
     page
       .locator("nav[aria-label='主导航']")
