@@ -6,6 +6,17 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.2.0-beta.6 — 2026-09-20
+
+### Deployment
+
+- Complete AI-assisted and manual deployment with existing-install discovery, MCP host configuration, read-only bridge verification and upgrade/rollback path refresh guidance.
+- Return the active installed binary path from status, repeat installation and rollback results so automation can reuse one installation across AI clients and conversations.
+
+### Reliability
+
+- Increase successful Windows command-fixture limits without changing production timeout behavior, preventing loaded CI runners from misclassifying slow PowerShell startup as a product timeout.
+
 ## 0.2.0-beta.5 — 2026-09-20
 
 ### Product

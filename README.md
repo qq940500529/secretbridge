@@ -4,7 +4,7 @@
 
 **Keep credentials local. Let explicit approval decide each operation.**
 
-[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.5) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
+[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.6) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge `0.2.0-beta.5` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
+> SecretBridge `0.2.0-beta.6` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API, and an ordinary terminal is not a credential sandbox.
 
 ## Why SecretBridge
 
@@ -49,12 +49,17 @@ For a first deployment, give the prompt below to a permission-aware local AI cod
 ```text
 Deploy SecretBridge from https://github.com/qq940500529/secretbridge on this machine.
 
-You may start from any directory; do not assume the repository is already cloned. First look for the latest published GitHub Release and, when it has a package for this platform, download it, verify its checksum and package metadata, and install it. If no suitable Release exists, clone the latest main branch into a new non-sensitive directory, read AGENTS.md and the deployment documents, then build and install with the pinned toolchain and lock files. Preserve existing files and ask before administrator access or changes outside the working directory. Never request or expose real credentials. After installation, start SecretBridge and confirm that status is healthy and the service listens only on loopback. Report the installed version or commit, install location and uninstall command.
+1. You may start from any directory; do not assume the repository is cloned. First check the current AI client's existing MCP configuration, PATH and the documented default SecretBridge installation location. Check only explicit locations, not the whole user directory. If an executable is found, run `status`. Reuse a healthy, suitable installation without downloading, overwriting or reinstalling it; start that installation if it is stopped. If there are signs of a custom installation but its location is unknown, ask me once instead of creating a duplicate.
+2. Only after confirming that no usable installation exists, look for the latest GitHub Release. Download, verify and install a matching package. If no suitable Release exists, clone latest `main` into a new non-sensitive directory, read `AGENTS.md` and the deployment documents, then build and install with pinned tools and lock files.
+3. Preserve existing files and ask before administrator access or changes outside the working directory. Never request or expose real credentials.
+4. Start or reuse SecretBridge, confirm healthy `status` and a loopback-only listener, and obtain the current absolute `binary` path from `status` or `install`.
+5. Connect it to the MCP-capable AI client I use. Show and back up the exact configuration before requesting approval to change it; use `binary` as `command` and `["--mcp-stdio"]` as `args`; keep a custom data directory consistent and never store credentials or pairing tokens in MCP configuration. Reload the client, confirm the tools are visible, and call the read-only `secretbridge_terminal_capabilities` tool. If configuration cannot be changed safely, provide paste-ready configuration and exact reload steps instead of guessing its path.
+6. Report whether an existing installation was reused or a new one was installed, the version or commit, installation location, MCP verification result and uninstall command.
 ```
 
 The [AI-assisted deployment guide](docs/AI辅助部署.md) explains permissions and safety boundaries and links to the AI-readable runbook. Review commands before allowing them to run. Maintainers who need full source and package acceptance should use the validation flow in that guide instead.
 
-You do not need to choose a package, prepare a checkout or install a toolchain yourself; the assistant handles those decisions and asks only when the operating system needs your approval. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link. Manual source builds, upgrades and uninstall behavior are documented in [installation and background operation](docs/后台运行与安装交付.md).
+You do not need to determine whether SecretBridge is already installed, choose a package, prepare a checkout, install a toolchain or discover MCP launch arguments yourself. When you change AI application, model or conversation, the assistant should reuse the same local installation and add only the current client's MCP configuration. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link. Manual source builds, MCP setup, upgrades and uninstall behavior are documented in [installation and background operation](docs/后台运行与安装交付.md).
 
 ## Typical workflow
 

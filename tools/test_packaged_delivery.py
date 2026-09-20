@@ -117,12 +117,18 @@ def accept(archive: Path) -> None:
                     (reference, "delivery acceptance", "password"),
                 )
 
-            run("install", package)
-            assert run("install", package)["replayed"]
+            installed = run("install", package)
+            replayed = run("install", package)
+            assert replayed["replayed"]
+            assert replayed["binary"] == installed["binary"]
             run("stop")
-            assert run("install", package)["replayed"]
+            replayed = run("install", package)
+            assert replayed["replayed"]
+            assert replayed["binary"] == installed["binary"]
             assert run("status")["running"]
-            original = run("status")["installation"]["active_release"]
+            installed_status = run("status")["installation"]
+            assert installed_status["binary"] == installed["binary"]
+            original = installed_status["active_release"]
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
             assert pointer["startup_files"]
@@ -202,10 +208,12 @@ def accept(archive: Path) -> None:
                 encoding="utf-8",
             )
             rehash(upgraded)
-            run("install", upgraded)
+            upgrade_result = run("install", upgraded)
+            assert upgrade_result["binary"] != installed["binary"]
             assert "delivery upgrade" in web_text()
             assert run("status")["installation"]["previous_release"] == original
-            run("rollback")
+            rollback_result = run("rollback")
+            assert rollback_result["binary"] == installed["binary"]
             assert run("status")["installation"]["active_release"] == original
             assert "delivery upgrade" not in web_text()
             run("stop")

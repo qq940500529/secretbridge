@@ -320,8 +320,14 @@ pub(super) fn summary() -> Result<serde_json::Value> {
     let Some(installation) = load()? else {
         return Ok(serde_json::Value::Null);
     };
+    let binary = match &installation.active {
+        Some(active) => {
+            Some(safe_path(&root()?, &format!("releases/{active}"))?.join(binary_name()))
+        }
+        None => None,
+    };
     Ok(
-        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
+        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"binary":binary,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
     )
 }
 
@@ -391,7 +397,7 @@ pub(super) async fn install(package: &Path) -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::json!({"installed":true,"version":verified.version,"replayed":true})
+            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"replayed":true})
         );
         return Ok(());
     }
@@ -487,7 +493,7 @@ pub(super) async fn rollback() -> Result<()> {
     activate(&root, &old, &mut pending, &release, &verified).await?;
     println!(
         "{}",
-        serde_json::json!({"rolled_back":true,"version":verified.version,"data_retained":true})
+        serde_json::json!({"rolled_back":true,"version":verified.version,"binary":release.join(binary_name()),"data_retained":true})
     );
     Ok(())
 }

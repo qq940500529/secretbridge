@@ -143,15 +143,27 @@ class RepositoryChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "README.md").write_text(
-                f"{PUBLIC_REPOSITORY_URL}\nYou may start from any directory", encoding="utf-8"
+                f"{PUBLIC_REPOSITORY_URL}\nYou may start from any directory\nReuse a healthy\n"
+                "--mcp-stdio\nsecretbridge_terminal_capabilities",
+                encoding="utf-8",
             )
             (root / "README.zh-CN.md").write_text(
-                f"{PUBLIC_REPOSITORY_URL}\n任意目录", encoding="utf-8"
+                f"{PUBLIC_REPOSITORY_URL}\n任意目录\n直接复用\n"
+                "--mcp-stdio\nsecretbridge_terminal_capabilities",
+                encoding="utf-8",
             )
             docs = root / "docs"
             docs.mkdir()
             guide = docs / "AI辅助部署.md"
-            guide.write_text(f"{PUBLIC_REPOSITORY_URL}\n不需要预先克隆仓库", encoding="utf-8")
+            guide.write_text(
+                f"{PUBLIC_REPOSITORY_URL}\n不需要预先克隆仓库\n直接复用\n"
+                "--mcp-stdio\nsecretbridge_terminal_capabilities",
+                encoding="utf-8",
+            )
+            (docs / "AI部署执行指南.md").write_text(
+                "Existing installation discovery\n--mcp-stdio\nsecretbridge_terminal_capabilities",
+                encoding="utf-8",
+            )
             self.assertEqual([], check_ai_deployment_entrypoints(root))
             guide.write_text("只假设已有工作区", encoding="utf-8")
             self.assertEqual(
