@@ -26,6 +26,7 @@ mod stability_acceptance;
 mod telnet_task;
 mod terminal;
 mod terminal_control;
+mod totp_auth;
 
 pub use maintenance::{BackupReport, inspect_configuration_backup, restore_configuration_backup};
 pub use mcp::BrokerController;
@@ -68,13 +69,15 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 use catalog::{
-    ActionTemplate, Approval, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError,
-    CatalogOpenError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
-    CreateRunOutcome, CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval,
-    PolicyEvaluation, PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target,
-    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind,
+    BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
+    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
+    CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation,
+    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
+    UpdateCredentialReference, UpdateTarget,
 };
 use credential_service::{CredentialService, CredentialServiceError};
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
@@ -87,6 +90,7 @@ use terminal::{
 const BEARER_PREFIX: &str = "Bearer ";
 const SESSION_TTL: Duration = Duration::from_mins(30);
 const BROWSER_PIN_CREDENTIAL_ID: Uuid = Uuid::from_u128(0x5e63_7265_7462_7269_6467_6570_696e_0001);
+const BROWSER_TOTP_CREDENTIAL_ID: Uuid = Uuid::from_u128(0x5e63_7265_7462_7269_6467_6574_6f74_7001);
 const WEBSOCKET_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 8 * 1024;
@@ -327,6 +331,7 @@ impl AppState {
 struct PinAttempts {
     failures: u8,
     blocked_until: Option<Instant>,
+    pending_totp_setup: Option<totp_auth::PendingSetup>,
 }
 
 #[derive(Clone, Default)]
@@ -387,13 +392,40 @@ struct PairResponse {
 #[derive(Serialize)]
 struct BrowserAuthMethodsResponse {
     pin_enabled: bool,
+    totp_enabled: bool,
     pairing_link_enabled: bool,
+}
+
+#[derive(Serialize)]
+struct BrowserAuthEventListResponse {
+    items: Vec<BrowserAuthEvent>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PinPairRequest {
     pin: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TotpCodeRequest {
+    code: String,
+}
+
+#[derive(Serialize)]
+struct TotpSetupResponse {
+    manual_key: String,
+    qr_code_data_url: String,
+    expires_in_seconds: u64,
+    accepted_past_steps: u64,
+}
+
+impl Drop for TotpSetupResponse {
+    fn drop(&mut self) {
+        self.manual_key.zeroize();
+        self.qr_code_data_url.zeroize();
+    }
 }
 
 #[derive(Deserialize)]
@@ -689,7 +721,14 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/stop", post(runtime::stop_http))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session/pin", post(pair_with_pin))
+        .route("/api/v1/session/totp", post(totp_auth::pair))
+        .route("/api/v1/session/totp/setup", post(totp_auth::start_setup))
+        .route(
+            "/api/v1/session/totp/confirm",
+            post(totp_auth::confirm_setup),
+        )
         .route("/api/v1/session/methods", get(browser_auth_methods))
+        .route("/api/v1/session/auth-events", get(list_browser_auth_events))
         .route("/api/v1/session/method", put(set_browser_auth_method))
         .route("/api/v1/session", get(session).delete(revoke_session))
         .route(
@@ -957,8 +996,45 @@ async fn browser_auth_methods(
         .map_err(map_catalog_error)?;
     Ok(Json(BrowserAuthMethodsResponse {
         pin_enabled: mode == BrowserAuthMode::Pin,
+        totp_enabled: mode == BrowserAuthMode::Totp,
         pairing_link_enabled: true,
     }))
+}
+
+async fn list_browser_auth_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<BrowserAuthEventListResponse>, ApiError> {
+    require_session(&state, &headers).await?;
+    let items = state
+        .catalog
+        .list_browser_auth_events()
+        .map_err(map_catalog_error)?;
+    Ok(Json(BrowserAuthEventListResponse { items }))
+}
+
+async fn authentication_attempt_allowed(state: &AppState) -> bool {
+    state
+        .pin_attempts
+        .lock()
+        .await
+        .blocked_until
+        .is_none_or(|until| until <= Instant::now())
+}
+
+async fn record_authentication_failure(state: &AppState) {
+    let mut attempts = state.pin_attempts.lock().await;
+    attempts.failures = attempts.failures.saturating_add(1);
+    if attempts.failures >= 5 {
+        attempts.blocked_until = Some(Instant::now() + Duration::from_secs(60));
+        attempts.failures = 0;
+    }
+}
+
+async fn reset_authentication_attempts(state: &AppState) {
+    let mut attempts = state.pin_attempts.lock().await;
+    attempts.failures = 0;
+    attempts.blocked_until = None;
 }
 
 fn valid_browser_pin(pin: &str) -> bool {
@@ -996,14 +1072,8 @@ async fn pair_with_pin(
     {
         return Err(ApiError::Unauthorized);
     }
-    {
-        let attempts = state.pin_attempts.lock().await;
-        if attempts
-            .blocked_until
-            .is_some_and(|until| until > Instant::now())
-        {
-            return Err(ApiError::Unauthorized);
-        }
+    if !authentication_attempt_allowed(&state).await {
+        return Err(ApiError::Unauthorized);
     }
     let store = state.secret_store.clone();
     let pin = request.pin;
@@ -1016,15 +1086,10 @@ async fn pair_with_pin(
     .map_err(|_| ApiError::Internal)?
     .map_err(map_secret_store_error)?;
     if !matches {
-        let mut attempts = state.pin_attempts.lock().await;
-        attempts.failures = attempts.failures.saturating_add(1);
-        if attempts.failures >= 5 {
-            attempts.blocked_until = Some(Instant::now() + Duration::from_secs(60));
-            attempts.failures = 0;
-        }
+        record_authentication_failure(&state).await;
         return Err(ApiError::Unauthorized);
     }
-    *state.pin_attempts.lock().await = PinAttempts::default();
+    reset_authentication_attempts(&state).await;
     let (session_token, expires_in_seconds) = state.issue_session().await?;
     Ok(Json(PairResponse {
         session_token,
@@ -1041,6 +1106,10 @@ async fn set_browser_auth_method(
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
     let store = state.secret_store.clone();
+    let previous_mode = state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?;
     match request.method {
         BrowserAuthMethod::Pin => {
             let pin = request
@@ -1058,6 +1127,12 @@ async fn set_browser_auth_method(
                 .catalog
                 .set_browser_auth_mode(BrowserAuthMode::Pin)
                 .map_err(map_catalog_error)?;
+            let store = state.secret_store.clone();
+            let _ = task::spawn_blocking(move || store.delete(BROWSER_TOTP_CREDENTIAL_ID)).await;
+            state
+                .catalog
+                .reset_totp_replay_guard()
+                .map_err(map_catalog_error)?;
         }
         BrowserAuthMethod::PairingLink => {
             state
@@ -1065,9 +1140,26 @@ async fn set_browser_auth_method(
                 .set_browser_auth_mode(BrowserAuthMode::PairingLink)
                 .map_err(map_catalog_error)?;
             let _ = task::spawn_blocking(move || store.delete(BROWSER_PIN_CREDENTIAL_ID)).await;
+            let store = state.secret_store.clone();
+            let _ = task::spawn_blocking(move || store.delete(BROWSER_TOTP_CREDENTIAL_ID)).await;
+            state
+                .catalog
+                .reset_totp_replay_guard()
+                .map_err(map_catalog_error)?;
         }
     }
-    *state.pin_attempts.lock().await = PinAttempts::default();
+    reset_authentication_attempts(&state).await;
+    state.pin_attempts.lock().await.pending_totp_setup = None;
+    if previous_mode == BrowserAuthMode::Totp {
+        state
+            .catalog
+            .record_browser_auth_event(
+                BrowserAuthEventKind::Disabled,
+                BrowserAuthChannel::Settings,
+                None,
+            )
+            .map_err(map_catalog_error)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

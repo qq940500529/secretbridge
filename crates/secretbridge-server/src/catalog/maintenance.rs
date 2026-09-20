@@ -18,7 +18,7 @@ use super::{
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
-const TABLES: [&str; 11] = [
+const TABLES: [&str; 12] = [
     "credential_references",
     "targets",
     "action_templates",
@@ -29,6 +29,7 @@ const TABLES: [&str; 11] = [
     "run_output",
     "configuration_imports",
     "browser_auth_settings",
+    "browser_auth_events",
     "browser_sessions",
 ];
 

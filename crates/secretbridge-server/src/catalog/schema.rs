@@ -65,11 +65,12 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 ON targets(credential_reference_id);
              CREATE TABLE browser_auth_settings (
                 singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
-                mode TEXT NOT NULL CHECK (mode IN ('pairing_link', 'pin')),
+                mode TEXT NOT NULL CHECK (mode IN ('pairing_link', 'pin', 'totp')),
+                last_totp_step INTEGER CHECK (last_totp_step IS NULL OR last_totp_step >= 0),
                 updated_at_unix_ms INTEGER NOT NULL
              );
-             INSERT INTO browser_auth_settings(singleton, mode, updated_at_unix_ms)
-                VALUES(1, 'pairing_link', 0);
+             INSERT INTO browser_auth_settings(singleton, mode, last_totp_step, updated_at_unix_ms)
+                VALUES(1, 'pairing_link', NULL, 0);
              CREATE TABLE browser_sessions (
                 token_digest BLOB PRIMARY KEY NOT NULL CHECK (length(token_digest) = 32),
                 expires_at_unix_ms INTEGER NOT NULL
@@ -392,6 +393,33 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              CREATE INDEX IF NOT EXISTS browser_sessions_expiry_idx
                 ON browser_sessions(expires_at_unix_ms);
              PRAGMA user_version = 18;
+             COMMIT;",
+        )?;
+    }
+    if version < 19 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE browser_auth_settings_v19 (
+                singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                mode TEXT NOT NULL CHECK (mode IN ('pairing_link', 'pin', 'totp')),
+                last_totp_step INTEGER CHECK (last_totp_step IS NULL OR last_totp_step >= 0),
+                updated_at_unix_ms INTEGER NOT NULL
+             );
+             INSERT INTO browser_auth_settings_v19
+                (singleton, mode, last_totp_step, updated_at_unix_ms)
+             SELECT singleton, mode, NULL, updated_at_unix_ms FROM browser_auth_settings;
+             DROP TABLE browser_auth_settings;
+             ALTER TABLE browser_auth_settings_v19 RENAME TO browser_auth_settings;
+             CREATE TABLE browser_auth_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL CHECK (kind IN ('enrollment_started', 'enrollment_succeeded', 'verification_succeeded', 'verification_failed', 'rate_limited', 'disabled')),
+                channel TEXT NOT NULL CHECK (channel IN ('browser', 'mcp', 'settings')),
+                approval_id TEXT,
+                created_at_unix_ms INTEGER NOT NULL
+             );
+             CREATE INDEX browser_auth_events_created_idx
+                ON browser_auth_events(created_at_unix_ms, id);
+             PRAGMA user_version = 19;
              COMMIT;",
         )?;
     }

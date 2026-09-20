@@ -9,6 +9,7 @@ use tokio::time;
 use rmcp::{ServiceExt, model::CallToolRequestParams};
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
+use totp_rs::{Builder as TotpBuilder, Secret as TotpSecret};
 use uuid::Uuid;
 
 use super::{BridgeClient, LocalMcpBridge, OwnedTerminalRequest, SecretBridgeMcp, TerminalRequest};
@@ -210,6 +211,7 @@ async fn advertises_only_the_bounded_tool_surface() {
         actual,
         vec![
             "secretbridge_cancel_run",
+            "secretbridge_confirm_approval",
             "secretbridge_create_run",
             "secretbridge_evaluate_policy",
             "secretbridge_get_approval",
@@ -236,6 +238,10 @@ async fn advertises_only_the_bounded_tool_surface() {
     let expected_properties = BTreeMap::from([
         ("secretbridge_list_action_templates", vec![]),
         ("secretbridge_list_catalog", vec![]),
+        (
+            "secretbridge_confirm_approval",
+            vec!["approval_id", "expected_version", "verification_code"],
+        ),
         ("secretbridge_evaluate_policy", vec!["id"]),
         (
             "secretbridge_request_approval",
@@ -316,6 +322,127 @@ async fn advertises_only_the_bounded_tool_surface() {
             tool.name
         );
     }
+
+    client.cancel().await.expect("stop MCP client");
+    server_handle.await.expect("join MCP server");
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "MCP TOTP approval binding, replay rejection and audit form one lifecycle"
+)]
+async fn user_supplied_totp_confirms_only_one_pending_approval() {
+    let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+    let secret = TotpSecret::from(b"12345678901234567890".as_slice());
+    let encoded = secret.to_base32();
+    state
+        .secret_store
+        .set(crate::BROWSER_TOTP_CREDENTIAL_ID, &encoded)
+        .expect("store synthetic TOTP secret");
+    state
+        .catalog
+        .set_browser_auth_mode(crate::catalog::BrowserAuthMode::Totp)
+        .expect("enable TOTP");
+    let target = state
+        .catalog
+        .create_target(&CreateTarget {
+            name: "TOTP approval target".to_owned(),
+            kind: TargetKind::HttpService,
+            environment: TargetEnvironment::Test,
+            description: None,
+            address: Some("https://example.test".to_owned()),
+            username: None,
+            allow_insecure_protocol: false,
+            credential_reference_id: None,
+            postgres: None,
+        })
+        .expect("create target");
+    let template = state
+        .catalog
+        .create_action_template(&CreateActionTemplate {
+            command: None,
+            target_id: target.id,
+            name: "TOTP approval action".to_owned(),
+            operation: ApprovalOperation::InspectMetadata,
+            result_scope: ApprovalResultScope::MetadataSummary,
+            description: None,
+            timeout_seconds: 15,
+        })
+        .expect("create template");
+    let (client, server_handle) = connect(state.clone()).await;
+    let request = || {
+        CallToolRequestParams::new("secretbridge_request_approval").with_arguments(arguments(
+            json!({"action_template_id":template.id,"expires_in_seconds":300}),
+        ))
+    };
+    let first = client
+        .call_tool(request())
+        .await
+        .expect("request first approval");
+    let first = first.structured_content.expect("first approval");
+    let totp = TotpBuilder::new()
+        .with_secret(secret)
+        .with_skew(0)
+        .build()
+        .expect("test TOTP");
+    let code = totp.generate_current().to_string();
+    let confirmed = client
+        .call_tool(
+            CallToolRequestParams::new("secretbridge_confirm_approval").with_arguments(arguments(
+                json!({
+                    "approval_id": first["id"],
+                    "expected_version": first["version"],
+                    "verification_code": code
+                }),
+            )),
+        )
+        .await
+        .expect("confirm first approval");
+    assert_eq!(
+        confirmed
+            .structured_content
+            .as_ref()
+            .expect("confirmed approval")["state"],
+        "approved"
+    );
+    assert!(
+        !serde_json::to_string(&confirmed)
+            .expect("serialize confirmation")
+            .contains(&code)
+    );
+
+    let second = client
+        .call_tool(request())
+        .await
+        .expect("request second approval")
+        .structured_content
+        .expect("second approval");
+    let replay = client
+        .call_tool(
+            CallToolRequestParams::new("secretbridge_confirm_approval").with_arguments(arguments(
+                json!({
+                    "approval_id": second["id"],
+                    "expected_version": second["version"],
+                    "verification_code": code
+                }),
+            )),
+        )
+        .await;
+    assert!(replay.is_err(), "one TOTP step cannot approve twice");
+    let events = state
+        .catalog
+        .list_browser_auth_events()
+        .expect("MCP verification events");
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[0].approval_id,
+        Some(second["id"].as_str().unwrap().parse().unwrap())
+    );
+    assert_eq!(
+        events[1].approval_id,
+        Some(first["id"].as_str().unwrap().parse().unwrap())
+    );
 
     client.cancel().await.expect("stop MCP client");
     server_handle.await.expect("join MCP server");
@@ -1316,7 +1443,10 @@ async fn approval_and_run_flow_requires_web_decision_and_returns_only_safe_data(
             )),
         )
         .await;
-    assert!(pending_run.is_err(), "MCP cannot approve its own request");
+    assert!(
+        pending_run.is_err(),
+        "MCP cannot approve its own request without user verification"
+    );
 
     let approval_uuid = uuid::Uuid::parse_str(approval_id).expect("approval UUID");
     let current = state

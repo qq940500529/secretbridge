@@ -11,11 +11,15 @@ import {
   decideApproval,
   evaluateActionTemplate,
   listCredentialReferences,
+  listBrowserAuthEvents,
   setCredentialSecret,
   clearCredentialSecret,
   createTerminal,
   getTerminalCapabilities,
   readRunOutput,
+  pairWithTotp,
+  startTotpSetup,
+  confirmTotpSetup,
   updateCredentialReference,
 } from "./api";
 import { parseTerminalEnvironment } from "./terminal";
@@ -25,6 +29,76 @@ afterEach(() => {
 });
 
 describe("configuration API client", () => {
+  it("reads fixed browser authentication audit events through an authenticated API", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: 1,
+              kind: "verification_succeeded",
+              channel: "mcp",
+              approval_id: "00000000-0000-0000-0000-000000000001",
+              created_at_unix_ms: 1,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const result = await listBrowserAuthEvents("session-token");
+    expect(result.items[0]?.kind).toBe("verification_succeeded");
+    expect(fetch).toHaveBeenCalledWith("/api/v1/session/auth-events", {
+      credentials: "omit",
+      cache: "no-store",
+      headers: { Authorization: "Bearer session-token" },
+    });
+  });
+
+  it("enrolls and submits TOTP without persisting setup material in the client API", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            manual_key: "SYNTHETICBASE32KEY",
+            qr_code_data_url: "data:image/png;base64,c3ludGhldGlj",
+            expires_in_seconds: 600,
+            accepted_past_steps: 4,
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            session_token: "page-session",
+            token_type: "Bearer",
+            expires_in_seconds: 1800,
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    const setup = await startTotpSetup("session-token");
+    expect(setup.manual_key).toBe("SYNTHETICBASE32KEY");
+    await confirmTotpSetup("session-token", "123456");
+    await pairWithTotp("654321");
+
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/session/totp/setup");
+    expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/session/totp/confirm");
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({
+      code: "123456",
+    });
+    expect(fetch.mock.calls[2]?.[0]).toBe("/api/v1/session/totp");
+    expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))).toEqual({
+      code: "654321",
+    });
+  });
+
   it("sends credential references and reads output without a secret-bearing request", async () => {
     const fetch = vi.fn().mockImplementation(
       async () =>

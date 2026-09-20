@@ -6,14 +6,67 @@ use std::{fs, path::PathBuf};
 use uuid::Uuid;
 
 use super::{
-    ApprovalOperation, ApprovalResultScope, ApprovalState, CancelSyntheticRun, Catalog,
-    CatalogError, CatalogOpenError, CreateActionTemplate, CreateApproval,
-    CreateCredentialReference, CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval,
-    MAX_ACTIVE_APPROVALS, MAX_ACTIVE_RUNS, POSTGRES_POLICY_VERSION, PolicyDecision,
-    PolicyReasonCode, PolicyRequirement, PostgresRunResult, PostgresTargetConfig, PostgresTlsMode,
-    RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState, TargetEnvironment, TargetKind,
-    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    ApprovalOperation, ApprovalResultScope, ApprovalState, BrowserAuthChannel,
+    BrowserAuthEventKind, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError,
+    CatalogOpenError, CreateActionTemplate, CreateApproval, CreateCredentialReference,
+    CreateSyntheticRun, CreateTarget, CredentialKind, DecideApproval, MAX_ACTIVE_APPROVALS,
+    MAX_ACTIVE_RUNS, POSTGRES_POLICY_VERSION, PolicyDecision, PolicyReasonCode, PolicyRequirement,
+    PostgresRunResult, PostgresTargetConfig, PostgresTlsMode, RunState, SYNTHETIC_POLICY_VERSION,
+    SafeEventKind, SecretState, TargetEnvironment, TargetKind, UpdateActionTemplate,
+    UpdateCredentialReference, UpdateTarget,
 };
+
+#[test]
+fn totp_replay_guard_is_monotonic_and_resettable() {
+    let catalog = Catalog::in_memory().expect("catalog");
+    catalog.activate_totp(100).expect("activate TOTP");
+    assert_eq!(catalog.browser_auth_mode().unwrap(), BrowserAuthMode::Totp);
+    assert_eq!(
+        catalog.consume_totp_step(100),
+        Err(CatalogError::InvalidApprovalTransition)
+    );
+    assert_eq!(
+        catalog.consume_totp_step(99),
+        Err(CatalogError::InvalidApprovalTransition)
+    );
+    catalog.consume_totp_step(101).expect("new time step");
+    catalog.reset_totp_replay_guard().expect("reset guard");
+    catalog.consume_totp_step(1).expect("step after reset");
+}
+
+#[test]
+fn browser_auth_events_are_fixed_and_bounded() {
+    let catalog = Catalog::in_memory().expect("catalog");
+    let approval_id = Uuid::new_v4();
+    catalog
+        .record_browser_auth_event(
+            BrowserAuthEventKind::VerificationFailed,
+            BrowserAuthChannel::Mcp,
+            Some(approval_id),
+        )
+        .expect("record event");
+    let events = catalog.list_browser_auth_events().expect("list events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, BrowserAuthEventKind::VerificationFailed);
+    assert_eq!(events[0].channel, BrowserAuthChannel::Mcp);
+    assert_eq!(events[0].approval_id, Some(approval_id));
+    for _ in 0..2_049 {
+        catalog
+            .record_browser_auth_event(
+                BrowserAuthEventKind::VerificationSucceeded,
+                BrowserAuthChannel::Browser,
+                None,
+            )
+            .expect("record bounded event");
+    }
+    let stored = catalog
+        .lock()
+        .query_row("SELECT COUNT(*) FROM browser_auth_events", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("count bounded events");
+    assert_eq!(stored, 2_048);
+}
 
 #[test]
 fn linked_reference_cannot_be_deleted_before_its_target() {

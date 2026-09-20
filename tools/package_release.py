@@ -508,7 +508,7 @@ def build_package(binary: Path, output: Path, allow_dirty: bool = False) -> Path
             "version": version,
             "platform": native,
             "architecture": arch,
-            "schema_version": 18,
+            "schema_version": 19,
             "files": files,
         }
         (package / "secretbridge-package.json").write_text(
