@@ -290,7 +290,7 @@ def upstream_license(repository: str, commit: str) -> str:
     # Older published russh manifests retain the repository's former owner.
     if (owner, repo) == ("warp-tech", "russh"):
         owner = "Eugeny"
-    for name in (
+    names = (
         "LICENSE",
         "LICENSE-MIT",
         "LICENSE-APACHE",
@@ -299,7 +299,10 @@ def upstream_license(repository: str, commit: str) -> str:
         "LICENSE-MIT.txt",
         "LICENSE-APACHE.txt",
         "LICENSE-2.0.txt",
-    ):
+    )
+    if (owner, repo) == ("nayuki", "QR-Code-generator"):
+        names += ("Readme.markdown",)
+    for name in names:
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit}/{name}"
         if shutil.which("gh"):
             result = subprocess.run(
@@ -354,6 +357,31 @@ def download_upstream_license(url: str) -> bytes | None:
     raise ValueError("Pinned upstream license download failed after 3 attempts") from failure
 
 
+def local_rust_license_files(package: dict, directory: Path) -> list[Path]:
+    """Return packaged license evidence, including a README only when it embeds full MIT terms."""
+    files = [
+        path
+        for path in directory.iterdir()
+        if path.is_file()
+        and path.name.upper().startswith(("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "NOTICE"))
+    ]
+    if package.get("license_file"):
+        files.append(directory / package["license_file"])
+    for folder in ("LICENSES", "licenses"):
+        if (directory / folder).is_dir():
+            files.extend(path for path in (directory / folder).rglob("*") if path.is_file())
+    readme = directory / str(package.get("readme") or "")
+    if not files and readme.is_file():
+        content = readme.read_text(encoding="utf-8", errors="replace")
+        if (
+            "MIT License" in content
+            and "Permission is hereby granted, free of charge" in content
+            and 'THE SOFTWARE IS PROVIDED "AS IS"' in content.upper()
+        ):
+            files.append(readme)
+    return sorted(set(files))
+
+
 def third_party_notices() -> str:
     host = re.search(r"^host: (.+)$", command(["rustc", "-vV"]), re.MULTILINE)[1]
     metadata = json.loads(
@@ -372,24 +400,11 @@ def third_party_notices() -> str:
             f"\n=== Rust: {package['name']} {package['version']} ({package.get('license')}) ===\n"
         ]
         directory = Path(package["manifest_path"]).parent
-        files = [
-            path
-            for path in directory.iterdir()
-            if path.is_file()
-            and path.name.upper().startswith(
-                ("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "NOTICE")
-            )
-        ]
-        if package.get("license_file"):
-            files.append(directory / package["license_file"])
-        # Some crates retain license files in a dedicated license directory.
-        for folder in ("LICENSES", "licenses"):
-            if (directory / folder).is_dir():
-                files.extend(path for path in (directory / folder).rglob("*") if path.is_file())
+        files = local_rust_license_files(package, directory)
         if not files:
             vcs = json.loads((directory / ".cargo_vcs_info.json").read_text(encoding="utf-8"))
             sections.append(upstream_license(package["repository"], vcs["git"]["sha1"]))
-        for path in sorted(set(files)):
+        for path in files:
             sections.append(f"\n--- {path.relative_to(directory).as_posix()} ---\n")
             sections.append(path.read_text(encoding="utf-8", errors="replace"))
         return "\n".join(sections)
