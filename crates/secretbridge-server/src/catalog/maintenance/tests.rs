@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use super::*;
-use crate::catalog::SecretState;
+use crate::catalog::{BrowserAuthMode, SecretState};
 
 fn source() -> Catalog {
     let catalog = Catalog::in_memory().unwrap();
@@ -58,10 +58,23 @@ fn invalid_bundle_never_partially_writes_and_rejects_unknown_secret_fields() {
 #[test]
 fn sqlite_backup_round_trips_and_rejects_foreign_schema() {
     let catalog = source();
+    let session_digest = [7_u8; 32];
+    catalog
+        .store_browser_session(&session_digest, u64::MAX / 2)
+        .unwrap();
+    catalog.set_browser_auth_mode(BrowserAuthMode::Pin).unwrap();
     let bytes = catalog.backup_bytes().unwrap();
     let (report, restored) = inspect_backup(&bytes).unwrap();
     assert_eq!(report.credentials, 1);
     assert_eq!(restored.list_targets().unwrap().len(), 1);
+    assert_eq!(
+        restored.browser_auth_mode().unwrap(),
+        BrowserAuthMode::PairingLink
+    );
+    assert_eq!(
+        restored.active_browser_session_count(u64::MAX / 4).unwrap(),
+        0
+    );
     assert!(inspect_backup(b"not sqlite").is_err());
     catalog
         .lock()

@@ -48,9 +48,11 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         arguments.push("{{password}}".into());
     }
     CommandConfig {
+        terminal_id: None,
         database: None,
         http: None,
         ssh: None,
+        telnet: None,
         git: None,
         parameters: Vec::new(),
         program: program.to_string_lossy().into_owned(),
@@ -71,6 +73,15 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
 }
 
 pub(crate) fn configure(state: &AppState, mode: &str, timeout: u64) -> (Uuid, Uuid) {
+    configure_in_terminal(state, mode, timeout, None)
+}
+
+fn configure_in_terminal(
+    state: &AppState,
+    mode: &str,
+    timeout: u64,
+    terminal_id: Option<Uuid>,
+) -> (Uuid, Uuid) {
     let credential: CreateCredentialReference = serde_json::from_value(
         serde_json::json!({"name":"Synthetic command test","kind":"password"}),
     )
@@ -92,7 +103,9 @@ pub(crate) fn configure(state: &AppState, mode: &str, timeout: u64) -> (Uuid, Uu
     )
     .unwrap();
     let target = state.catalog.create_target(&target).unwrap();
-    let template:CreateActionTemplate=serde_json::from_value(serde_json::json!({"name":"Credential echo fixture","target_id":target.id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":timeout,"command":fixture(mode,credential.id)})).unwrap();
+    let mut command = fixture(mode, credential.id);
+    command.terminal_id = terminal_id;
+    let template:CreateActionTemplate=serde_json::from_value(serde_json::json!({"name":"Credential echo fixture","target_id":target.id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":timeout,"command":command})).unwrap();
     let template = state.catalog.create_action_template(&template).unwrap();
     let request: CreateApproval = serde_json::from_value(
         serde_json::json!({"action_template_id":template.id,"expires_in_seconds":60}),
@@ -106,6 +119,101 @@ pub(crate) fn configure(state: &AppState, mode: &str, timeout: u64) -> (Uuid, Uu
         .approve_approval(approval.id, &decision)
         .unwrap();
     (approval.id, credential.id)
+}
+
+#[tokio::test]
+async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_output() {
+    let (state, _) = AppState::new([]);
+    let working_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let terminal = state
+        .terminals
+        .create(&crate::terminal::CreateTerminal {
+            rows: 24,
+            cols: 100,
+            shell: None,
+            name: Some("Secure command continuity".to_owned()),
+            working_directory: Some(working_directory.to_string_lossy().into_owned()),
+            environment: std::collections::BTreeMap::new(),
+        })
+        .expect("create secure terminal");
+    let (connection, snapshot) = state
+        .terminals
+        .attach(terminal.id, Uuid::new_v4(), true, None)
+        .expect("attach secure terminal");
+    assert!(snapshot.input_granted);
+    let broker = state
+        .terminals
+        .begin_broker(terminal.id)
+        .expect("reserve terminal for approved command");
+    assert_eq!(
+        connection.write(terminal_follow_up_command().as_bytes()),
+        Err(crate::terminal::TerminalError::Busy)
+    );
+    drop(broker);
+    let (approval, _) = configure_in_terminal(
+        &state,
+        "environment",
+        SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
+        Some(terminal.id),
+    );
+    let request = CreateSyntheticRun {
+        approval_id: approval,
+        idempotency_key: Uuid::new_v4().to_string(),
+    };
+    let result = crate::create_run_for_state(&state, request).await.unwrap();
+    let page = wait(&state, result.run.id).await;
+    let terminal_output = connection.read(snapshot.next_cursor, 16_384);
+    assert_eq!(
+        page.state,
+        RunState::Succeeded,
+        "result={:?}, terminal={}",
+        state
+            .catalog
+            .get_synthetic_run(result.run.id)
+            .expect("command run")
+            .result_status,
+        terminal_output.text
+    );
+    assert!(
+        page.items.is_empty(),
+        "terminal-backed output stays in the PTY"
+    );
+
+    let read = terminal_output;
+    assert_eq!(read.terminal.id, terminal.id);
+    assert_eq!(read.terminal.process_id, terminal.process_id);
+    assert!(read.text.contains("[REDACTED]"), "{}", read.text);
+    assert!(read.text.contains("stdout-marker"), "{}", read.text);
+    assert!(!read.text.contains("Synthetic-SB-command_A&z"));
+
+    connection
+        .write(terminal_follow_up_command().as_bytes())
+        .expect("write ordinary follow-up command");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let read = connection.read(read.next_cursor, 16_384);
+            if read.text.contains("same-terminal-after-secret-command") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("ordinary follow-up completes in the same terminal");
+    state
+        .terminals
+        .remove(terminal.id)
+        .expect("remove secure terminal");
+}
+
+#[cfg(windows)]
+fn terminal_follow_up_command() -> String {
+    "Write-Output 'same-terminal-after-secret-command'\r\n".to_owned()
+}
+
+#[cfg(unix)]
+fn terminal_follow_up_command() -> String {
+    "printf '%s\\n' 'same-terminal-after-secret-command'\n".to_owned()
 }
 
 async fn wait(state: &AppState, id: Uuid) -> OutputPage {
@@ -598,7 +706,7 @@ async fn web_parameter_approval_and_time_window_use_the_real_executor() {
         .catalog
         .update_action_template(template.id, &update)
         .unwrap();
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     for parameters in [
         json!({"company":100}),
         json!({"company":"102"}),
@@ -683,7 +791,7 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
         .catalog
         .append_output(run.id, "stdout", "[REDACTED]")
         .unwrap();
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let mut changes = state.changes.subscribe();
     for (provided_origin, provided_token, body, expected) in [
         (

@@ -50,6 +50,30 @@ fn persistent_state_reports_sqlite_storage() {
 }
 
 #[tokio::test]
+async fn browser_session_survives_reopen_until_explicitly_revoked() {
+    let path = std::env::temp_dir().join(format!(
+        "secretbridge-browser-session-test-{}.sqlite3",
+        Uuid::new_v4()
+    ));
+    let (state, _) =
+        AppState::new_persistent([ORIGIN.to_owned()], &path).expect("persistent state");
+    let (token, _) = state.issue_session().await.expect("issue session");
+    drop(state);
+
+    let (reopened, _) =
+        AppState::new_persistent([ORIGIN.to_owned()], &path).expect("reopen persistent state");
+    assert!(reopened.authenticate(&token).await.is_some());
+    assert!(reopened.revoke(&token).await);
+    drop(reopened);
+
+    let (revoked, _) =
+        AppState::new_persistent([ORIGIN.to_owned()], &path).expect("reopen revoked state");
+    assert!(revoked.authenticate(&token).await.is_none());
+    drop(revoked);
+    fs::remove_file(path).expect("remove temporary database");
+}
+
+#[tokio::test]
 async fn status_exposes_current_runtime_capabilities() {
     let (app, _) = test_app();
     let response = app
@@ -72,6 +96,146 @@ async fn status_exposes_current_runtime_capabilities() {
     assert_eq!(status["mode"], "controlled_operations");
     assert_eq!(status["configuration_storage"], "memory_only");
     assert_eq!(status["real_credentials_enabled"], true);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the browser PIN lifecycle is kept in one end-to-end security regression"
+)]
+async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
+    let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    let app = router(state.clone());
+    let token = pair_test_session(&app, &bootstrap).await;
+    let configured = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pin","pin":"synthetic-local-pin"}"#,
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(configured.status(), StatusCode::NO_CONTENT);
+    let stored_verifier = state
+        .secret_store
+        .get(super::BROWSER_PIN_CREDENTIAL_ID)
+        .expect("stored browser PIN verifier");
+    assert!(stored_verifier.starts_with("$argon2"));
+    assert!(!stored_verifier.contains("synthetic-local-pin"));
+
+    let methods = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session/methods")
+                .body(Body::empty())
+                .expect("methods request"),
+        )
+        .await
+        .expect("router response");
+    let methods = response_json(methods).await;
+    assert_eq!(methods["pin_enabled"], true);
+    assert!(!methods.to_string().contains("synthetic-local-pin"));
+
+    let incorrect = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"incorrect-pin"}"#))
+                .expect("incorrect PIN request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(incorrect.status(), StatusCode::UNAUTHORIZED);
+
+    let paired = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"synthetic-local-pin"}"#))
+                .expect("PIN request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(paired.status(), StatusCode::OK);
+    let paired = response_json(paired).await;
+    assert!(
+        paired["session_token"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert!(!paired.to_string().contains("synthetic-local-pin"));
+
+    for _ in 0..5 {
+        let rejected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/session/pin")
+                    .header("Origin", ORIGIN)
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"pin":"incorrect-pin"}"#))
+                    .expect("incorrect PIN request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+    }
+    let blocked = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"synthetic-local-pin"}"#))
+                .expect("blocked PIN request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(blocked.status(), StatusCode::UNAUTHORIZED);
+
+    let disabled = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pairing_link"}"#,
+        ))
+        .await
+        .expect("router response");
+    assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+    assert!(
+        state
+            .secret_store
+            .get(super::BROWSER_PIN_CREDENTIAL_ID)
+            .is_err()
+    );
+    let methods = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/session/methods")
+                .body(Body::empty())
+                .expect("methods request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(response_json(methods).await["pin_enabled"], false);
 }
 
 #[tokio::test]

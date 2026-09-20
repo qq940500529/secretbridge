@@ -10,6 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
+    fmt::Write as _,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -24,11 +25,15 @@ use zeroize::Zeroizing;
 #[serde(deny_unknown_fields)]
 pub struct CommandConfig {
     #[serde(default)]
+    pub terminal_id: Option<Uuid>,
+    #[serde(default)]
     pub database: Option<crate::database_task::DatabaseConfig>,
     #[serde(default)]
     pub http: Option<crate::http_task::HttpConfig>,
     #[serde(default)]
     pub ssh: Option<crate::ssh_task::SshConfig>,
+    #[serde(default)]
+    pub telnet: Option<crate::telnet_task::TelnetConfig>,
     #[serde(default)]
     pub git: Option<crate::git_task::GitConfig>,
     #[serde(default)]
@@ -63,9 +68,19 @@ impl CommandConfig {
         crate::parameters::validate(&self.parameters)?;
         if usize::from(self.http.is_some())
             + usize::from(self.ssh.is_some())
+            + usize::from(self.telnet.is_some())
             + usize::from(self.git.is_some())
             + usize::from(self.database.is_some())
             > 1
+        {
+            return Err(CatalogError::Invalid);
+        }
+        if self.terminal_id.is_some()
+            && (self.http.is_some()
+                || self.ssh.is_some()
+                || self.telnet.is_some()
+                || self.git.is_some()
+                || self.database.is_some())
         {
             return Err(CatalogError::Invalid);
         }
@@ -77,6 +92,9 @@ impl CommandConfig {
         }
         if let Some(ssh) = &self.ssh {
             return ssh.validate(self);
+        }
+        if let Some(telnet) = &self.telnet {
+            return telnet.validate(self);
         }
         if let Some(http) = &self.http {
             return http.validate(self);
@@ -294,71 +312,39 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         return;
     };
     let parameters = context.approval.parameters;
-    let mut secrets = Vec::new();
-    for slot in &config.slots {
-        let store = state.secret_store.clone();
-        let credential_id = slot.credential_id;
-        let Ok(Ok(secret)) = tokio::task::spawn_blocking(move || store.get(credential_id)).await
-        else {
-            let _ = state
-                .catalog
-                .complete_command_run(id, "credential_unavailable", None);
-            return;
-        };
-        if secret.is_empty() {
-            let _ = state
-                .catalog
-                .complete_command_run(id, "credential_unavailable", None);
-            return;
-        }
-        secrets.push(secret);
-    }
+    let Some(secrets) = load_command_secrets(state, id, &config).await else {
+        return;
+    };
     let remaining = context
         .approval
         .expires_at_unix_ms
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
-    if let Some(database) = &config.database {
-        crate::database_task::drive(
-            state,
-            id,
-            database,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
+    if drive_protocol(&ProtocolExecution {
+        state,
+        id,
+        config: &config,
+        parameters: &parameters,
+        secrets: &secrets,
+        cancellation,
+        limit,
+    })
+    .await
+    {
         return;
     }
-    if let Some(ssh) = &config.ssh {
-        crate::ssh_task::drive(
-            state,
-            id,
-            ssh,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
-        return;
-    }
-    if let Some(http) = &config.http {
-        crate::http_task::drive(
-            state,
-            id,
-            http,
-            &config,
-            &parameters,
-            &secrets,
-            cancellation,
-            limit,
-        )
-        .await;
+    if drive_in_terminal(
+        state,
+        id,
+        &config,
+        &secrets,
+        cancellation,
+        limit,
+        &parameters,
+    )
+    .await
+    {
         return;
     }
     let state = state.clone();
@@ -377,6 +363,371 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         let _ = state.changes.send(());
     })
     .await;
+}
+
+struct ProtocolExecution<'a> {
+    state: &'a AppState,
+    id: Uuid,
+    config: &'a CommandConfig,
+    parameters: &'a crate::parameters::ParameterValues,
+    secrets: &'a [Zeroizing<String>],
+    cancellation: &'a CancellationToken,
+    limit: Duration,
+}
+
+async fn drive_protocol(execution: &ProtocolExecution<'_>) -> bool {
+    let ProtocolExecution {
+        state,
+        id,
+        config,
+        parameters,
+        secrets,
+        cancellation,
+        limit,
+    } = execution;
+    if let Some(database) = &config.database {
+        crate::database_task::drive(
+            state,
+            *id,
+            database,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(ssh) = &config.ssh {
+        crate::ssh_task::drive(
+            state,
+            *id,
+            ssh,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(telnet) = &config.telnet {
+        crate::telnet_task::drive(
+            state,
+            *id,
+            telnet,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else if let Some(http) = &config.http {
+        crate::http_task::drive(
+            state,
+            *id,
+            http,
+            config,
+            parameters,
+            secrets,
+            cancellation,
+            *limit,
+        )
+        .await;
+    } else {
+        return false;
+    }
+    true
+}
+
+async fn load_command_secrets(
+    state: &AppState,
+    run_id: Uuid,
+    config: &CommandConfig,
+) -> Option<Vec<Zeroizing<String>>> {
+    let mut secrets = Vec::new();
+    for slot in &config.slots {
+        let store = state.secret_store.clone();
+        let credential_id = slot.credential_id;
+        let Ok(Ok(secret)) = tokio::task::spawn_blocking(move || store.get(credential_id)).await
+        else {
+            let _ = state
+                .catalog
+                .complete_command_run(run_id, "credential_unavailable", None);
+            return None;
+        };
+        if secret.is_empty() {
+            let _ = state
+                .catalog
+                .complete_command_run(run_id, "credential_unavailable", None);
+            return None;
+        }
+        secrets.push(secret);
+    }
+    Some(secrets)
+}
+
+async fn drive_in_terminal(
+    state: &AppState,
+    run_id: Uuid,
+    config: &CommandConfig,
+    secrets: &[Zeroizing<String>],
+    cancellation: &CancellationToken,
+    limit: Duration,
+    parameters: &crate::parameters::ParameterValues,
+) -> bool {
+    let Some(terminal_id) = config.terminal_id else {
+        return false;
+    };
+    let (status, exit) = execute_in_terminal(TerminalExecution {
+        state,
+        run_id,
+        terminal_id,
+        config,
+        secrets,
+        cancellation,
+        limit,
+        parameters,
+    })
+    .await;
+    let _ = state.catalog.complete_command_run(run_id, status, exit);
+    let _ = state.changes.send(());
+    true
+}
+
+struct TerminalExecution<'a> {
+    state: &'a AppState,
+    run_id: Uuid,
+    terminal_id: Uuid,
+    config: &'a CommandConfig,
+    secrets: &'a [Zeroizing<String>],
+    cancellation: &'a CancellationToken,
+    limit: Duration,
+    parameters: &'a crate::parameters::ParameterValues,
+}
+
+async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str, Option<i32>) {
+    let TerminalExecution {
+        state,
+        run_id,
+        terminal_id,
+        config,
+        secrets,
+        cancellation,
+        limit,
+        parameters,
+    } = execution;
+    if cancellation.is_cancelled() || limit.is_zero() || config.validate().is_err() {
+        return ("cancelled", None);
+    }
+    let Ok(broker) = state.terminals.begin_broker(terminal_id) else {
+        return ("command_failed", None);
+    };
+    let shell = broker.shell();
+    let mut events = broker.subscribe();
+    broker.add_redaction_secrets(secrets);
+    let mut files = TemporaryFiles { paths: Vec::new() };
+    let Some(command) = terminal_command(
+        state, run_id, shell, config, secrets, parameters, &mut files,
+    ) else {
+        return ("command_failed", None);
+    };
+    if broker.write(command.as_bytes()).is_err() {
+        return ("command_failed", None);
+    }
+
+    let marker = format!("__SECRETBRIDGE_RUN_{}:", run_id.simple());
+    let deadline = tokio::time::sleep(limit);
+    tokio::pin!(deadline);
+    let mut recent = String::new();
+    let result = loop {
+        tokio::select! {
+            () = cancellation.cancelled() => {
+                let _ = broker.write(&[3]);
+                break ("cancelled", None);
+            }
+            () = &mut deadline => {
+                let _ = broker.write(&[3]);
+                break ("timed_out", None);
+            }
+            event = events.recv() => match event {
+                Ok(crate::terminal::TerminalEvent::Output { data, .. }) => {
+                    recent.push_str(&String::from_utf8_lossy(&data));
+                    if recent.len() > 16_384 {
+                        let keep = recent.floor_char_boundary(recent.len() - 8_192);
+                        recent.drain(..keep);
+                    }
+                    if let Some(exit) = terminal_exit_marker(&recent, &marker) {
+                        break (if exit == 0 { "command_ok" } else { "command_failed" }, Some(exit));
+                    }
+                }
+                Ok(crate::terminal::TerminalEvent::Exited(code)) => {
+                    break ("command_failed", i32::try_from(code).ok());
+                }
+                Ok(crate::terminal::TerminalEvent::Terminated | crate::terminal::TerminalEvent::Failed)
+                | Err(_) => break ("command_failed", None),
+            }
+        }
+    };
+    if !files.cleanup() {
+        return ("command_cleanup_failed", result.1);
+    }
+    result
+}
+
+fn terminal_exit_marker(output: &str, marker: &str) -> Option<i32> {
+    let tail = output.rsplit_once(marker)?.1;
+    let digits = tail
+        .trim_start_matches(&['\r', '\n'][..])
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
+}
+
+fn terminal_command(
+    state: &AppState,
+    run_id: Uuid,
+    shell: crate::terminal::TerminalShell,
+    config: &CommandConfig,
+    secrets: &[Zeroizing<String>],
+    parameters: &crate::parameters::ParameterValues,
+    files: &mut TemporaryFiles,
+) -> Option<Zeroizing<String>> {
+    let mut arguments = config.arguments.clone();
+    for argument in &mut arguments {
+        for (name, value) in parameters {
+            if *argument == format!("{{{{param:{name}}}}}") {
+                *argument = crate::parameters::argument(value);
+            }
+        }
+    }
+    let mut secret_paths = Vec::new();
+    for secret in secrets {
+        secret_paths.push(secret_file(&state.command_directory, files, secret).ok()?);
+    }
+    let marker = format!("__SECRETBRIDGE_RUN_{}", run_id.simple());
+    match shell {
+        crate::terminal::TerminalShell::Bash | crate::terminal::TerminalShell::Zsh => {
+            terminal_command_posix(config, &arguments, &secret_paths, &marker)
+        }
+        crate::terminal::TerminalShell::PowerShell => {
+            terminal_command_powershell(config, &arguments, &secret_paths, &marker)
+        }
+        crate::terminal::TerminalShell::Cmd | crate::terminal::TerminalShell::Synthetic => None,
+    }
+}
+
+fn terminal_command_posix(
+    config: &CommandConfig,
+    arguments: &[String],
+    secret_paths: &[PathBuf],
+    marker: &str,
+) -> Option<Zeroizing<String>> {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
+    let mut command = format!(" cd -- {} && ", quote(&config.working_directory));
+    let mut stdin = None;
+    for (slot, path) in config.slots.iter().zip(secret_paths) {
+        let path = quote(&path.to_string_lossy());
+        match slot.injection {
+            Injection::Environment => {
+                command.push_str(slot.environment_variable.as_deref()?);
+                command.push_str("=\"$(cat -- ");
+                command.push_str(&path);
+                command.push_str(")\" ");
+            }
+            Injection::Stdin => stdin = Some(path),
+            Injection::Argument | Injection::File | Injection::Protocol => {}
+        }
+    }
+    if let Some(path) = stdin {
+        command.push_str("cat -- ");
+        command.push_str(&path);
+        command.push_str(" | ");
+    }
+    command.push_str(&quote(&config.program));
+    for argument in arguments {
+        command.push(' ');
+        let mut rendered = None;
+        for (slot, path) in config.slots.iter().zip(secret_paths) {
+            if *argument == format!("{{{{{}}}}}", slot.name) {
+                let path = quote(&path.to_string_lossy());
+                rendered = Some(if slot.injection == Injection::Argument {
+                    format!("\"$(cat -- {path})\"")
+                } else {
+                    path
+                });
+            }
+        }
+        if let Some(rendered) = rendered {
+            command.push_str(&rendered);
+        } else {
+            command.push_str(&quote(argument));
+        }
+    }
+    let _ = writeln!(
+        command,
+        "; __sb_ec=$?; printf '\\n{marker}:%s\\n' \"$__sb_ec\""
+    );
+    Some(Zeroizing::new(command))
+}
+
+fn terminal_command_powershell(
+    config: &CommandConfig,
+    arguments: &[String],
+    secret_paths: &[PathBuf],
+    marker: &str,
+) -> Option<Zeroizing<String>> {
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    let mut command = format!(
+        "Set-Location -LiteralPath {}; ",
+        quote(&config.working_directory)
+    );
+    let mut restore = String::new();
+    let mut stdin = None;
+    for (index, (slot, path)) in config.slots.iter().zip(secret_paths).enumerate() {
+        let path = quote(&path.to_string_lossy());
+        match slot.injection {
+            Injection::Environment => {
+                let variable = slot.environment_variable.as_deref()?;
+                let _ = write!(
+                    command,
+                    "$__sb_old_{index}=$env:{variable};$env:{variable}=[IO.File]::ReadAllText({path});"
+                );
+                let _ = write!(restore, "$env:{variable}=$__sb_old_{index};");
+            }
+            Injection::Stdin => stdin = Some(path),
+            Injection::Argument | Injection::File | Injection::Protocol => {}
+        }
+    }
+    if let Some(path) = stdin {
+        let _ = write!(command, "[IO.File]::ReadAllText({path}) | ");
+    }
+    command.push_str("& ");
+    command.push_str(&quote(&config.program));
+    for argument in arguments {
+        command.push(' ');
+        let mut rendered = None;
+        for (slot, path) in config.slots.iter().zip(secret_paths) {
+            if *argument == format!("{{{{{}}}}}", slot.name) {
+                let path = quote(&path.to_string_lossy());
+                rendered = Some(if slot.injection == Injection::Argument {
+                    format!("([IO.File]::ReadAllText({path}))")
+                } else {
+                    path
+                });
+            }
+        }
+        if let Some(rendered) = rendered {
+            command.push_str(&rendered);
+        } else {
+            command.push_str(&quote(argument));
+        }
+    }
+    let _ = write!(
+        command,
+        ";$__sb_ec=$LASTEXITCODE;{restore}Write-Output \"{marker}:$__sb_ec\"\r\n"
+    );
+    Some(Zeroizing::new(command))
 }
 
 struct TemporaryFiles {

@@ -6,6 +6,27 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.2.0-beta.7 — 2026-09-20
+
+### Product
+
+- Add address and account metadata to every credential and connection type, plus a read-only MCP catalog for planning without exposing secrets.
+- Allow MCP clients to request one-time, non-shell command drafts without a pre-created template; the local user still approves the exact frozen request in the Web console.
+- Run ordinary and credential-bearing commands in the same broker-owned continuous terminal while exposing only redacted cursor output to AI clients.
+- Add optional PIN/passphrase browser authentication, persistent revocable page sessions, explicit Telnet risk opt-in metadata and automatic opening of the human approval console.
+
+### Security and reliability
+
+- Store only Argon2 PIN verifiers in the native credential store, rate-limit failed verification, and exclude browser sessions and PIN mode from backups.
+- Keep secrets out of shell history through private temporary files and retain each terminal's redaction set across later commands until the session closes.
+- Recover a new installation record after an incompatible-upgrade cleanup leaves a fully verified release directory, while continuing to reject damaged records and symbolic links.
+- Tolerate SQLite WAL/SHM files disappearing during uninstall without treating successful cleanup as a failure.
+
+### Validation
+
+- Pass 165 Rust tests, 92 Web tests, 55 Python tests, three browser engines, two real PostgreSQL/MySQL matrices and a 20-iteration Linux stability soak.
+- Exercise Ubuntu package installation, incompatible-schema recovery, native Secret Service lifecycle and locked-keyring failure behavior with disposable data.
+
 ## 0.2.0-beta.6 — 2026-09-20
 
 ### Deployment

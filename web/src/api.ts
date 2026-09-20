@@ -26,7 +26,10 @@ export interface ConfigurationBundle {
   format_version: 1;
   exported_at_unix_ms: number;
   credentials: Array<
-    Pick<CredentialReference, "id" | "name" | "kind" | "purpose">
+    Pick<
+      CredentialReference,
+      "id" | "name" | "kind" | "purpose" | "address" | "username"
+    >
   >;
   connections: Array<
     Pick<
@@ -36,6 +39,9 @@ export interface ConfigurationBundle {
       | "kind"
       | "environment"
       | "description"
+      | "address"
+      | "username"
+      | "allow_insecure_protocol"
       | "credential_reference_id"
       | "postgres"
     >
@@ -157,6 +163,48 @@ export interface PairResponse {
   expires_in_seconds: number;
 }
 
+export interface BrowserAuthMethods {
+  pin_enabled: boolean;
+  pairing_link_enabled: boolean;
+}
+
+export async function getBrowserAuthMethods(): Promise<BrowserAuthMethods> {
+  return readJson<BrowserAuthMethods>(
+    await fetch("/api/v1/session/methods", {
+      credentials: "omit",
+      cache: "no-store",
+    }),
+  );
+}
+
+export async function pairWithPin(pin: string): Promise<PairResponse> {
+  return readJson<PairResponse>(
+    await fetch("/api/v1/session/pin", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin }),
+    }),
+  );
+}
+
+export async function setBrowserAuthMethod(
+  token: string,
+  method: "pairing_link" | "pin",
+  pin?: string,
+): Promise<void> {
+  await requireOk(
+    await fetch("/api/v1/session/method", {
+      method: "PUT",
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ method, ...(pin ? { pin } : {}) }),
+    }),
+  );
+}
+
 export interface SessionResponse {
   authenticated: boolean;
   mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
@@ -205,6 +253,8 @@ export interface CredentialReference {
   name: string;
   kind: CredentialKind;
   purpose: string | null;
+  address: string | null;
+  username: string | null;
   secret_state: "not_configured" | "available";
   secret_updated_at_unix_ms: number | null;
   created_at_unix_ms: number;
@@ -216,13 +266,16 @@ export interface CreateCredentialReference {
   name: string;
   kind: CredentialKind;
   purpose?: string;
+  address?: string;
+  username?: string;
 }
 
 export interface UpdateCredentialReference extends CreateCredentialReference {
   expected_version: number;
 }
 
-export type TargetKind = "database" | "http_service" | "ssh_host";
+export type TargetKind =
+  "database" | "http_service" | "ssh_host" | "telnet_host";
 export type TargetEnvironment = "development" | "test" | "production";
 export type PostgresTlsMode = "verify_full";
 
@@ -240,6 +293,9 @@ export interface Target {
   kind: TargetKind;
   environment: TargetEnvironment;
   description: string | null;
+  address: string | null;
+  username: string | null;
+  allow_insecure_protocol: boolean;
   credential_reference_id: string | null;
   postgres: PostgresTargetConfig | null;
   created_at_unix_ms: number;
@@ -252,6 +308,9 @@ export interface CreateTarget {
   kind: TargetKind;
   environment: TargetEnvironment;
   description?: string;
+  address?: string;
+  username?: string;
+  allow_insecure_protocol?: boolean;
   credential_reference_id?: string;
   postgres?: PostgresTargetConfig;
 }
@@ -307,10 +366,12 @@ export interface CredentialSlot {
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  terminal_id?: string | null;
   database?: DatabaseConfig | null;
   git?: GitConfig | null;
   http?: HttpConfig | null;
   ssh?: SshConfig | null;
+  telnet?: TelnetConfig | null;
   parameters?: ParameterDefinition[];
   program: string;
   working_directory: string;
@@ -348,6 +409,19 @@ export interface SshConfig {
   arguments: Array<
     { kind: "literal"; value: string } | { kind: "parameter"; name: string }
   >;
+}
+export interface TelnetConfig {
+  host: string;
+  port: number;
+  username: string;
+  password_slot: string;
+  login_prompt: string;
+  password_prompt: string;
+  command_prompt: string;
+  authentication_failure_prompt: string | null;
+  commands: string[];
+  logout_command: string;
+  max_output_bytes: number;
 }
 export interface TransferConfig {
   direction: "upload" | "download";

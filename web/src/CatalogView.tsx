@@ -112,11 +112,13 @@ const targetKindLabels: Record<Language, Record<TargetKind, string>> = {
     database: "数据库",
     http_service: "HTTP 服务",
     ssh_host: "SSH 主机",
+    telnet_host: "Telnet 旧设备",
   },
   en: {
     database: "Database",
     http_service: "HTTP service",
     ssh_host: "SSH host",
+    telnet_host: "Legacy Telnet device",
   },
 };
 
@@ -143,6 +145,10 @@ export function CredentialReferencesView({
           name: "引用名称",
           namePlaceholder: "例如：测试库只读账号",
           kind: "凭据类型",
+          address: "地址（可选）",
+          addressPlaceholder: "计算机名、域名、网址、SMB/FTP 地址或 IP",
+          username: "账号（可选）",
+          usernamePlaceholder: "用于登录的账号或用户名，不要填写密码",
           purpose: "用途说明（可选）",
           purposePlaceholder: "说明允许用于什么，不要填写任何秘密",
           listTitle: "已登记的引用",
@@ -163,6 +169,12 @@ export function CredentialReferencesView({
           name: "Reference name",
           namePlaceholder: "Example: test database read-only account",
           kind: "Credential type",
+          address: "Address (optional)",
+          addressPlaceholder:
+            "Computer name, domain, URL, SMB/FTP address, or IP",
+          username: "Account (optional)",
+          usernamePlaceholder:
+            "Login account or username; never enter a password",
           purpose: "Purpose (optional)",
           purposePlaceholder: "Describe the allowed use; never enter a secret",
           listTitle: "Registered references",
@@ -183,6 +195,8 @@ export function CredentialReferencesView({
   const [editorOpen, setEditorOpen] = useState(false);
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CredentialKind>("password");
+  const [address, setAddress] = useState("");
+  const [username, setUsername] = useState("");
   const [purpose, setPurpose] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
@@ -222,6 +236,8 @@ export function CredentialReferencesView({
       const request = {
         name,
         kind,
+        ...(address.trim() ? { address } : {}),
+        ...(username.trim() ? { username } : {}),
         ...(purpose.trim() ? { purpose } : {}),
       };
       if (editingId) {
@@ -347,6 +363,8 @@ export function CredentialReferencesView({
     setEditingVersion(item.version);
     setName(item.name);
     setKind(item.kind);
+    setAddress(item.address ?? "");
+    setUsername(item.username ?? "");
     setPurpose(item.purpose ?? "");
     setError(null);
   }
@@ -357,6 +375,8 @@ export function CredentialReferencesView({
     setEditingVersion(null);
     setName("");
     setKind("password");
+    setAddress("");
+    setUsername("");
     setPurpose("");
   }
 
@@ -413,6 +433,27 @@ export function CredentialReferencesView({
             )}
           </select>
         </Field>
+        <Field label={text.address} htmlFor="credential-address">
+          <input
+            id="credential-address"
+            maxLength={2048}
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            placeholder={text.addressPlaceholder}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={text.username} htmlFor="credential-username">
+          <input
+            id="credential-username"
+            maxLength={256}
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder={text.usernamePlaceholder}
+            className={inputClass}
+          />
+        </Field>
         <Field label={text.purpose} htmlFor="credential-purpose">
           <textarea
             id="credential-purpose"
@@ -463,6 +504,11 @@ export function CredentialReferencesView({
                 {item.purpose && (
                   <p className="mb-0 mt-2 break-words text-sm leading-6 text-slate-600">
                     {item.purpose}
+                  </p>
+                )}
+                {(item.username || item.address) && (
+                  <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
+                    {[item.username, item.address].filter(Boolean).join(" @ ")}
                   </p>
                 )}
               </div>
@@ -554,6 +600,10 @@ export function TargetsView({
           namePlaceholder: "例如：测试报表数据库",
           kind: "连接类型",
           environment: "环境",
+          address: "地址（可选）",
+          addressPlaceholder: "计算机名、域名、网址、SMB/FTP 地址或 IP",
+          username: "账号（可选）",
+          usernamePlaceholder: "连接使用的账号或用户名",
           description: "用途说明（可选）",
           descriptionPlaceholder: "说明业务用途，不要填写地址或秘密",
           credential: "关联凭据引用（可选）",
@@ -566,6 +616,9 @@ export function TargetsView({
           postgresUsername: "登录账号",
           postgresTls: "TLS 校验",
           verifyFull: "强制加密并验证证书与主机名",
+          telnetWarning:
+            "Telnet 会以明文传输账号、密码和命令。仅在无法升级的隔离旧设备上显式启用，并优先迁移到 SSH。",
+          allowTelnet: "我确认允许此连接使用不加密的 Telnet",
         }
       : {
           title: "Connections",
@@ -576,6 +629,11 @@ export function TargetsView({
           namePlaceholder: "Example: test reporting database",
           kind: "Connection type",
           environment: "Environment",
+          address: "Address (optional)",
+          addressPlaceholder:
+            "Computer name, domain, URL, SMB/FTP address, or IP",
+          username: "Account (optional)",
+          usernamePlaceholder: "Account or username used by this connection",
           description: "Purpose (optional)",
           descriptionPlaceholder:
             "Describe the business use; do not enter an address or secret",
@@ -589,6 +647,10 @@ export function TargetsView({
           postgresUsername: "Login user",
           postgresTls: "TLS verification",
           verifyFull: "Require encryption and verify certificate + hostname",
+          telnetWarning:
+            "Telnet sends accounts, passwords, and commands in plaintext. Enable it only for an isolated legacy device that cannot be upgraded, and migrate to SSH.",
+          allowTelnet:
+            "I explicitly allow unencrypted Telnet for this connection",
         };
   const [items, setItems] = useState<Target[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -597,6 +659,9 @@ export function TargetsView({
   const [kind, setKind] = useState<TargetKind>("database");
   const [environment, setEnvironment] = useState<TargetEnvironment>("test");
   const [description, setDescription] = useState("");
+  const [address, setAddress] = useState("");
+  const [username, setUsername] = useState("");
+  const [allowInsecureProtocol, setAllowInsecureProtocol] = useState(false);
   const [credentialId, setCredentialId] = useState("");
   const [postgresHost, setPostgresHost] = useState("");
   const [postgresPort, setPostgresPort] = useState("5432");
@@ -647,6 +712,11 @@ export function TargetsView({
         name,
         kind,
         environment,
+        ...(address.trim() ? { address } : {}),
+        ...(username.trim() ? { username } : {}),
+        ...(kind === "telnet_host"
+          ? { allow_insecure_protocol: allowInsecureProtocol }
+          : {}),
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
         ...(kind === "database" && postgresHost.trim()
@@ -723,6 +793,9 @@ export function TargetsView({
     setKind(item.kind);
     setEnvironment(item.environment);
     setDescription(item.description ?? "");
+    setAddress(item.address ?? "");
+    setUsername(item.username ?? "");
+    setAllowInsecureProtocol(item.allow_insecure_protocol);
     setCredentialId(item.credential_reference_id ?? "");
     setPostgresHost(item.postgres?.host ?? "");
     setPostgresPort(String(item.postgres?.port ?? 5432));
@@ -739,6 +812,9 @@ export function TargetsView({
     setKind("database");
     setEnvironment("test");
     setDescription("");
+    setAddress("");
+    setUsername("");
+    setAllowInsecureProtocol(false);
     setCredentialId("");
     setPostgresHost("");
     setPostgresPort("5432");
@@ -819,6 +895,27 @@ export function TargetsView({
             </select>
           </Field>
         </div>
+        <Field label={text.address} htmlFor="target-address">
+          <input
+            id="target-address"
+            maxLength={2048}
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            placeholder={text.addressPlaceholder}
+            className={inputClass}
+          />
+        </Field>
+        <Field label={text.username} htmlFor="target-username">
+          <input
+            id="target-username"
+            maxLength={256}
+            autoComplete="username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder={text.usernamePlaceholder}
+            className={inputClass}
+          />
+        </Field>
         <Field label={text.credential} htmlFor="target-credential">
           <select
             id="target-credential"
@@ -834,6 +931,22 @@ export function TargetsView({
             ))}
           </select>
         </Field>
+        {kind === "telnet_host" && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="mt-0 leading-6">{text.telnetWarning}</p>
+            <label className="flex items-start gap-3 font-semibold">
+              <input
+                type="checkbox"
+                checked={allowInsecureProtocol}
+                onChange={(event) =>
+                  setAllowInsecureProtocol(event.target.checked)
+                }
+                className="mt-1"
+              />
+              <span>{text.allowTelnet}</span>
+            </label>
+          </div>
+        )}
         {kind === "database" && (
           <div className="space-y-4 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
             <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
@@ -938,6 +1051,17 @@ export function TargetsView({
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                     {environmentLabels[language][item.environment]}
                   </span>
+                  {item.kind === "telnet_host" && (
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                      {item.allow_insecure_protocol
+                        ? language === "zh-CN"
+                          ? "已允许明文协议"
+                          : "Plaintext explicitly allowed"
+                        : language === "zh-CN"
+                          ? "默认禁用"
+                          : "Disabled by default"}
+                    </span>
+                  )}
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                     {common.version} {item.version}
                   </span>
@@ -957,6 +1081,11 @@ export function TargetsView({
                       text.noCredential)
                     : text.noCredential}
                 </p>
+                {(item.username || item.address) && (
+                  <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
+                    {[item.username, item.address].filter(Boolean).join(" @ ")}
+                  </p>
+                )}
                 {item.postgres && (
                   <p className="mb-0 mt-2 break-all text-xs font-medium text-slate-500">
                     {item.postgres.username}@{item.postgres.host}:

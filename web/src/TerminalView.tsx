@@ -40,9 +40,9 @@ interface ServerMessage {
 
 const labels = {
   "zh-CN": {
-    title: "持久终端",
+    title: "安全连续终端",
     subtitle:
-      "终端进程由本机后台代理持有。关闭页面或断开连接不会结束正在运行的任务。",
+      "普通命令与经人工批准的凭据命令可在同一进程中连续执行。输出由本机代理先脱敏，再提供给页面或 MCP；关闭页面不会结束进程。",
     create: "新建终端",
     createTitle: "启动系统终端",
     name: "会话名称",
@@ -81,9 +81,9 @@ const labels = {
     exitCode: "退出码",
   },
   en: {
-    title: "Persistent terminals",
+    title: "Secure continuous terminals",
     subtitle:
-      "Terminal processes belong to the local broker. Closing or detaching the page does not stop running work.",
+      "Ordinary commands and human-approved credential commands can share one continuous process. The local broker redacts output before exposing it to the page or MCP, and closing the page does not stop the process.",
     create: "Create terminal",
     createTitle: "Start a system terminal",
     name: "Session name",

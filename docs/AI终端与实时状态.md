@@ -1,56 +1,53 @@
-# AI 终端与实时状态
+# 安全连续终端
 
-[项目首页](../README.zh-CN.md) / [使用指南](使用指南.md) / AI 终端与实时状态
+[项目首页](../README.zh-CN.md) / [使用指南](使用指南.md) / 安全连续终端
 
-Web 页面与 MCP 客户端操作同一批后台终端。终端用于构建、测试和其他普通命令；密码与令牌仍由独立的凭据执行链处理，不传入普通 Shell。
+SecretBridge 由本机代理持有真实 Shell。普通命令与需要凭据的命令可以在同一个终端进程中连续执行，因此工作目录、进程环境和前后命令形成一段可追溯的会话。AI 不能接触原始 PTY、后台日志或凭据值，只能通过 MCP 游标读取代理已经处理过的输出。
 
-## 工作方式
+## 两种命令入口
 
 ```mermaid
-sequenceDiagram
-    participant AI as MCP 客户端
-    participant Bridge as stdio 桥接
-    participant Broker as 本机代理
-    participant Shell as 系统终端
-    participant Web as Web 页面
-    AI->>Bridge: 创建终端
-    Bridge->>Broker: 本机 IPC 请求
-    Broker->>Shell: 启动真实 PTY
-    Broker-->>Web: 会话列表变更通知
-    AI->>Broker: 连接并申请输入权（经桥接）
-    Broker-->>AI: 输入权、输出游标
-    AI->>Broker: 写入普通命令
-    Broker->>Shell: 输入字节
-    Shell-->>Broker: 持续输出
-    AI->>Broker: 从游标读取，可等待新输出
-    Broker-->>AI: 有界输出、下一游标、终端状态
-    AI->>Broker: 断开附件
-    Note over Broker,Shell: 释放输入权，进程继续运行
-    Web->>Broker: 连接并申请输入权
+flowchart LR
+    A["AI / MCP"] --> C{"是否需要凭据"}
+    C -->|否| W["terminal_write"]
+    C -->|是| R["request_command：程序、参数、凭据占位符"]
+    R --> H{"用户在 Web 审批"}
+    H -->|拒绝或过期| X["不执行"]
+    H -->|批准| I["代理从系统凭据库临时取密"]
+    W --> T["同一个安全终端进程"]
+    I --> T
+    T --> D["代理跨分片脱敏"]
+    D --> M["terminal_read：有界输出与下一游标"]
 ```
 
-## 工具清单
+- 普通命令：连接终端后通过 `secretbridge_terminal_write` 写入，不要在输入中放置秘密。
+- 凭据命令：调用 `secretbridge_request_command`，提交绝对程序路径、逐项参数、终端 ID 和凭据占位符。SecretBridge 自动生成待审批草案，不要求用户预先建立任务模板。
+- 审批只能由本机用户在 Web 控制台完成。AI 不得操作、检查或自动化 Web 控制台，也不得索要页面 PIN。
+- 批准后，代理在目标终端中执行命令。秘密通过标准输入、单独参数、临时环境变量或受管临时文件短暂注入；命令文本和 Shell 历史不包含秘密原文。
+- 会话一旦使用过某个秘密，该秘密的脱敏模式会保留到终端关闭，避免后续命令回显旧值。
 
-以下工具均以 `secretbridge_terminal_` 开头。ID 指向公开终端资源，不是认证令牌；MCP 会话身份由桥接内部生成，不能通过工具参数指定。
+## MCP 工具
 
-| 工具后缀 | 参数 | 结果与语义 |
-| :--- | :--- | :--- |
-| `capabilities` | 无 | 可用 Shell、平台、会话上限 |
-| `list` | 无 | 会话摘要、状态、PID、Shell 退出码 |
-| `create` | `rows`、`cols`；可选 `shell`、`name`、`working_directory`、`environment` | 创建进程，不自动取得输入权 |
-| `attach` | `id`、可选 `request_input` | 连接当前 MCP 会话，返回输入权与游标范围 |
-| `read` | `id`、`cursor`；可选 `max_bytes`、`wait_ms` | 增量字节、UTF-8 预览、下一游标、状态及截断标记 |
-| `write` | `id`、`data` | 向终端写入输入；需要输入权 |
-| `resize` | `id`、`rows`、`cols` | 调整 PTY 尺寸；需要输入权 |
-| `interrupt` | `id` | 发送 Ctrl+C；需要输入权，不保证程序退出 |
-| `detach` | `id` | 释放当前 MCP 附件及输入权，保留进程，可重复调用 |
-| `close` | `id` | 强制终止并移除会话；需要输入权 |
+| 工具 | 用途 |
+|---|---|
+| `secretbridge_terminal_capabilities` | 查询平台、可用 Shell 与限制 |
+| `secretbridge_terminal_list` | 列出会话、状态、PID 与退出码 |
+| `secretbridge_terminal_create` | 创建由代理持有的安全终端 |
+| `secretbridge_terminal_attach` | 连接会话并按需申请输入权 |
+| `secretbridge_terminal_read` | 按字节游标读取代理脱敏后的输出 |
+| `secretbridge_terminal_write` | 写入不含秘密的普通终端输入 |
+| `secretbridge_terminal_resize` | 调整 PTY 尺寸 |
+| `secretbridge_terminal_interrupt` | 尝试向前台任务发送 Ctrl+C |
+| `secretbridge_terminal_detach` | 释放附件与输入权，保留进程 |
+| `secretbridge_terminal_close` | 终止并移除会话 |
+| `secretbridge_list_catalog` | 读取凭据与连接的非秘密元数据 |
+| `secretbridge_request_command` | 为现有终端创建含凭据占位符的待审批命令 |
 
-Shell 取值为 `powershell`、`cmd`、`bash` 或 `zsh`，实际可用项以 `capabilities` 为准。未提供 Shell 时使用当前平台默认项。普通环境变量只用于进程启动，不写入配置库；不要在其中填写凭据。
+Shell 可能为 `powershell`、`cmd`、`bash` 或 `zsh`，以能力查询结果为准。启动环境变量不会保存，但仍不得填写密码、令牌或私钥。
 
-## 增量读取
+## 输出游标
 
-连接结果提供 `oldest_cursor` 与 `next_cursor`。需要回看已保留输出时从前者开始；只关心新输出时从后者开始。每次读取结束后保存返回的 `next_cursor`，作为下一次的 `cursor`。
+`attach` 和 `read` 会返回 `oldest_cursor`、`next_cursor` 与 `available_cursor`。调用方应保存 `next_cursor` 并在下一次读取时作为 `cursor` 提交：
 
 ```json
 {
@@ -61,53 +58,28 @@ Shell 取值为 `powershell`、`cmd`、`bash` 或 `zsh`，实际可用项以 `ca
 }
 ```
 
-| 字段 | 含义 |
-| :--- | :--- |
-| `cursor` | 本次实际输出的起点 |
-| `next_cursor` | 本次返回字节之后的位置 |
-| `oldest_cursor` | 当前仍保留的最早位置 |
-| `available_cursor` | 后台目前已收到的输出末尾 |
-| `has_more` | 是否还有未返回的保留输出 |
-| `truncated` | 请求游标已超出保留范围，需要处理输出缺口 |
-| `bytes` | 精确输出字节；使用增量解码器可以跨分片解码 |
-| `text` | UTF-8 预览；编码错误或分片截断处可能出现替换字符 |
-| `terminal` | 当前 Shell 状态及退出码 |
+每次最多读取 16 KiB，代理保留最近 64 KiB。`truncated: true` 表示请求位置已经早于保留窗口；此时只能从 `oldest_cursor` 继续，不能通过重跑命令补数据。`bytes` 用于无损增量解码，`text` 只是 UTF-8 预览。
 
-每次读取最多 16 KiB，默认 8 KiB。`wait_ms` 为 0～5000：已有输出时立即返回；没有输出且进程仍运行时可等待一次新事件。后台只保留最近 64 KiB，游标过早或超出已收到范围会明确标记截断，而不会重跑命令补数据。
+终端回放、WebSocket 与 MCP 读取共用同一份已脱敏缓冲区。凭据命令的完成状态写入运行记录，但它的连续终端输出应通过 `secretbridge_terminal_read` 读取；不要改用 `secretbridge_read_run_output`，也不要重新执行命令。
 
-Shell 退出码只代表终端进程的退出结果，不等于每条命令的退出码。当前接口不自动解析提示符或给自由输入加命令完成标记；需要明确命令结束时，应使用工具自身的结果或普通、非秘密的输出标记。
+## 输入权与连续性
 
-## 输入权与交接
+同一终端一次只有一个输入连接。连接时检查 `input_granted`；未取得输入权的客户端仍可读取输出，但不能写入、调整尺寸、中断或关闭会话。
 
-同一终端一次只能有一个输入连接。`attach` 的 `request_input` 默认是 `false`；请求输入后仍须检查 `input_granted`。被拒绝输入权的连接可以读取输出，但不能写入、调整尺寸、发送中断或关闭进程。
-
-- Web 正在输入时，MCP 不能抢占它的输入权。
-- 不同 MCP 会话拥有不同内部身份，不能接管对方仍有效的输入附件。
+- Web 和 MCP 不会互相抢占输入权。
 - 同一 MCP 会话重新连接可替换自己的旧附件。
-- 交还给用户前调用 `detach`，用户再连接页面申请输入权。
-- MCP 正常断开会释放全部附件；异常退出的附件在最后一次操作后 60 秒到期，清理周期为 5 秒。
-- 附件清理只释放输入权，不结束 Shell。后台代理退出或显式 `close` 才结束会话。
+- 交还给用户前调用 `detach`；异常断开的附件会在空闲 60 秒后释放。
+- 关闭页面或 MCP 客户端不会结束 Shell。
+- 服务进程退出会结束 PTY。当前不承诺在操作系统重启后恢复进程内状态。
 
-写入不是幂等操作。通信失败可能发生在输入已交付之后，不能盲目重发；先读取已有输出、检查状态，再由调用方决定下一步。桥接不自动重试创建或写入。
+写入不是幂等操作。网络或 IPC 中断时，先读取现有输出并检查状态，不要盲目重发。
 
-## Web 实时通知
+## 安全边界
 
-`/api/v1/events` 使用同源 WebSocket。升级请求必须通过精确 Origin 校验，第一帧必须携带当前页面会话：
+代理只对经 SecretBridge 绑定并实际取出的秘密建立脱敏规则。它覆盖原始 UTF-8、UTF-16、JSON 转义和常见百分号编码，并处理跨输出分片的匹配；它不是任意敏感信息识别器，不能保证识别 Base64、哈希、自定义变换或未登记数据。
 
-```json
-{"type":"authenticate","token":"<page-session-token>"}
-```
-
-令牌不放在 URL 中。服务首先返回 `{"type":"ready"}`，随后以 `{"type":"changed"}` 通知审批、任务或终端状态发生变化。通知不包含秘密、命令、资源名称、地址或业务数据；页面通过原有认证 HTTP API 获取最新快照。
-
-审批、运行任务与终端页面会合并短时间内的通知，断线后自动退避重连，在收到 `ready` 时重新取快照。低频兜底刷新同时处理时间到期和暂时无法连接 WebSocket 的情况。页面会话过期或撤销时，服务关闭实时连接。
-
-## 当前边界
-
-普通终端是当前用户权限下的代码执行能力，不是隔离沙箱。它不自动读取 SecretBridge 凭据库，但也不能阻止普通程序读取用户本来有权访问的文件、环境或系统凭据库。不得用它读取认证文件、打印秘密或绕过凭据操作审批。
-
-当前普通输出未经通用秘密识别或跨分片脱敏处理。[凭据命令任务](凭据命令任务.md)已在独立执行器中提供四种注入方式与跨分片过滤，不能把已经替换密码的命令发送到持久终端。
+终端仍以当前操作系统用户权限运行，不是容器或恶意代码沙箱。只能执行可信程序。AI 客户端若本身已拥有同一用户的任意本机代码执行能力，SecretBridge 无法阻止它绕过产品接口读取该用户本来可以访问的资源；部署时应同时使用最小权限账号和目标系统权限。
 
 ---
 
-[开发设计](开发设计.md) · [功能路线图](../ROADMAP.md) · [安全模型](安全模型与验收.md)
+[凭据命令](凭据命令任务.md) · [安全模型](安全模型与验收.md) · [开发设计](开发设计.md)

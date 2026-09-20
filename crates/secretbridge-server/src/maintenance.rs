@@ -65,6 +65,8 @@ pub fn restore_configuration_backup(
     catalog.lock().execute_batch("BEGIN IMMEDIATE;
         UPDATE credential_references SET secret_configured=0, secret_updated_at_unix_ms=NULL, version=version+1;
         UPDATE approvals SET state='revoked', version=version+1 WHERE state IN ('pending','approved');
+        DELETE FROM browser_sessions;
+        UPDATE browser_auth_settings SET mode='pairing_link';
         COMMIT;").map_err(|_| "restore_failed")?;
     fs::create_dir(directory).map_err(|_| "restore_requires_new_directory")?;
     let database_path = directory.join("secretbridge.sqlite3");

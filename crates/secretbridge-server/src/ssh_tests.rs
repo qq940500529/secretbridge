@@ -362,7 +362,7 @@ async fn real_ssh_authenticates_unencrypted_and_encrypted_private_keys_without_f
     for encrypted in [false, true] {
         let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
         let template = configure(&state, &fixture, 15);
-        let (token, _) = state.issue_session().await;
+        let (token, _) = state.issue_session().await.expect("issue session");
         let (status, credential) = web_request(
             &state,
             &token,
@@ -595,7 +595,7 @@ async fn web_creates_config_approves_executes_and_reads_filtered_ssh_output() {
     let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
     configure(&state, &fixture, 10);
     let template = state.catalog.list_action_templates().unwrap().remove(0);
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let (status, created) = web_request(&state, &token, "/api/v1/action-templates", json!({"name":"SSH via Web","target_id":template.target_id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":10,"command":template.command})).await;
     assert_eq!(status, StatusCode::CREATED);
     let (_, approval) = web_request(

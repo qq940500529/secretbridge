@@ -90,7 +90,7 @@ async fn wait_for_driver_release(state: &AppState, id: Uuid) {
 }
 
 async fn api_surfaces(state: &AppState, run_id: Uuid) -> Vec<(String, Vec<u8>)> {
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let mut surfaces = Vec::new();
     for path in [
         "/api/v1/credential-references",

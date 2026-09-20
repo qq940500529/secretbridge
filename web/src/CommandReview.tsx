@@ -128,6 +128,44 @@ export function CommandReview({
         </p>
       </details>
     );
+  if (config.telnet)
+    return (
+      <details className="mt-3 border-y border-amber-300 bg-amber-50 px-3 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-amber-950">
+          {zh
+            ? "查看 Telnet 明文连接、登录对话与固定脚本"
+            : "Review plaintext Telnet connection, login dialogue and fixed script"}
+        </summary>
+        <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-[7rem_1fr]">
+          <dt>{zh ? "连接" : "Connection"}</dt>
+          <dd className="break-all font-mono">
+            {config.telnet.username}@{config.telnet.host}:{config.telnet.port}
+          </dd>
+          <dt>{zh ? "登录提示" : "Login prompts"}</dt>
+          <dd className="whitespace-pre-wrap break-all font-mono">
+            {JSON.stringify({
+              username: config.telnet.login_prompt,
+              password: config.telnet.password_prompt,
+              ready: config.telnet.command_prompt,
+              failure: config.telnet.authentication_failure_prompt,
+            })}
+          </dd>
+          <dt>{zh ? "固定脚本" : "Fixed script"}</dt>
+          <dd className="whitespace-pre-wrap break-all font-mono">
+            {config.telnet.commands.join("\n")}
+          </dd>
+          <dt>{zh ? "输出上限" : "Output limit"}</dt>
+          <dd>{config.telnet.max_output_bytes} bytes</dd>
+          <dt>{zh ? "凭据插槽" : "Credential slot"}</dt>
+          <dd>{config.telnet.password_slot}</dd>
+        </dl>
+        <p className="mb-0 mt-3 text-xs leading-5 text-amber-950">
+          {zh
+            ? "Telnet 不加密凭据、命令或输出，也不能验证服务器身份。只有连接目录中固定地址、账号、凭据均匹配且已显式允许不加密协议时才能执行。请尽快迁移到 SSH 或 TLS。"
+            : "Telnet does not encrypt credentials, commands or output and cannot authenticate the server. Execution requires an exact matching connection with plaintext explicitly allowed. Migrate to SSH or TLS as soon as possible."}
+        </p>
+      </details>
+    );
   if (config.http)
     return (
       <details className="mt-3 border-y border-slate-200 py-3">
@@ -168,6 +206,14 @@ export function CommandReview({
         {zh ? "查看将执行的程序与插槽" : "Review program and credential slots"}
       </summary>
       <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-[6rem_1fr]">
+        {config.terminal_id && (
+          <>
+            <dt className="text-slate-500">
+              {zh ? "安全终端" : "Secure terminal"}
+            </dt>
+            <dd className="m-0 break-all font-mono">{config.terminal_id}</dd>
+          </>
+        )}
         <dt className="text-slate-500">{zh ? "程序" : "Program"}</dt>
         <dd className="m-0 break-all font-mono">{config.program}</dd>
         <dt className="text-slate-500">{zh ? "工作目录" : "Directory"}</dt>
@@ -199,6 +245,13 @@ export function CommandReview({
           ))}
         </dd>
       </dl>
+      {config.terminal_id && (
+        <p className="mt-2 text-xs text-slate-600">
+          {zh
+            ? "批准后命令会在这个既有终端进程中继续执行；凭据由代理临时注入，终端回放与 MCP 读取只能看到脱敏结果。"
+            : "After approval, the command continues in this existing terminal process. The broker injects credentials temporarily, and terminal replay or MCP reads expose only redacted output."}
+        </p>
+      )}
     </details>
   );
 }

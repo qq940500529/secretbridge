@@ -51,7 +51,7 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let bundle = json_body(
         app.clone()
             .oneshot(request(
@@ -232,7 +232,7 @@ async fn restored_directory_can_reenter_secret_authorize_and_execute_original_co
     let (mut state, _) = AppState::new([ORIGIN.to_owned()]);
     state.catalog = restored;
     let app = router(state.clone());
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let template_before = state.catalog.list_action_templates().unwrap().remove(0);
     assert!(matches!(
         state.catalog.create_approval(
@@ -351,7 +351,7 @@ async fn maintenance_body_limits_and_origin_checks_apply_before_import() {
         .extend(vec!["x".repeat(2048); 16]);
     let body = serde_json::to_string(&bundle).unwrap();
     assert!(body.len() > 16 * 1024);
-    let (token, _) = state.issue_session().await;
+    let (token, _) = state.issue_session().await.expect("issue session");
     let app = router(state);
     let preview = app
         .clone()

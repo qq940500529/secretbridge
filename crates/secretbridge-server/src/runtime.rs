@@ -61,10 +61,20 @@ pub(crate) async fn handle(
             if control.stopping.is_cancelled() {
                 return Err(rmcp::ErrorData::internal_error("broker_stopping", None));
             }
-            // A new one-time bootstrap token is never returned to the CLI or MCP.
-            let token = crate::new_token();
-            *state.bootstrap_token.write().await = Some(crate::token_digest(&token));
-            let url = format!("{}/#pair={token}", control.origin);
+            // A new one-time bootstrap token is never returned to the CLI or MCP. When the user
+            // selected PIN verification, open the stable login page instead of invalidating an
+            // unconsumed pairing capability on every MCP request.
+            let url =
+                if state.catalog.browser_auth_mode().map_err(|_| {
+                    rmcp::ErrorData::internal_error("browser_auth_unavailable", None)
+                })? == crate::catalog::BrowserAuthMode::Pin
+                {
+                    format!("{}/#login=pin", control.origin)
+                } else {
+                    let token = crate::new_token();
+                    *state.bootstrap_token.write().await = Some(crate::token_digest(&token));
+                    format!("{}/#pair={token}", control.origin)
+                };
             tokio::task::spawn_blocking(move || webbrowser::open(&url))
                 .await
                 .map_err(|_| rmcp::ErrorData::internal_error("browser_open_failed", None))?
@@ -114,7 +124,7 @@ mod tests {
         let (mut state, _) = AppState::new([ORIGIN.to_owned()]);
         let cancellation = CancellationToken::new();
         state.enable_runtime_control(ORIGIN.into(), cancellation.clone());
-        let (session, _) = state.issue_session().await;
+        let (session, _) = state.issue_session().await.expect("issue session");
         let app = crate::router(state);
         for (origin, token, expected) in [
             (ORIGIN, "wrong", StatusCode::UNAUTHORIZED),
@@ -168,10 +178,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shutdown_cancels_owned_runs_revokes_sessions_and_rejects_late_creation() {
+    async fn shutdown_cancels_owned_runs_preserves_sessions_and_rejects_late_creation() {
         let (mut state, _) = AppState::new([ORIGIN.to_owned()]);
         state.enable_runtime_control(ORIGIN.into(), CancellationToken::new());
-        let (session, _) = state.issue_session().await;
+        let (session, _) = state.issue_session().await.expect("issue session");
         let run = uuid::Uuid::new_v4();
         let token = CancellationToken::new();
         state
@@ -186,7 +196,7 @@ mod tests {
         });
         state.shutdown_operations().await;
         assert!(token.is_cancelled());
-        assert!(state.authenticate(&session).await.is_none());
+        assert!(state.authenticate(&session).await.is_some());
         assert!(handle(&state, RuntimeRequest::Open).await.is_err());
         let response = crate::router(state)
             .oneshot(

@@ -733,7 +733,7 @@ pub(crate) mod tests {
         let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
         configure(&state, &fixture.url, 5);
         let template = state.catalog.list_action_templates().unwrap().remove(0);
-        let (token, _) = state.issue_session().await;
+        let (token, _) = state.issue_session().await.expect("issue session");
         let(status,created)=web_request(&state,&token,"/api/v1/action-templates",json!({"target_id":template.target_id,"name":"HTTP Web task","operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":5,"command":template.command})).await;
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(created["command"]["http"]["method"], "POST");

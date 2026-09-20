@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -21,6 +21,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use crate::redaction::Redactor;
 
 const MAX_TERMINALS: usize = 8;
 const BACKLOG_LIMIT: usize = 64 * 1024;
@@ -61,9 +64,11 @@ struct TerminalSession {
     status: Arc<AtomicU8>,
     exit_code: Arc<Mutex<Option<u32>>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<OutputBuffer>>,
+    redactor: Arc<Mutex<Redactor>>,
+    broker_active: AtomicBool,
     input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
     changes: broadcast::Sender<()>,
@@ -177,6 +182,7 @@ pub struct TerminalSummary {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalError {
+    Busy,
     Capacity,
     Closed,
     InputLeaseRequired,
@@ -281,6 +287,10 @@ impl TerminalManager {
         if !request.environment.contains_key("TERM") {
             command.env("TERM", "xterm-256color");
         }
+        #[cfg(unix)]
+        if !request.environment.contains_key("HISTFILE") {
+            command.env("HISTFILE", "/dev/null");
+        }
         Ok(PreparedTerminalLaunch {
             id,
             name,
@@ -319,6 +329,20 @@ impl TerminalManager {
 
     pub fn change_notifier(&self) -> broadcast::Sender<()> {
         self.changes.clone()
+    }
+
+    pub(crate) fn begin_broker(&self, id: Uuid) -> Result<TerminalBroker, TerminalError> {
+        let session = self
+            .read_sessions()
+            .get(&id)
+            .cloned()
+            .ok_or(TerminalError::NotFound)?;
+        session.ensure_running()?;
+        session
+            .broker_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| TerminalError::Busy)?;
+        Ok(TerminalBroker { session })
     }
 
     pub fn attach(
@@ -403,10 +427,11 @@ fn spawn_terminal(
         .master
         .try_clone_reader()
         .map_err(|_| TerminalError::SpawnFailed)?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|_| TerminalError::SpawnFailed)?;
+    let writer = Arc::new(Mutex::new(
+        pair.master
+            .take_writer()
+            .map_err(|_| TerminalError::SpawnFailed)?,
+    ));
     let child = pair
         .slave
         .spawn_command(launch.command)
@@ -418,6 +443,7 @@ fn spawn_terminal(
     let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
     let exit_code = Arc::new(Mutex::new(None));
     let output = Arc::new(Mutex::new(OutputBuffer::new()));
+    let redactor = Arc::new(Mutex::new(Redactor::new(&[])));
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let (output_activity, output_activity_rx) = std::sync::mpsc::channel();
     let session = Arc::new(TerminalSession {
@@ -431,14 +457,24 @@ fn spawn_terminal(
         status: Arc::clone(&status),
         exit_code: Arc::clone(&exit_code),
         master: Mutex::new(pair.master),
-        writer: Mutex::new(writer),
+        writer: Arc::clone(&writer),
         killer: Mutex::new(killer),
         output: Arc::clone(&output),
+        redactor: Arc::clone(&redactor),
+        broker_active: AtomicBool::new(false),
         input_lease: Mutex::new(None),
         events: events.clone(),
         changes: changes.clone(),
     });
-    spawn_terminal_reader(launch.id, reader, output, events.clone(), output_activity)?;
+    spawn_terminal_reader(
+        launch.id,
+        reader,
+        output,
+        redactor,
+        writer,
+        events.clone(),
+        output_activity,
+    )?;
     spawn_terminal_waiter(
         launch.id,
         child,
@@ -455,6 +491,8 @@ fn spawn_terminal_reader(
     id: Uuid,
     mut reader: Box<dyn Read + Send>,
     output: Arc<Mutex<OutputBuffer>>,
+    redactor: Arc<Mutex<Redactor>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     events: broadcast::Sender<TerminalEvent>,
     output_activity: std::sync::mpsc::Sender<()>,
 ) -> Result<(), TerminalError> {
@@ -462,10 +500,20 @@ fn spawn_terminal_reader(
         .name(format!("secretbridge-terminal-reader-{id}"))
         .spawn(move || {
             let mut buffer = [0_u8; 4096];
+            let mut startup_protocol = StartupTerminalProtocol::default();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(count) if count > 0 => {
-                        let chunk: Arc<[u8]> = Arc::from(&buffer[..count]);
+                        let terminal_bytes =
+                            startup_protocol.filter(&buffer[..count], &writer, false);
+                        let filtered = redactor
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .feed(&terminal_bytes, false);
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        let chunk: Arc<[u8]> = Arc::from(filtered);
                         let mut output = output
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -477,12 +525,66 @@ fn spawn_terminal_reader(
                         });
                         let _ = output_activity.send(());
                     }
-                    Ok(_) | Err(_) => break,
+                    Ok(_) | Err(_) => {
+                        let terminal_bytes = startup_protocol.filter(&[], &writer, true);
+                        let filtered = redactor
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .feed(&terminal_bytes, true);
+                        if !filtered.is_empty() {
+                            let chunk: Arc<[u8]> = Arc::from(filtered);
+                            let mut output = output
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let cursor = output.append(&chunk);
+                            let _ = events.send(TerminalEvent::Output {
+                                cursor,
+                                data: chunk,
+                            });
+                            let _ = output_activity.send(());
+                        }
+                        break;
+                    }
                 }
             }
         })
         .map(|_| ())
         .map_err(|_| TerminalError::SpawnFailed)
+}
+
+#[derive(Default)]
+struct StartupTerminalProtocol {
+    pending: Vec<u8>,
+    answered_cursor_query: bool,
+}
+
+impl StartupTerminalProtocol {
+    fn filter(
+        &mut self,
+        input: &[u8],
+        writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+        finish: bool,
+    ) -> Vec<u8> {
+        const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+        self.pending.extend_from_slice(input);
+        let mut output = Vec::with_capacity(self.pending.len());
+        while !self.pending.is_empty() {
+            if !self.answered_cursor_query && self.pending.starts_with(CURSOR_QUERY) {
+                self.pending.drain(..CURSOR_QUERY.len());
+                self.answered_cursor_query = true;
+                if let Ok(mut writer) = writer.lock() {
+                    let _ = writer.write_all(b"\x1b[1;1R");
+                    let _ = writer.flush();
+                }
+                continue;
+            }
+            if !finish && !self.answered_cursor_query && CURSOR_QUERY.starts_with(&self.pending) {
+                break;
+            }
+            output.push(self.pending.remove(0));
+        }
+        output
+    }
 }
 
 fn spawn_terminal_waiter(
@@ -536,6 +638,48 @@ pub struct TerminalSnapshot {
     pub output: Vec<u8>,
     pub events: broadcast::Receiver<TerminalEvent>,
     pub input_granted: bool,
+}
+
+pub(crate) struct TerminalBroker {
+    session: Arc<TerminalSession>,
+}
+
+impl TerminalBroker {
+    pub(crate) fn shell(&self) -> TerminalShell {
+        self.session.shell
+    }
+
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<TerminalEvent> {
+        self.session.events.subscribe()
+    }
+
+    pub(crate) fn add_redaction_secrets(&self, secrets: &[Zeroizing<String>]) {
+        self.session
+            .redactor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(secrets);
+    }
+
+    pub(crate) fn write(&self, data: &[u8]) -> Result<(), TerminalError> {
+        if data.is_empty() || data.len() > 65_536 {
+            return Err(TerminalError::InvalidInput);
+        }
+        self.session.ensure_running()?;
+        let mut writer = self
+            .session
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        writer.write_all(data).map_err(|_| TerminalError::Closed)?;
+        writer.flush().map_err(|_| TerminalError::Closed)
+    }
+}
+
+impl Drop for TerminalBroker {
+    fn drop(&mut self) {
+        self.session.broker_active.store(false, Ordering::Release);
+    }
 }
 
 pub struct TerminalConnection {
@@ -603,6 +747,9 @@ impl TerminalConnection {
         }
         self.ensure_input_lease()?;
         self.session.ensure_running()?;
+        if self.session.broker_active.load(Ordering::Acquire) {
+            return Err(TerminalError::Busy);
+        }
         let mut writer = self
             .session
             .writer
@@ -752,7 +899,7 @@ impl Drop for TerminalSession {
             return;
         }
         self.status.store(STATUS_TERMINATED, Ordering::Release);
-        if let Ok(writer) = self.writer.get_mut() {
+        if let Ok(mut writer) = self.writer.lock() {
             let _ = writer.write_all(b"exit\r\n");
             let _ = writer.flush();
         }
@@ -870,6 +1017,7 @@ fn system_shell_command(shell: TerminalShell) -> Result<CommandBuilder, Terminal
     match shell {
         TerminalShell::PowerShell => {
             command.arg("-NoLogo");
+            command.arg("-NoProfile");
         }
         TerminalShell::Cmd => {
             command.arg("/Q");
