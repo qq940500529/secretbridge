@@ -8,6 +8,8 @@ from pathlib import Path
 
 from tools.check_repository import (
     PATTERNS,
+    PUBLIC_REPOSITORY_URL,
+    check_ai_deployment_entrypoints,
     check_repository,
     inspect_file,
     markdown_anchors,
@@ -136,6 +138,26 @@ class RepositoryChecks(unittest.TestCase):
     def test_required_files(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertTrue(check_repository(Path(directory)))
+
+    def test_ai_deployment_entrypoints_require_url_and_any_directory_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "README.md").write_text(
+                f"{PUBLIC_REPOSITORY_URL}\nYou may start from any directory", encoding="utf-8"
+            )
+            (root / "README.zh-CN.md").write_text(
+                f"{PUBLIC_REPOSITORY_URL}\n任意目录", encoding="utf-8"
+            )
+            docs = root / "docs"
+            docs.mkdir()
+            guide = docs / "AI辅助部署.md"
+            guide.write_text(f"{PUBLIC_REPOSITORY_URL}\n不需要预先克隆仓库", encoding="utf-8")
+            self.assertEqual([], check_ai_deployment_entrypoints(root))
+            guide.write_text("只假设已有工作区", encoding="utf-8")
+            self.assertEqual(
+                ["docs/AI辅助部署.md: ai-deployment-entrypoint-missing"],
+                check_ai_deployment_entrypoints(root),
+            )
 
     def test_private_ip_and_path_patterns(self):
         self.assertIsNotNone(PATTERNS["private-ip"].search("10." + "20.30.40"))

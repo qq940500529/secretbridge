@@ -44,19 +44,17 @@ flowchart LR
 
 ## 快速开始
 
-首次部署推荐使用能够展示命令、请求权限并在失败时停止的本机 AI 编码助手。复制可执行提示词并了解安全边界，请阅读 [AI 辅助部署](docs/AI辅助部署.md)；供助手直接读取的步骤在 [AI 部署执行指南](docs/AI部署执行指南.md)。完整人工流程也在同一文档中。
+首次部署可以把下面的提示词直接交给能够展示命令、请求权限并在失败时停止的本机 AI 编码助手。不必先下载仓库，也不必切换到仓库目录；可在任意文件夹或全新对话中开始。
 
-手动构建需要 Node.js 24、pnpm 11 和 Rust 1.98：
+```text
+请在当前机器部署 SecretBridge，仓库地址：https://github.com/qq940500529/secretbridge
 
-```sh
-pnpm install --frozen-lockfile
-pnpm build
-cargo build --release --locked -p secretbridge-server
-./target/release/secretbridge-server start --no-open
-./target/release/secretbridge-server open
+你可以从任意目录开始，不要假设仓库已经下载。先检查 GitHub 最新 Release；如果有适合当前平台的安装包，就下载并校验摘要和包元数据后安装。如果没有可用 Release，再把最新 main 分支克隆到新建的非敏感目录，阅读 AGENTS.md 和部署文档，使用仓库锁定的工具版本与依赖构建并安装。保留已有文件；需要管理员权限或修改工作目录以外内容时先征求同意。不要索取或泄露真实凭据。安装后启动 SecretBridge，确认 status 正常且服务只监听本机回环地址。最后报告安装的版本或提交、安装位置和卸载命令。
 ```
 
-Windows 可执行文件名为 `secretbridge-server.exe`。服务只接受回环地址，首次打开会生成一次性浏览器配对链接。安装包、后台运行、升级和卸载见[安装与后台运行](docs/后台运行与安装交付.md)。
+[AI 辅助部署](docs/AI辅助部署.md)说明权限和安全边界；供助手直接读取的流程见 [AI 部署执行指南](docs/AI部署执行指南.md)。执行前仍应检查助手准备运行的命令。维护者需要完整源码与安装包验收时，再执行详细指南中的质量门禁。
+
+用户不需要自己选择安装包、准备仓库或配置工具链；这些判断由助手完成，只在操作系统确实需要授权时向用户确认。服务只接受回环地址，首次打开会生成一次性浏览器配对链接。人工源码构建、升级和卸载见[安装与后台运行](docs/后台运行与安装交付.md)。
 
 ## 日常流程
 
