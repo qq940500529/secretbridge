@@ -590,13 +590,13 @@ async fn remove_catalog(data: &Path) -> Result<()> {
             || migration_backup
         {
             let path = safe_path(data, name)?;
-            if !fs::symlink_metadata(&path)
-                .map_err(|_| "configuration_remove_failed")?
-                .is_file()
-            {
-                return Err("configuration_remove_failed");
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+                    paths.push(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) | Err(_) => return Err("configuration_remove_failed"),
             }
-            paths.push(path);
         }
     }
     for path in paths {
