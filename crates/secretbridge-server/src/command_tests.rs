@@ -48,6 +48,7 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         arguments.push("{{password}}".into());
     }
     CommandConfig {
+        terminal_id: None,
         database: None,
         http: None,
         ssh: None,

@@ -49,22 +49,32 @@ impl Utf8Decoder {
 
 impl Redactor {
     pub fn new(secrets: &[Zeroizing<String>]) -> Self {
-        let mut patterns = Vec::new();
+        let mut redactor = Self {
+            patterns: Vec::new(),
+            pending: Zeroizing::new(Vec::new()),
+        };
+        redactor.extend(secrets);
+        redactor
+    }
+
+    /// Adds secrets before they can reach a long-lived stream. Existing pending bytes remain
+    /// private and are reconsidered against the expanded pattern set.
+    pub fn extend(&mut self, secrets: &[Zeroizing<String>]) {
         for secret in secrets {
             if secret.is_empty() {
                 continue;
             }
-            patterns.push(Zeroizing::new(secret.as_bytes().to_vec()));
-            patterns.push(Zeroizing::new(
+            self.patterns.push(Zeroizing::new(secret.as_bytes().to_vec()));
+            self.patterns.push(Zeroizing::new(
                 secret.encode_utf16().flat_map(u16::to_le_bytes).collect(),
             ));
-            patterns.push(Zeroizing::new(
+            self.patterns.push(Zeroizing::new(
                 secret.encode_utf16().flat_map(u16::to_be_bytes).collect(),
             ));
             let escaped = Zeroizing::new(
                 serde_json::to_string(secret.as_str()).expect("string serialization"),
             );
-            patterns.push(Zeroizing::new(
+            self.patterns.push(Zeroizing::new(
                 escaped.as_bytes()[1..escaped.len() - 1].to_vec(),
             ));
             // Percent encoding preserves the case of unescaped characters.
@@ -80,15 +90,14 @@ impl Redactor {
                     write!(encoded_lower, "%{byte:02x}").expect("string formatting");
                 }
             }
-            patterns.push(Zeroizing::new(encoded.as_bytes().to_vec()));
-            patterns.push(Zeroizing::new(encoded_lower.as_bytes().to_vec()));
+            self.patterns
+                .push(Zeroizing::new(encoded.as_bytes().to_vec()));
+            self.patterns
+                .push(Zeroizing::new(encoded_lower.as_bytes().to_vec()));
         }
-        patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.len()));
-        patterns.dedup();
-        Self {
-            patterns,
-            pending: Zeroizing::new(Vec::new()),
-        }
+        self.patterns
+            .sort_by_key(|pattern| std::cmp::Reverse(pattern.len()));
+        self.patterns.dedup();
     }
 
     pub fn feed(&mut self, bytes: &[u8], final_chunk: bool) -> Vec<u8> {
@@ -157,6 +166,16 @@ mod tests {
         assert_eq!(redactor.feed(b"def!", false), b"[REDACTED]!");
         assert!(redactor.feed(b"ab", false).is_empty());
         assert_eq!(redactor.feed(b"", true), b"[REDACTED]");
+    }
+
+    #[test]
+    fn long_lived_stream_accepts_new_secrets_without_releasing_pending_bytes() {
+        let mut redactor = Redactor::new(&[]);
+        assert_eq!(redactor.feed(b"ordinary\n", false), b"ordinary\n");
+        redactor.extend(&[Zeroizing::new("later-secret".into())]);
+        assert!(redactor.feed(b"later-", false).is_empty());
+        assert_eq!(redactor.feed(b"secret\n", false), b"[REDACTED]\n");
+        assert_eq!(redactor.feed(b"still ordinary", true), b"still ordinary");
     }
 
     #[test]

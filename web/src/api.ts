@@ -41,6 +41,7 @@ export interface ConfigurationBundle {
       | "description"
       | "address"
       | "username"
+      | "allow_insecure_protocol"
       | "credential_reference_id"
       | "postgres"
     >
@@ -273,7 +274,8 @@ export interface UpdateCredentialReference extends CreateCredentialReference {
   expected_version: number;
 }
 
-export type TargetKind = "database" | "http_service" | "ssh_host";
+export type TargetKind =
+  "database" | "http_service" | "ssh_host" | "telnet_host";
 export type TargetEnvironment = "development" | "test" | "production";
 export type PostgresTlsMode = "verify_full";
 
@@ -293,6 +295,7 @@ export interface Target {
   description: string | null;
   address: string | null;
   username: string | null;
+  allow_insecure_protocol: boolean;
   credential_reference_id: string | null;
   postgres: PostgresTargetConfig | null;
   created_at_unix_ms: number;
@@ -307,6 +310,7 @@ export interface CreateTarget {
   description?: string;
   address?: string;
   username?: string;
+  allow_insecure_protocol?: boolean;
   credential_reference_id?: string;
   postgres?: PostgresTargetConfig;
 }
@@ -362,6 +366,7 @@ export interface CredentialSlot {
   environment_variable: string | null;
 }
 export interface CommandConfig {
+  terminal_id?: string | null;
   database?: DatabaseConfig | null;
   git?: GitConfig | null;
   http?: HttpConfig | null;

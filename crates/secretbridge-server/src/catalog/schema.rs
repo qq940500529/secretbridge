@@ -45,11 +45,12 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              CREATE TABLE targets (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-                kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host')),
+                kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host', 'telnet_host')),
                 environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
                 description TEXT CHECK (description IS NULL OR length(description) <= 240),
                 address TEXT CHECK (address IS NULL OR length(address) <= 2048),
                 username TEXT CHECK (username IS NULL OR length(username) <= 256),
+                allow_insecure_protocol INTEGER NOT NULL DEFAULT 0 CHECK (allow_insecure_protocol IN (0, 1)),
                 credential_reference_id TEXT REFERENCES credential_references(id) ON DELETE RESTRICT,
                 postgres_host TEXT,
                 postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
@@ -288,21 +289,33 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 "username",
                 "TEXT CHECK (username IS NULL OR length(username) <= 256)",
             ),
-            (
-                "targets",
-                "address",
-                "TEXT CHECK (address IS NULL OR length(address) <= 2048)",
-            ),
-            (
-                "targets",
-                "username",
-                "TEXT CHECK (username IS NULL OR length(username) <= 256)",
-            ),
         ] {
             if !column_exists(connection, table, column)? {
                 write!(
                     &mut migration,
                     "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+                )
+                .expect("writing a schema migration to String cannot fail");
+            }
+        }
+        for (column, definition) in [
+            (
+                "address",
+                "TEXT CHECK (address IS NULL OR length(address) <= 2048)",
+            ),
+            (
+                "username",
+                "TEXT CHECK (username IS NULL OR length(username) <= 256)",
+            ),
+            (
+                "allow_insecure_protocol",
+                "INTEGER NOT NULL DEFAULT 0 CHECK (allow_insecure_protocol IN (0, 1))",
+            ),
+        ] {
+            if !column_exists(connection, "targets", column)? {
+                write!(
+                    &mut migration,
+                    "ALTER TABLE targets ADD COLUMN {column} {definition};"
                 )
                 .expect("writing a schema migration to String cannot fail");
             }
@@ -316,8 +329,51 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              INSERT OR IGNORE INTO browser_auth_settings(singleton, mode, updated_at_unix_ms)
                 VALUES(1, 'pairing_link', 0);",
         );
-        migration.push_str("PRAGMA user_version = 17; COMMIT;");
+        migration.push_str(
+            "CREATE TABLE targets_v17 (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
+                kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host', 'telnet_host')),
+                environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
+                description TEXT CHECK (description IS NULL OR length(description) <= 240),
+                address TEXT CHECK (address IS NULL OR length(address) <= 2048),
+                username TEXT CHECK (username IS NULL OR length(username) <= 256),
+                allow_insecure_protocol INTEGER NOT NULL DEFAULT 0 CHECK (allow_insecure_protocol IN (0, 1)),
+                credential_reference_id TEXT REFERENCES credential_references(id) ON DELETE RESTRICT,
+                postgres_host TEXT,
+                postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
+                postgres_database TEXT,
+                postgres_username TEXT,
+                postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full'),
+                created_at_unix_ms INTEGER NOT NULL,
+                updated_at_unix_ms INTEGER NOT NULL,
+                version INTEGER NOT NULL CHECK (version >= 1)
+             );
+             INSERT INTO targets_v17
+                (id, name, kind, environment, description, address, username,
+                 allow_insecure_protocol, credential_reference_id, postgres_host,
+                 postgres_port, postgres_database, postgres_username, postgres_tls_mode,
+                 created_at_unix_ms, updated_at_unix_ms, version)
+             SELECT id, name, kind, environment, description, address, username,
+                    allow_insecure_protocol, credential_reference_id, postgres_host,
+                    postgres_port, postgres_database, postgres_username, postgres_tls_mode,
+                    created_at_unix_ms, updated_at_unix_ms, version
+               FROM targets;
+             DROP TABLE targets;
+             ALTER TABLE targets_v17 RENAME TO targets;
+             CREATE INDEX targets_credential_reference_idx ON targets(credential_reference_id);
+             PRAGMA user_version = 17; COMMIT;",
+        );
+        connection.pragma_update(None, "foreign_keys", false)?;
         connection.execute_batch(&migration)?;
+        connection.pragma_update(None, "foreign_keys", true)?;
+        if connection
+            .query_row("PRAGMA foreign_key_check", [], |row| row.get::<_, String>(0))
+            .optional()?
+            .is_some()
+        {
+            return Err(CatalogOpenError::Database(rusqlite::Error::InvalidQuery));
+        }
     }
     Ok(())
 }

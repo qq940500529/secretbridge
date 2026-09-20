@@ -195,8 +195,22 @@ impl McpBackend {
             Self::Local(state) => {
                 let target_id = parse_uuid(&params.connection_id)?;
                 let catalog = state.catalog.clone();
+                let target = catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.get_target(target_id)
+                })
+                .await?;
+                if target.kind == crate::catalog::TargetKind::TelnetHost
+                    && !target.allow_insecure_protocol
+                {
+                    return Err(ErrorData::invalid_params(
+                        "telnet_not_explicitly_allowed",
+                        None,
+                    ));
+                }
                 let template = crate::catalog::CreateActionTemplate {
                     command: Some(crate::command::CommandConfig {
+                        terminal_id: Some(parse_uuid(&params.terminal_id)?),
                         database: None,
                         http: None,
                         ssh: None,
@@ -1620,6 +1634,8 @@ struct RequestCommandParams {
     name: String,
     #[schemars(description = "Connection UUID returned by secretbridge_list_catalog")]
     connection_id: String,
+    #[schemars(description = "Running secure-terminal UUID returned by secretbridge_terminal_list")]
+    terminal_id: String,
     #[schemars(description = "Absolute executable path; never a shell command string")]
     program: String,
     #[schemars(description = "Existing absolute working directory")]
@@ -1731,6 +1747,7 @@ struct ConnectionSummary {
     address: Option<String>,
     username: Option<String>,
     credential_id: Option<String>,
+    insecure_protocol_explicitly_allowed: bool,
     version: u64,
 }
 
@@ -1743,6 +1760,7 @@ impl From<crate::catalog::Target> for ConnectionSummary {
                 crate::catalog::TargetKind::Database => "database",
                 crate::catalog::TargetKind::HttpService => "http_service",
                 crate::catalog::TargetKind::SshHost => "ssh_host",
+                crate::catalog::TargetKind::TelnetHost => "telnet_host",
             }
             .to_owned(),
             environment: match value.environment {
@@ -1754,6 +1772,7 @@ impl From<crate::catalog::Target> for ConnectionSummary {
             address: value.address,
             username: value.username,
             credential_id: value.credential_reference_id.map(|id| id.to_string()),
+            insecure_protocol_explicitly_allowed: value.allow_insecure_protocol,
             version: value.version,
         }
     }

@@ -112,11 +112,13 @@ const targetKindLabels: Record<Language, Record<TargetKind, string>> = {
     database: "数据库",
     http_service: "HTTP 服务",
     ssh_host: "SSH 主机",
+    telnet_host: "Telnet 旧设备",
   },
   en: {
     database: "Database",
     http_service: "HTTP service",
     ssh_host: "SSH host",
+    telnet_host: "Legacy Telnet device",
   },
 };
 
@@ -614,6 +616,9 @@ export function TargetsView({
           postgresUsername: "登录账号",
           postgresTls: "TLS 校验",
           verifyFull: "强制加密并验证证书与主机名",
+          telnetWarning:
+            "Telnet 会以明文传输账号、密码和命令。仅在无法升级的隔离旧设备上显式启用，并优先迁移到 SSH。",
+          allowTelnet: "我确认允许此连接使用不加密的 Telnet",
         }
       : {
           title: "Connections",
@@ -642,6 +647,10 @@ export function TargetsView({
           postgresUsername: "Login user",
           postgresTls: "TLS verification",
           verifyFull: "Require encryption and verify certificate + hostname",
+          telnetWarning:
+            "Telnet sends accounts, passwords, and commands in plaintext. Enable it only for an isolated legacy device that cannot be upgraded, and migrate to SSH.",
+          allowTelnet:
+            "I explicitly allow unencrypted Telnet for this connection",
         };
   const [items, setItems] = useState<Target[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -652,6 +661,7 @@ export function TargetsView({
   const [description, setDescription] = useState("");
   const [address, setAddress] = useState("");
   const [username, setUsername] = useState("");
+  const [allowInsecureProtocol, setAllowInsecureProtocol] = useState(false);
   const [credentialId, setCredentialId] = useState("");
   const [postgresHost, setPostgresHost] = useState("");
   const [postgresPort, setPostgresPort] = useState("5432");
@@ -704,6 +714,9 @@ export function TargetsView({
         environment,
         ...(address.trim() ? { address } : {}),
         ...(username.trim() ? { username } : {}),
+        ...(kind === "telnet_host"
+          ? { allow_insecure_protocol: allowInsecureProtocol }
+          : {}),
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
         ...(kind === "database" && postgresHost.trim()
@@ -782,6 +795,7 @@ export function TargetsView({
     setDescription(item.description ?? "");
     setAddress(item.address ?? "");
     setUsername(item.username ?? "");
+    setAllowInsecureProtocol(item.allow_insecure_protocol);
     setCredentialId(item.credential_reference_id ?? "");
     setPostgresHost(item.postgres?.host ?? "");
     setPostgresPort(String(item.postgres?.port ?? 5432));
@@ -800,6 +814,7 @@ export function TargetsView({
     setDescription("");
     setAddress("");
     setUsername("");
+    setAllowInsecureProtocol(false);
     setCredentialId("");
     setPostgresHost("");
     setPostgresPort("5432");
@@ -916,6 +931,22 @@ export function TargetsView({
             ))}
           </select>
         </Field>
+        {kind === "telnet_host" && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+            <p className="mt-0 leading-6">{text.telnetWarning}</p>
+            <label className="flex items-start gap-3 font-semibold">
+              <input
+                type="checkbox"
+                checked={allowInsecureProtocol}
+                onChange={(event) =>
+                  setAllowInsecureProtocol(event.target.checked)
+                }
+                className="mt-1"
+              />
+              <span>{text.allowTelnet}</span>
+            </label>
+          </div>
+        )}
         {kind === "database" && (
           <div className="space-y-4 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
             <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
@@ -1020,6 +1051,17 @@ export function TargetsView({
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                     {environmentLabels[language][item.environment]}
                   </span>
+                  {item.kind === "telnet_host" && (
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                      {item.allow_insecure_protocol
+                        ? language === "zh-CN"
+                          ? "已允许明文协议"
+                          : "Plaintext explicitly allowed"
+                        : language === "zh-CN"
+                          ? "默认禁用"
+                          : "Disabled by default"}
+                    </span>
+                  )}
                   <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
                     {common.version} {item.version}
                   </span>

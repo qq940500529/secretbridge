@@ -21,6 +21,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
+use zeroize::Zeroizing;
+
+use crate::redaction::Redactor;
 
 const MAX_TERMINALS: usize = 8;
 const BACKLOG_LIMIT: usize = 64 * 1024;
@@ -64,6 +67,7 @@ struct TerminalSession {
     writer: Mutex<Box<dyn Write + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<OutputBuffer>>,
+    redactor: Arc<Mutex<Redactor>>,
     input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
     changes: broadcast::Sender<()>,
@@ -281,6 +285,10 @@ impl TerminalManager {
         if !request.environment.contains_key("TERM") {
             command.env("TERM", "xterm-256color");
         }
+        #[cfg(unix)]
+        if !request.environment.contains_key("HISTFILE") {
+            command.env("HISTFILE", "/dev/null");
+        }
         Ok(PreparedTerminalLaunch {
             id,
             name,
@@ -319,6 +327,59 @@ impl TerminalManager {
 
     pub fn change_notifier(&self) -> broadcast::Sender<()> {
         self.changes.clone()
+    }
+
+    pub(crate) fn add_redaction_secrets(
+        &self,
+        id: Uuid,
+        secrets: &[Zeroizing<String>],
+    ) -> Result<(), TerminalError> {
+        let session = self
+            .read_sessions()
+            .get(&id)
+            .cloned()
+            .ok_or(TerminalError::NotFound)?;
+        session
+            .redactor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(secrets);
+        Ok(())
+    }
+
+    pub(crate) fn broker_channel(
+        &self,
+        id: Uuid,
+    ) -> Result<(TerminalShell, broadcast::Receiver<TerminalEvent>), TerminalError> {
+        let session = self
+            .read_sessions()
+            .get(&id)
+            .cloned()
+            .ok_or(TerminalError::NotFound)?;
+        if session.status() != TerminalStatus::Running {
+            return Err(TerminalError::Closed);
+        }
+        Ok((session.shell, session.events.subscribe()))
+    }
+
+    pub(crate) fn broker_write(&self, id: Uuid, data: &[u8]) -> Result<(), TerminalError> {
+        if data.is_empty() || data.len() > 65_536 {
+            return Err(TerminalError::InvalidInput);
+        }
+        let session = self
+            .read_sessions()
+            .get(&id)
+            .cloned()
+            .ok_or(TerminalError::NotFound)?;
+        if session.status() != TerminalStatus::Running {
+            return Err(TerminalError::Closed);
+        }
+        let mut writer = session
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        writer.write_all(data).map_err(|_| TerminalError::Closed)?;
+        writer.flush().map_err(|_| TerminalError::Closed)
     }
 
     pub fn attach(
@@ -418,6 +479,7 @@ fn spawn_terminal(
     let status = Arc::new(AtomicU8::new(STATUS_RUNNING));
     let exit_code = Arc::new(Mutex::new(None));
     let output = Arc::new(Mutex::new(OutputBuffer::new()));
+    let redactor = Arc::new(Mutex::new(Redactor::new(&[])));
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let (output_activity, output_activity_rx) = std::sync::mpsc::channel();
     let session = Arc::new(TerminalSession {
@@ -434,11 +496,19 @@ fn spawn_terminal(
         writer: Mutex::new(writer),
         killer: Mutex::new(killer),
         output: Arc::clone(&output),
+        redactor: Arc::clone(&redactor),
         input_lease: Mutex::new(None),
         events: events.clone(),
         changes: changes.clone(),
     });
-    spawn_terminal_reader(launch.id, reader, output, events.clone(), output_activity)?;
+    spawn_terminal_reader(
+        launch.id,
+        reader,
+        output,
+        redactor,
+        events.clone(),
+        output_activity,
+    )?;
     spawn_terminal_waiter(
         launch.id,
         child,
@@ -455,6 +525,7 @@ fn spawn_terminal_reader(
     id: Uuid,
     mut reader: Box<dyn Read + Send>,
     output: Arc<Mutex<OutputBuffer>>,
+    redactor: Arc<Mutex<Redactor>>,
     events: broadcast::Sender<TerminalEvent>,
     output_activity: std::sync::mpsc::Sender<()>,
 ) -> Result<(), TerminalError> {
@@ -465,7 +536,14 @@ fn spawn_terminal_reader(
             loop {
                 match reader.read(&mut buffer) {
                     Ok(count) if count > 0 => {
-                        let chunk: Arc<[u8]> = Arc::from(&buffer[..count]);
+                        let filtered = redactor
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .feed(&buffer[..count], false);
+                        if filtered.is_empty() {
+                            continue;
+                        }
+                        let chunk: Arc<[u8]> = Arc::from(filtered);
                         let mut output = output
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -477,7 +555,25 @@ fn spawn_terminal_reader(
                         });
                         let _ = output_activity.send(());
                     }
-                    Ok(_) | Err(_) => break,
+                    Ok(_) | Err(_) => {
+                        let filtered = redactor
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .feed(&[], true);
+                        if !filtered.is_empty() {
+                            let chunk: Arc<[u8]> = Arc::from(filtered);
+                            let mut output = output
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let cursor = output.append(&chunk);
+                            let _ = events.send(TerminalEvent::Output {
+                                cursor,
+                                data: chunk,
+                            });
+                            let _ = output_activity.send(());
+                        }
+                        break;
+                    }
                 }
             }
         })

@@ -65,6 +65,8 @@ pub(crate) struct PortableConnection {
     pub address: Option<String>,
     #[serde(default)]
     pub username: Option<String>,
+    #[serde(default)]
+    pub allow_insecure_protocol: bool,
     pub credential_reference_id: Option<Uuid>,
     pub postgres: Option<PostgresTargetConfig>,
 }
@@ -175,6 +177,7 @@ impl Catalog {
                     description: item.description,
                     address: item.address,
                     username: item.username,
+                    allow_insecure_protocol: item.allow_insecure_protocol,
                     credential_reference_id: item.credential_reference_id,
                     postgres: item.postgres,
                 })
@@ -247,7 +250,7 @@ impl Catalog {
                 .credential_reference_id
                 .map(|id| credentials.get(&id).copied().ok_or(CatalogError::Invalid))
                 .transpose()?;
-            let request: CreateTarget = serde_json::from_value(serde_json::json!({"name":item.name,"kind":item.kind,"environment":item.environment,"description":item.description,"address":item.address,"username":item.username,"credential_reference_id":credential,"postgres":item.postgres})).map_err(|_| CatalogError::Invalid)?;
+            let request: CreateTarget = serde_json::from_value(serde_json::json!({"name":item.name,"kind":item.kind,"environment":item.environment,"description":item.description,"address":item.address,"username":item.username,"allow_insecure_protocol":item.allow_insecure_protocol,"credential_reference_id":credential,"postgres":item.postgres})).map_err(|_| CatalogError::Invalid)?;
             targets.insert(item.id, staged.create_target(&request)?.id);
         }
         for item in &bundle.templates {

@@ -35,20 +35,20 @@ pub(super) fn credential_from_row(
 }
 
 pub(super) fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
-    let credential_id = row.get::<_, Option<String>>(7)?;
-    let postgres_host = row.get::<_, Option<String>>(8)?;
+    let credential_id = row.get::<_, Option<String>>(8)?;
+    let postgres_host = row.get::<_, Option<String>>(9)?;
     let postgres = postgres_host
         .map(|host| {
             let port = row
-                .get::<_, i64>(9)?
+                .get::<_, i64>(10)?
                 .try_into()
                 .map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok::<PostgresTargetConfig, rusqlite::Error>(PostgresTargetConfig {
                 host,
                 port,
-                database: row.get(10)?,
-                username: row.get(11)?,
-                tls_mode: PostgresTlsMode::from_storage(&row.get::<_, String>(12)?)?,
+                database: row.get(11)?,
+                username: row.get(12)?,
+                tls_mode: PostgresTlsMode::from_storage(&row.get::<_, String>(13)?)?,
             })
         })
         .transpose()?;
@@ -60,12 +60,13 @@ pub(super) fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Targe
         description: row.get(4)?,
         address: row.get(5)?,
         username: row.get(6)?,
+        allow_insecure_protocol: row.get(7)?,
         credential_reference_id: credential_id
             .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
             .transpose()?,
         postgres,
-        created_at_unix_ms: u64_from_row(row, 13)?,
-        updated_at_unix_ms: u64_from_row(row, 14)?,
-        version: u64_from_row(row, 15)?,
+        created_at_unix_ms: u64_from_row(row, 14)?,
+        updated_at_unix_ms: u64_from_row(row, 15)?,
+        version: u64_from_row(row, 16)?,
     })
 }

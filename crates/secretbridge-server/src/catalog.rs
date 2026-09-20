@@ -193,6 +193,7 @@ pub enum TargetKind {
     Database,
     HttpService,
     SshHost,
+    TelnetHost,
 }
 
 impl TargetKind {
@@ -201,6 +202,7 @@ impl TargetKind {
             Self::Database => "database",
             Self::HttpService => "http_service",
             Self::SshHost => "ssh_host",
+            Self::TelnetHost => "telnet_host",
         }
     }
 
@@ -209,6 +211,7 @@ impl TargetKind {
             "database" => Ok(Self::Database),
             "http_service" => Ok(Self::HttpService),
             "ssh_host" => Ok(Self::SshHost),
+            "telnet_host" => Ok(Self::TelnetHost),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -250,6 +253,7 @@ pub struct Target {
     pub description: Option<String>,
     pub address: Option<String>,
     pub username: Option<String>,
+    pub allow_insecure_protocol: bool,
     pub credential_reference_id: Option<Uuid>,
     pub postgres: Option<PostgresTargetConfig>,
     pub created_at_unix_ms: u64,
@@ -268,6 +272,8 @@ pub struct CreateTarget {
     pub(crate) address: Option<String>,
     #[serde(default)]
     pub(crate) username: Option<String>,
+    #[serde(default)]
+    pub(crate) allow_insecure_protocol: bool,
     pub(crate) credential_reference_id: Option<Uuid>,
     pub(crate) postgres: Option<PostgresTargetConfig>,
 }
@@ -283,6 +289,8 @@ pub struct UpdateTarget {
     address: Option<String>,
     #[serde(default)]
     username: Option<String>,
+    #[serde(default)]
+    allow_insecure_protocol: bool,
     credential_reference_id: Option<Uuid>,
     postgres: Option<PostgresTargetConfig>,
     expected_version: u64,
@@ -968,6 +976,7 @@ impl Catalog {
         let mut statement = connection
             .prepare(
                 "SELECT id, name, kind, environment, description, address, username,
+                        allow_insecure_protocol,
                         credential_reference_id, postgres_host, postgres_port,
                         postgres_database, postgres_username, postgres_tls_mode,
                         created_at_unix_ms, updated_at_unix_ms, version
@@ -982,12 +991,19 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)
     }
 
+    pub fn get_target(&self, id: Uuid) -> Result<Target, CatalogError> {
+        target_by_id(&self.lock(), id)?.ok_or(CatalogError::NotFound)
+    }
+
     pub fn create_target(&self, request: &CreateTarget) -> Result<Target, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
         let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
+        if request.allow_insecure_protocol && request.kind != TargetKind::TelnetHost {
+            return Err(CatalogError::Invalid);
+        }
         let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_capacity(&connection, "targets", MAX_TARGETS)?;
@@ -997,11 +1013,11 @@ impl Catalog {
         connection
             .execute(
                 "INSERT INTO targets
-                    (id, name, kind, environment, description, address, username,
+                    (id, name, kind, environment, description, address, username, allow_insecure_protocol,
                      credential_reference_id, postgres_host, postgres_port,
                      postgres_database, postgres_username, postgres_tls_mode,
                      created_at_unix_ms, updated_at_unix_ms, version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, 1)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, 1)",
                 params![
                     id.to_string(),
                     name,
@@ -1010,6 +1026,7 @@ impl Catalog {
                     description,
                     address,
                     username,
+                    request.allow_insecure_protocol,
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
@@ -1031,6 +1048,9 @@ impl Catalog {
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let address = normalize_optional(request.address.as_deref(), MAX_ADDRESS_CHARS)?;
         let username = normalize_optional(request.username.as_deref(), MAX_USERNAME_CHARS)?;
+        if request.allow_insecure_protocol && request.kind != TargetKind::TelnetHost {
+            return Err(CatalogError::Invalid);
+        }
         let postgres = normalize_postgres_config(request.kind, request.postgres.as_ref())?;
         let connection = self.lock();
         ensure_credential_exists(&connection, request.credential_reference_id)?;
@@ -1039,12 +1059,12 @@ impl Catalog {
                 "UPDATE targets
                     SET name = ?1, kind = ?2, environment = ?3,
                         description = ?4, address = ?5, username = ?6,
-                        credential_reference_id = ?7,
-                        postgres_host = ?8, postgres_port = ?9,
-                        postgres_database = ?10, postgres_username = ?11,
-                        postgres_tls_mode = ?12,
-                        updated_at_unix_ms = ?13, version = version + 1
-                  WHERE id = ?14 AND version = ?15",
+                        allow_insecure_protocol = ?7, credential_reference_id = ?8,
+                        postgres_host = ?9, postgres_port = ?10,
+                        postgres_database = ?11, postgres_username = ?12,
+                        postgres_tls_mode = ?13,
+                        updated_at_unix_ms = ?14, version = version + 1
+                  WHERE id = ?15 AND version = ?16",
                 params![
                     name,
                     request.kind.as_storage(),
@@ -1052,6 +1072,7 @@ impl Catalog {
                     description,
                     address,
                     username,
+                    request.allow_insecure_protocol,
                     request
                         .credential_reference_id
                         .map(|value| value.to_string()),
@@ -2070,7 +2091,7 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
     connection
         .query_row(
             "SELECT id, name, kind, environment, description, address, username,
-                    credential_reference_id, postgres_host, postgres_port,
+                    allow_insecure_protocol, credential_reference_id, postgres_host, postgres_port,
                     postgres_database, postgres_username, postgres_tls_mode,
                     created_at_unix_ms, updated_at_unix_ms, version
                FROM targets WHERE id = ?1",
