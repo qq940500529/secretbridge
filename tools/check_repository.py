@@ -73,6 +73,7 @@ TEXT_SUFFIXES = {
 SKIP_PARTS = {".git", ".ruff_cache", "__pycache__", "dist", "node_modules", "target"}
 MAX_RUST_SOURCE_LINES = 2_500
 MAX_MARKDOWN_LINES = 240
+PUBLIC_REPOSITORY_URL = "https://github.com/qq940500529/secretbridge"
 PATTERNS = {
     "private-key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "github-token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})"),
@@ -195,6 +196,25 @@ def check_repository(root: Path) -> list[str]:
     readme = root / "README.md"
     if readme.exists() and "AGPL-3.0-or-later" not in readme.read_text(encoding="utf-8"):
         errors.append("README.md: license-identifier-missing")
+    errors.extend(check_ai_deployment_entrypoints(root))
+    return errors
+
+
+def check_ai_deployment_entrypoints(root: Path) -> list[str]:
+    """Keep the public, checkout-independent deployment entry points discoverable."""
+    errors = []
+    contracts = {
+        "README.md": (PUBLIC_REPOSITORY_URL, "You may start from any directory"),
+        "README.zh-CN.md": (PUBLIC_REPOSITORY_URL, "任意目录"),
+        "docs/AI辅助部署.md": (PUBLIC_REPOSITORY_URL, "不需要预先克隆仓库"),
+    }
+    for name, required_text in contracts.items():
+        path = root / name
+        if not path.is_file():
+            continue
+        content = path.read_text(encoding="utf-8")
+        if any(text not in content for text in required_text):
+            errors.append(f"{name}: ai-deployment-entrypoint-missing")
     return errors
 
 
