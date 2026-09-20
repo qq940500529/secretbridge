@@ -745,8 +745,7 @@ mod tests {
     async fn release_removal_waits_for_a_transient_windows_file_lock() {
         use std::os::windows::fs::OpenOptionsExt;
 
-        let release =
-            std::env::temp_dir().join(format!("secretbridge-release-{}", Uuid::new_v4()));
+        let release = std::env::temp_dir().join(format!("secretbridge-release-{}", Uuid::new_v4()));
         fs::create_dir(&release).unwrap();
         let binary = release.join("secretbridge.exe");
         fs::write(&binary, b"synthetic").unwrap();
