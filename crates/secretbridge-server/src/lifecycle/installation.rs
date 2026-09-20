@@ -531,7 +531,7 @@ pub(super) async fn uninstall(remove_configuration: bool) -> Result<()> {
             }
             let release = safe_path(&root, &format!("releases/{}", name.to_string_lossy()))?;
             if let Ok(manifest) = manifest(&release, false) {
-                remove_release_files(&release, &manifest)?;
+                remove_release_files_with_retry(&release, &manifest).await?;
             }
         }
     }
@@ -615,6 +615,19 @@ fn remove_release_files(release: &Path, manifest: &Manifest) -> Result<()> {
     let _ = fs::remove_file(release.join("secretbridge-package.json"));
     let _ = fs::remove_dir(release);
     Ok(())
+}
+
+async fn remove_release_files_with_retry(release: &Path, manifest: &Manifest) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match remove_release_files(release, manifest) {
+            Ok(()) => return Ok(()),
+            Err("uninstall_file_in_use") if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -725,5 +738,49 @@ mod tests {
         fs::remove_file(data.join("user-note.txt")).unwrap();
         fs::remove_file(data.join("secretbridge.pre-migration-v15-user.sqlite3")).unwrap();
         fs::remove_dir(data).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn release_removal_waits_for_a_transient_windows_file_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let release =
+            std::env::temp_dir().join(format!("secretbridge-release-{}", Uuid::new_v4()));
+        fs::create_dir(&release).unwrap();
+        let binary = release.join("secretbridge.exe");
+        fs::write(&binary, b"synthetic").unwrap();
+        let manifest = Manifest {
+            format: "secretbridge-package".into(),
+            format_version: 1,
+            version: env!("CARGO_PKG_VERSION").into(),
+            platform: env::consts::OS.into(),
+            architecture: env::consts::ARCH.into(),
+            schema_version: secretbridge_core::SCHEMA_VERSION,
+            files: vec![PackageFile {
+                path: "secretbridge.exe".into(),
+                bytes: 9,
+                sha256: "synthetic".into(),
+            }],
+        };
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+        let binary_for_thread = binary.clone();
+        let handle = std::thread::spawn(move || {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(binary_for_thread)
+                .unwrap();
+            ready_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(file);
+        });
+        ready_rx.recv().unwrap();
+
+        remove_release_files_with_retry(&release, &manifest)
+            .await
+            .unwrap();
+        handle.join().unwrap();
+        assert!(!release.exists());
     }
 }
