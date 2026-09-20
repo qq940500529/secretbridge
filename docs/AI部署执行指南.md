@@ -4,7 +4,7 @@ This file is an execution contract for local automation agents. User-facing cont
 
 ## Scope
 
-Install, start and inspect SecretBridge on the current user account, using the latest suitable GitHub Release when available and the latest `main` source otherwise. Never publish, merge, create a release, modify network security, or delete pre-existing user data unless the user separately requests that action.
+Install, start and inspect SecretBridge on the current user account, using the latest suitable GitHub Release when available and the latest `main` source otherwise. Connect the installed stdio bridge to the user's MCP-capable AI host and verify a read-only tool when that host can be identified safely. Never publish, merge, create a release, modify network security, or delete pre-existing user data unless the user separately requests that action.
 
 ## Non-negotiable rules
 
@@ -54,24 +54,47 @@ Skip this phase when installing a verified published package. For a source fallb
 - Extract to a new temporary directory; reject path traversal and symlinks outside it.
 - Run the packaged executable's `verify-package` before `install`.
 - Install only to the user-approved absolute directory.
+- Capture the absolute `binary` value from the successful `install` JSON response. Do not use a temporary extraction path or a source-tree `target` binary for persistent MCP configuration.
 - Check `status`, loopback-only listening, `open`, browser pairing, stop/start and the documented login-start descriptor.
 - Do not claim desktop, credential-store, reboot or accessibility acceptance unless actually observed on that platform.
 
 For an ordinary deployment, success is a healthy `status` response and a loopback-only listener after start. Browser, stop/start, login startup and lifecycle checks are maintainer acceptance unless the user explicitly requests them.
 
-### 5. Upgrade or rollback
+### 5. Connect the user's MCP host
+
+- Identify the MCP-capable AI client currently in use. If that cannot be established from the task context or an available client surface, ask the user once which host to configure.
+- Read that client's current official configuration behavior before editing. Never guess a configuration path, overwrite unrelated servers or silently convert an unknown schema.
+- Show the exact target, backup and minimal diff, then obtain user approval before changing client configuration outside the deployment workspace.
+- Configure a server named `secretbridge` with the captured absolute installed `binary` as `command` and `["--mcp-stdio"]` as `args`. Add `SECRETBRIDGE_DATA_DIR` only when the broker was installed with an explicit custom absolute data directory, and use exactly the same value.
+- Never store a credential, browser pairing URL, page token or internal bridge token in the MCP host configuration. Do not read or copy `mcp-bridge.json`.
+- Reload the client, require the `secretbridge_*` tools to appear, and call the read-only `secretbridge_terminal_capabilities` tool. This verifies stdio and local IPC without creating a credential or an approval.
+- If the host cannot be changed safely or does not support MCP, make no configuration change. Provide a paste-ready equivalent of the following generic shape plus host-specific reload instructions, and report it as the single remaining manual step:
+
+```json
+{
+  "mcpServers": {
+    "secretbridge": {
+      "command": "/absolute/path/from-install-result/secretbridge-server",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}
+```
+
+### 6. Upgrade or rollback
 
 - Never treat rollback as a database downgrade.
 - This unreleased beta accepts only the current schema. Do not migrate or reuse an older unpublished beta database; use a new data directory after preserving the old directory for manual recovery.
 - On activation failure, verify the old pointer and old process were restored. If recovery also fails, stop and report the fixed public error code.
+- After a successful upgrade or rollback, update the MCP `command` to the absolute `binary` returned by that command, reload the host and repeat the read-only capability call.
 
-### 6. Cleanup and report
+### 7. Cleanup and report
 
 - Remove only temporary directories, disposable services and synthetic credentials created by this run.
 - Stop test processes and confirm no test listener remains.
 - State whether the installed application and user data were intentionally retained.
-- Report commit, package version, platform, checks passed/failed/limited, rollback path and exact uninstall command. Never include secret values or identity-bearing machine details.
+- Report commit, package version, platform, checks passed/failed/limited, MCP host and read-only verification state, rollback path and exact uninstall command. Never include secret values or identity-bearing machine details.
 
 ## Success condition
 
-For ordinary deployment, success means the selected package or source build was verified, installation completed, and the broker reports healthy status while listening only on loopback. Maintainer acceptance additionally requires all applicable quality gates, package verification, stop/start and cleanup checks. Anything not executed must not be reported as passed.
+For ordinary deployment, success means the selected package or source build was verified, installation completed, the broker reports healthy status while listening only on loopback, and the user's MCP host passed tool discovery plus the read-only capability call. When client configuration cannot be completed safely, the deployment report must instead contain one paste-ready configuration and identify that client reload and verification are the only remaining manual steps. Maintainer acceptance additionally requires all applicable quality gates, package verification, stop/start and cleanup checks. Anything not executed must not be reported as passed.

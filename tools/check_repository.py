@@ -204,9 +204,28 @@ def check_ai_deployment_entrypoints(root: Path) -> list[str]:
     """Keep the public, checkout-independent deployment entry points discoverable."""
     errors = []
     contracts = {
-        "README.md": (PUBLIC_REPOSITORY_URL, "You may start from any directory"),
-        "README.zh-CN.md": (PUBLIC_REPOSITORY_URL, "任意目录"),
-        "docs/AI辅助部署.md": (PUBLIC_REPOSITORY_URL, "不需要预先克隆仓库"),
+        "README.md": (
+            PUBLIC_REPOSITORY_URL,
+            "You may start from any directory",
+            "--mcp-stdio",
+            "secretbridge_terminal_capabilities",
+        ),
+        "README.zh-CN.md": (
+            PUBLIC_REPOSITORY_URL,
+            "任意目录",
+            "--mcp-stdio",
+            "secretbridge_terminal_capabilities",
+        ),
+        "docs/AI辅助部署.md": (
+            PUBLIC_REPOSITORY_URL,
+            "不需要预先克隆仓库",
+            "--mcp-stdio",
+            "secretbridge_terminal_capabilities",
+        ),
+        "docs/AI部署执行指南.md": (
+            "--mcp-stdio",
+            "secretbridge_terminal_capabilities",
+        ),
     }
     for name, required_text in contracts.items():
         path = root / name

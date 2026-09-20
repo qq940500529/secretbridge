@@ -391,7 +391,7 @@ pub(super) async fn install(package: &Path) -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::json!({"installed":true,"version":verified.version,"replayed":true})
+            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"replayed":true})
         );
         return Ok(());
     }
@@ -487,7 +487,7 @@ pub(super) async fn rollback() -> Result<()> {
     activate(&root, &old, &mut pending, &release, &verified).await?;
     println!(
         "{}",
-        serde_json::json!({"rolled_back":true,"version":verified.version,"data_retained":true})
+        serde_json::json!({"rolled_back":true,"version":verified.version,"binary":release.join(binary_name()),"data_retained":true})
     );
     Ok(())
 }
