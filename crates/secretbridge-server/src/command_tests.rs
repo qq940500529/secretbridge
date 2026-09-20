@@ -109,15 +109,18 @@ pub(crate) fn configure(state: &AppState, mode: &str, timeout: u64) -> (Uuid, Uu
 }
 
 async fn wait(state: &AppState, id: Uuid) -> OutputPage {
-    tokio::time::timeout(Duration::from_secs(COMMAND_COMPLETION_WAIT_SECONDS), async {
-        loop {
-            let page = state.catalog.output(id, 0).unwrap();
-            if !matches!(page.state, RunState::Queued | RunState::Running) {
-                return page;
+    tokio::time::timeout(
+        Duration::from_secs(COMMAND_COMPLETION_WAIT_SECONDS),
+        async {
+            loop {
+                let page = state.catalog.output(id, 0).unwrap();
+                if !matches!(page.state, RunState::Queued | RunState::Running) {
+                    return page;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
             }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
+        },
+    )
     .await
     .expect("command reaches a terminal state")
 }
@@ -126,11 +129,7 @@ async fn wait(state: &AppState, id: Uuid) -> OutputPage {
 async fn real_program_uses_all_injections_without_persisting_plaintext() {
     for mode in ["stdin", "environment", "argument", "file"] {
         let (state, _) = AppState::new([]);
-        let (approval, credential) = configure(
-            &state,
-            mode,
-            SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
-        );
+        let (approval, credential) = configure(&state, mode, SUCCESSFUL_COMMAND_TIMEOUT_SECONDS);
         assert!(matches!(
             state.catalog.delete_credential_reference(credential),
             Err(CatalogError::ResourceInUse)
@@ -412,11 +411,7 @@ fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
 #[tokio::test]
 async fn parameterized_commands_freeze_values_and_do_not_expand_them_again() {
     let (state, _) = AppState::new([]);
-    let (_, credential) = configure(
-        &state,
-        "argument",
-        SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
-    );
+    let (_, credential) = configure(&state, "argument", SUCCESSFUL_COMMAND_TIMEOUT_SECONDS);
     let template = state.catalog.list_action_templates().unwrap().remove(0);
     let mut config = fixture("argument", credential);
     config.arguments.push("{{param:company}}".into());
@@ -593,11 +588,7 @@ async fn web_parameter_approval_and_time_window_use_the_real_executor() {
     use axum::http::StatusCode;
     use serde_json::json;
     let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
-    let (_, credential) = configure(
-        &state,
-        "argument",
-        SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
-    );
+    let (_, credential) = configure(&state, "argument", SUCCESSFUL_COMMAND_TIMEOUT_SECONDS);
     let template = state.catalog.list_action_templates().unwrap().remove(0);
     let mut config = fixture("argument", credential);
     config.arguments.push("{{param:company}}".into());
