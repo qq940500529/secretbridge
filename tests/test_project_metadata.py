@@ -17,7 +17,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ProjectMetadataTests(unittest.TestCase):
-    def fixture(self, root: Path, *, web_version: str = "1.2.3", schema: int = 16) -> None:
+    def fixture(
+        self,
+        root: Path,
+        *,
+        web_version: str = "1.2.3",
+        node_types: str = "24.13.6",
+        schema: int = 16,
+    ) -> None:
         (root / "web").mkdir()
         (root / "tools").mkdir()
         (root / "docs").mkdir()
@@ -30,9 +37,18 @@ class ProjectMetadataTests(unittest.TestCase):
             '[toolchain]\nchannel = "1.98.0"\n', encoding="utf-8"
         )
         (root / ".node-version").write_text("24.21.0\n", encoding="utf-8")
-        (root / "package.json").write_text(json.dumps({"version": "1.2.3"}), encoding="utf-8")
+        (root / "package.json").write_text(
+            json.dumps({"version": "1.2.3", "engines": {"node": ">=24 <25"}}),
+            encoding="utf-8",
+        )
         (root / "web/package.json").write_text(
-            json.dumps({"version": web_version}), encoding="utf-8"
+            json.dumps(
+                {
+                    "version": web_version,
+                    "devDependencies": {"@types/node": node_types},
+                }
+            ),
+            encoding="utf-8",
         )
         (root / "crates/secretbridge-core/src/lib.rs").write_text(
             f"pub const SCHEMA_VERSION: i64 = {schema};\n", encoding="utf-8"
@@ -58,6 +74,21 @@ class ProjectMetadataTests(unittest.TestCase):
             root = Path(temporary)
             self.fixture(root, web_version="1.2.2")
             with self.assertRaisesRegex(ValueError, "versions must match"):
+                MODULE.check(root)
+
+    def test_node_type_major_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root, node_types="26.6.1")
+            with self.assertRaisesRegex(ValueError, "must match"):
+                MODULE.check(root)
+
+    def test_node_runtime_engine_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.fixture(root)
+            (root / ".node-version").write_text("26.6.0\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "engine range"):
                 MODULE.check(root)
 
     def test_stale_current_schema_claim_is_rejected(self):

@@ -30,8 +30,20 @@ def check(root: Path) -> str:
     if not rust_pinned.startswith(f"{rust_minimum}."):
         fail("the RC Rust toolchain must be a patch release of workspace rust-version")
     node_version = (root / ".node-version").read_text(encoding="utf-8").strip()
-    if not node_version.startswith("24."):
-        fail("the RC Node.js toolchain must stay within the declared Node.js 24 engine")
+    node_engine = root_package.get("engines", {}).get("node", "")
+    engine_match = re.fullmatch(r">=(\d+) <(\d+)", node_engine)
+    node_match = re.fullmatch(r"(\d+)\..+", node_version)
+    if (
+        engine_match is None
+        or int(engine_match.group(2)) != int(engine_match.group(1)) + 1
+        or node_match is None
+        or node_match.group(1) != engine_match.group(1)
+    ):
+        fail("the pinned Node.js runtime must match the single-major engine range")
+    node_types = web_package.get("devDependencies", {}).get("@types/node", "")
+    types_match = re.fullmatch(r"(\d+)\..+", node_types)
+    if types_match is None or types_match.group(1) != node_match.group(1):
+        fail("@types/node major must match the pinned Node.js runtime major")
     core = (root / "crates/secretbridge-core/src/lib.rs").read_text(encoding="utf-8")
     match = re.search(r"SCHEMA_VERSION: i64 = (\d+);", core)
     if match is None:
@@ -58,7 +70,7 @@ def check(root: Path) -> str:
                 fail(f"{document.name} describes stale schema {stale_schema} as current")
     return (
         f"Project metadata aligned: version {version}, schema {schema}, "
-        f"Rust {rust_pinned}, Node.js {node_version}."
+        f"Rust {rust_pinned}, Node.js {node_version}, @types/node {node_types}."
     )
 
 
