@@ -79,17 +79,26 @@ fn release_id(value: &str) -> bool {
 }
 fn load() -> Result<Option<Installation>> {
     let root = root()?;
+    let data_directory = super::super::data_directory()?;
+    load_from(&root, &data_directory)
+}
+
+fn load_from(root: &Path, data_directory: &Path) -> Result<Option<Installation>> {
     if !root.exists() {
         return Ok(None);
     }
-    if fs::symlink_metadata(&root)
+    if fs::symlink_metadata(root)
         .map_err(|_| "installation_invalid")?
         .file_type()
         .is_symlink()
     {
         return Err("installation_invalid");
     }
-    let installation: Installation = read_json(&root.join("installation.json"), 65536)?;
+    let record = root.join("installation.json");
+    if !record.exists() {
+        return Ok(None);
+    }
+    let installation: Installation = read_json(&record, 65536)?;
     if installation.format_version != 1
         || installation.id.is_nil()
         || installation
@@ -97,7 +106,7 @@ fn load() -> Result<Option<Installation>> {
             .iter()
             .chain(installation.previous.iter())
             .any(|id| !release_id(id))
-        || installation.data_directory != super::super::data_directory()?
+        || installation.data_directory != data_directory
         || super::super::require_loopback(
             installation
                 .bind
@@ -354,8 +363,8 @@ pub(super) async fn install(package: &Path) -> Result<()> {
     let package = fs::canonicalize(package).map_err(|_| "package_unavailable")?;
     let verified = manifest(&package, true)?;
     let root = root()?;
-    let old = if root.exists() {
-        load()?.ok_or("installation_invalid")?
+    let old = if let Some(installation) = load()? {
+        installation
     } else {
         super::super::create_private_data_directory(&root)
             .map_err(|_| "installation_write_failed")?;
@@ -674,6 +683,21 @@ mod tests {
 
         fs::remove_file(root.join("installer.lock")).unwrap();
         fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn missing_installation_record_is_treated_as_uninstalled_without_deleting_residue() {
+        let data = std::env::temp_dir().join(format!(
+            "secretbridge-missing-installation-record-{}",
+            Uuid::new_v4()
+        ));
+        let root = data.join("application");
+        let retained = root.join("releases/release-0123456789abcdef/retained.txt");
+        fs::create_dir_all(retained.parent().unwrap()).unwrap();
+        fs::write(&retained, b"retained test residue").unwrap();
+        assert!(load_from(&root, &data).unwrap().is_none());
+        assert_eq!(fs::read(&retained).unwrap(), b"retained test residue");
+        fs::remove_dir_all(data).unwrap();
     }
 
     #[test]
