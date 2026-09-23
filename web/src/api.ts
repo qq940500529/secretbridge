@@ -82,8 +82,11 @@ export interface BackupReport {
 }
 export interface Diagnostics {
   format: string;
+  diagnostic_schema_version: number;
   version: string;
   platform: string;
+  bridge_schema_version: number;
+  authentication_mode: "pairing_link" | "pin" | "totp";
   generated_at_unix_ms: number;
   schema_version: number;
   storage: ConfigurationStorage;
@@ -97,6 +100,15 @@ export interface Diagnostics {
   error_codes: Record<string, number>;
   run_states: Record<string, number>;
   failure_stages: Record<string, number>;
+  mcp_failures: {
+    code: string;
+    stage: string;
+    occurrences: number;
+    first_at_unix_ms: number;
+    last_at_unix_ms: number;
+  }[];
+  terminal_states: Record<string, number>;
+  stale_terminal_references: number;
 }
 async function maintenanceJson<T>(
   token: string,

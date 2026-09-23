@@ -438,6 +438,19 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              COMMIT;",
         )?;
     }
+    if version < 21 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE diagnostic_failures (
+                code TEXT PRIMARY KEY NOT NULL,
+                occurrences INTEGER NOT NULL CHECK (occurrences > 0),
+                first_at_unix_ms INTEGER NOT NULL CHECK (first_at_unix_ms >= 0),
+                last_at_unix_ms INTEGER NOT NULL CHECK (last_at_unix_ms >= first_at_unix_ms)
+             );
+             PRAGMA user_version = 21;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 

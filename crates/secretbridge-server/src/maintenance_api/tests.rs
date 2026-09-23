@@ -154,6 +154,12 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
     );
     assert!(diagnostic["run_states"].is_object());
     assert!(diagnostic["failure_stages"].is_object());
+    assert_eq!(diagnostic["diagnostic_schema_version"], 2);
+    assert_eq!(diagnostic["bridge_schema_version"], 2);
+    assert_eq!(diagnostic["authentication_mode"], "pairing_link");
+    assert!(diagnostic["mcp_failures"].is_array());
+    assert!(diagnostic["terminal_states"].is_object());
+    assert_eq!(diagnostic["stale_terminal_references"], 0);
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
     let bytes = app
         .clone()

@@ -104,8 +104,11 @@ async fn preview_backup(bytes: Bytes) -> Result<Json<BackupReport>, ApiError> {
 #[derive(Serialize)]
 struct Diagnostics {
     format: &'static str,
+    diagnostic_schema_version: u8,
     version: &'static str,
     platform: &'static str,
+    bridge_schema_version: u8,
+    authentication_mode: &'static str,
     generated_at_unix_ms: u64,
     schema_version: i64,
     storage: ConfigurationStorage,
@@ -119,6 +122,9 @@ struct Diagnostics {
     error_codes: std::collections::BTreeMap<&'static str, usize>,
     run_states: std::collections::BTreeMap<&'static str, usize>,
     failure_stages: std::collections::BTreeMap<&'static str, usize>,
+    mcp_failures: Vec<catalog::DiagnosticFailure>,
+    terminal_states: std::collections::BTreeMap<&'static str, usize>,
+    stale_terminal_references: usize,
 }
 #[allow(
     clippy::too_many_lines,
@@ -185,10 +191,41 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             };
             *failure_stages.entry(failure_stage).or_insert(0) += 1;
         }
+        let terminals = state.terminals.list();
+        let mut terminal_states = std::collections::BTreeMap::new();
+        for terminal in &terminals {
+            let name = match terminal.status {
+                crate::terminal::TerminalStatus::Running => "running",
+                crate::terminal::TerminalStatus::Exited => "exited",
+                crate::terminal::TerminalStatus::Terminated => "terminated",
+                crate::terminal::TerminalStatus::Failed => "failed",
+            };
+            *terminal_states.entry(name).or_insert(0) += 1;
+        }
+        let stale_terminal_references = state
+            .catalog
+            .list_action_templates()
+            .map_err(map_catalog_error)?
+            .iter()
+            .filter_map(|template| template.command.as_ref()?.terminal_id)
+            .filter(|id| !terminals.iter().any(|terminal| terminal.id == *id))
+            .count();
+        let authentication_mode = match state
+            .catalog
+            .browser_auth_mode()
+            .map_err(map_catalog_error)?
+        {
+            catalog::BrowserAuthMode::PairingLink => "pairing_link",
+            catalog::BrowserAuthMode::Pin => "pin",
+            catalog::BrowserAuthMode::Totp => "totp",
+        };
         Ok(Json(Diagnostics {
             format: "secretbridge-diagnostics",
+            diagnostic_schema_version: 2,
             version: env!("CARGO_PKG_VERSION"),
             platform: std::env::consts::OS,
+            bridge_schema_version: crate::mcp::BRIDGE_CONNECTION_SCHEMA,
+            authentication_mode,
             generated_at_unix_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -223,10 +260,16 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 .iter()
                 .filter(|item| item.state == catalog::RunState::Failed)
                 .count(),
-            terminal_sessions: state.terminals.list().len(),
+            terminal_sessions: terminals.len(),
             error_codes,
             run_states,
             failure_stages,
+            mcp_failures: state
+                .catalog
+                .list_diagnostic_failures()
+                .map_err(map_catalog_error)?,
+            terminal_states,
+            stale_terminal_references,
         }))
     })
     .await

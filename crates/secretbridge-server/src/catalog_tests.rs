@@ -1518,6 +1518,33 @@ fn one_time_drafts_remain_reviewable_without_becoming_saved_templates() {
     assert_eq!(approval.action_template_id, Some(draft.id));
 }
 
+#[test]
+fn diagnostic_failures_only_keep_fixed_codes_and_time_bounds() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).expect("catalog");
+    catalog
+        .record_diagnostic_failure("terminal_busy")
+        .expect("first failure");
+    catalog
+        .record_diagnostic_failure("terminal_busy")
+        .expect("second failure");
+    catalog
+        .record_diagnostic_failure("synthetic-password-never-store")
+        .expect("unknown code ignored");
+    let failures = catalog.list_diagnostic_failures().expect("summary");
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].code, "terminal_busy");
+    assert_eq!(failures[0].stage, "terminal_lease");
+    assert_eq!(failures[0].occurrences, 2);
+    assert!(failures[0].first_at_unix_ms <= failures[0].last_at_unix_ms);
+    drop(catalog);
+    let reopened = Catalog::open(&database.path).expect("reopen catalog");
+    assert_eq!(
+        reopened.list_diagnostic_failures().unwrap()[0].occurrences,
+        2
+    );
+}
+
 fn create_approval(catalog: &Catalog, action_template_id: Uuid) -> super::Approval {
     catalog
         .create_approval(&CreateApproval {

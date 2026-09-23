@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 mod browser_auth;
 mod browser_session;
+mod diagnostics;
 pub(crate) mod maintenance;
 mod rows;
 mod schema;
@@ -47,6 +48,8 @@ const MAX_IDEMPOTENCY_KEY_CHARS: usize = 96;
 pub struct Catalog {
     connection: Arc<Mutex<Connection>>,
 }
+
+pub use diagnostics::DiagnosticFailure;
 
 #[derive(Debug)]
 pub enum CatalogOpenError {

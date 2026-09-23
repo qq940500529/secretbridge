@@ -925,7 +925,7 @@ pub async fn serve_stdio_bridge(
 }
 
 const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
-const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
+pub(crate) const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
 const BRIDGE_PROTOCOL: &str = "secretbridge-native-ipc-v1";
 const MAX_BRIDGE_REQUEST_BYTES: usize = 16 * 1024;
 #[cfg(windows)]
@@ -1484,7 +1484,11 @@ async fn process_bridge_request(
     }
     match dispatch_bridge_request(state.clone(), &request.operation, request.payload).await {
         Ok(payload) => BridgeResponse::success(payload),
-        Err(error) => BridgeResponse::from_error(error),
+        Err(error) => {
+            let code = safe_bridge_error_code(error.message.as_ref());
+            let _ = state.catalog.record_diagnostic_failure(&code);
+            BridgeResponse::from_error(error)
+        }
     }
 }
 

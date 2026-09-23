@@ -4,6 +4,12 @@
 import { FileClock, Filter, LockKeyhole, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { saveDownload } from "./DataMaintenanceView";
+import {
+  renderSafeLog,
+  type SafeLogEntry,
+  type SafeLogFormat,
+  type SafeLogMetadata,
+} from "./safeLogExport";
 
 import {
   type ActionTemplate,
@@ -64,6 +70,7 @@ export function AuditView({
           authSource: "身份验证",
           runSource: "运行",
           download: "下载已筛选安全日志",
+          exportFormat: "导出格式",
           result: "运行结果",
           timeout: "超时",
           period: "时间范围",
@@ -119,6 +126,7 @@ export function AuditView({
           authSource: "Authentication",
           runSource: "Runs",
           download: "Download filtered safe log",
+          exportFormat: "Export format",
           result: "Run result",
           timeout: "Timed out",
           period: "Time range",
@@ -153,6 +161,7 @@ export function AuditView({
   const [targetFilter, setTargetFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
   const [visibleCount, setVisibleCount] = useState(100);
+  const [exportFormat, setExportFormat] = useState<SafeLogFormat>("json");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const formatEventTime = (value: number) =>
@@ -167,6 +176,10 @@ export function AuditView({
     }).format(value);
   const runMap = useMemo(
     () => new Map(runs.map((run) => [run.id, run])),
+    [runs],
+  );
+  const approvalRunMap = useMemo(
+    () => new Map(runs.map((run) => [run.approval_id, run])),
     [runs],
   );
   const templateMap = useMemo(
@@ -201,6 +214,7 @@ export function AuditView({
         [
           event.kind,
           event.run_id,
+          runMap.get(event.run_id)?.approval_id ?? "",
           String(event.sequence),
           runMap.get(event.run_id)?.result_status ?? "",
           templateMap.get(runMap.get(event.run_id)?.action_template_id ?? "") ??
@@ -216,9 +230,14 @@ export function AuditView({
       filter === "all" &&
       event.created_at_unix_ms >= since &&
       (!needle ||
-        [event.kind, event.channel, event.approval_id ?? ""].some((value) =>
-          value.toLocaleLowerCase().includes(needle),
-        )),
+        [
+          event.kind,
+          event.channel,
+          event.approval_id ?? "",
+          event.approval_id
+            ? (approvalRunMap.get(event.approval_id)?.id ?? "")
+            : "",
+        ].some((value) => value.toLocaleLowerCase().includes(needle))),
   );
 
   async function refresh() {
@@ -306,6 +325,13 @@ export function AuditView({
                       <details className="mt-2 text-xs text-slate-500">
                         <summary>{text.technical}</summary>
                         {text.approval}: {event.approval_id}
+                        {approvalRunMap.has(event.approval_id) && (
+                          <>
+                            {" "}
+                            · {text.run}:{" "}
+                            {approvalRunMap.get(event.approval_id)?.id}
+                          </>
+                        )}
                       </details>
                     )}
                   </li>
@@ -418,26 +444,48 @@ export function AuditView({
           <RefreshCw className="size-4" />
           {events.length}
         </button>
+        <label className="text-sm font-semibold text-slate-700">
+          {text.exportFormat}
+          <select
+            value={exportFormat}
+            onChange={(event) =>
+              setExportFormat(event.target.value as typeof exportFormat)
+            }
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="json">JSON</option>
+            <option value="jsonl">JSONL</option>
+            <option value="csv">CSV</option>
+          </select>
+        </label>
         <button
           type="button"
           className="workbench-button"
           onClick={() => {
-            const entries = [
+            const entries: SafeLogEntry[] = [
               ...(source === "run"
                 ? []
                 : visibleAuthEvents.map((event) => ({
-                    source: "authentication",
+                    source: "authentication" as const,
                     kind: event.kind,
                     channel: event.channel,
-                    approval_id: event.approval_id,
+                    approval_id: event.approval_id ?? null,
+                    run_id: event.approval_id
+                      ? (approvalRunMap.get(event.approval_id)?.id ?? null)
+                      : null,
+                    sequence: null,
+                    state: null,
+                    result_status: null,
                     created_at_unix_ms: event.created_at_unix_ms,
                   }))),
               ...(source === "auth"
                 ? []
                 : visibleEvents.map((event) => ({
-                    source: "run",
+                    source: "run" as const,
                     kind: event.kind,
                     run_id: event.run_id,
+                    approval_id: runMap.get(event.run_id)?.approval_id ?? null,
+                    channel: null,
                     sequence: event.sequence,
                     state: runMap.get(event.run_id)?.state ?? null,
                     result_status:
@@ -445,33 +493,31 @@ export function AuditView({
                     created_at_unix_ms: event.created_at_unix_ms,
                   }))),
             ].sort((a, b) => a.created_at_unix_ms - b.created_at_unix_ms);
+            const metadata: SafeLogMetadata = {
+              format: "secretbridge-safe-log",
+              schema_version: 2,
+              exported_at_unix_ms: Date.now(),
+              fetched_event_counts: {
+                authentication: authEvents.length,
+                run: events.length,
+              },
+              truncation: "unknown",
+              filters: {
+                source,
+                kind: filter,
+                period,
+                result,
+                target_id: targetFilter === "all" ? null : targetFilter,
+                template_id: templateFilter === "all" ? null : templateFilter,
+                keyword_applied: needle.length > 0,
+              },
+            };
+            const content = renderSafeLog(exportFormat, metadata, entries);
             saveDownload(
-              new Blob(
-                [
-                  JSON.stringify(
-                    {
-                      format: "secretbridge-safe-log",
-                      schema_version: 1,
-                      exported_at_unix_ms: Date.now(),
-                      filters: {
-                        source,
-                        kind: filter,
-                        period,
-                        result,
-                        target_id: targetFilter === "all" ? null : targetFilter,
-                        template_id:
-                          templateFilter === "all" ? null : templateFilter,
-                        keyword_applied: needle.length > 0,
-                      },
-                      entries,
-                    },
-                    null,
-                    2,
-                  ),
-                ],
-                { type: "application/json" },
-              ),
-              "secretbridge-safe-log.json",
+              new Blob([content], {
+                type: exportFormat === "csv" ? "text/csv" : "application/json",
+              }),
+              `secretbridge-safe-log.${exportFormat}`,
             );
           }}
         >
@@ -529,7 +575,8 @@ export function AuditView({
                     <details className="mt-2 text-xs text-slate-500">
                       <summary>{text.technical}</summary>
                       {text.run}: {event.run_id} · {text.sequence}: #
-                      {event.sequence}
+                      {event.sequence} · {text.approval}:{" "}
+                      {run?.approval_id ?? "—"}
                     </details>
                   </div>
                 </div>

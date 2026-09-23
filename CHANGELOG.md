@@ -6,6 +6,8 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+- Advance SQLite to schema 21 and diagnostic format 2. Record only fixed MCP failure classes with counts and first/last times, and summarize terminal state, stale terminal references, browser authentication mode and bridge protocol version. Complete the README deployment handoff through opening the local management page and a final health check.
+- Correlate safe authentication and run events by approval ID in the history view, and export the selected timeline as versioned JSON, JSONL or CSV.
 - Fail closed when a controlled command tries to reuse a terminal after interactive input, and terminate its terminal on command timeout or cancellation. Preserve bounded sanitized terminal-run output with timestamps for later reading, structured download, and deletion after completion.
 - Keep MCP one-time drafts out of reusable template lists and configuration exports; provide explicit saving, structured SSH requests, bilingual approval guidance and field-level command argument errors.
 - Restore browser PIN/TOTP settings after session recovery and require the current method before changing or disabling it. Add filtered event export, diagnostic previews and broader approval review layout.

@@ -56,6 +56,30 @@ fn bridge_argument_errors_preserve_field_bounds_without_echoing_values() {
 }
 
 #[tokio::test]
+async fn bridge_validation_failure_records_only_a_safe_diagnostic_code() {
+    let (state, _) = AppState::new([]);
+    let token = "synthetic-bridge-token";
+    let encoded = serde_json::to_vec(&json!({
+        "schema_version": super::BRIDGE_CONNECTION_SCHEMA,
+        "token": token,
+        "operation": "request_command",
+        "payload": {"untrusted_value": SENSITIVE_MARKER}
+    }))
+    .unwrap();
+    let response =
+        super::process_bridge_request(&state, super::token_digest(token), true, &encoded).await;
+    assert_eq!(response.error.as_deref(), Some("invalid_request"));
+    let failures = state.catalog.list_diagnostic_failures().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].code, "invalid_request");
+    assert!(
+        !serde_json::to_string(&failures)
+            .unwrap()
+            .contains(SENSITIVE_MARKER)
+    );
+}
+
+#[tokio::test]
 #[allow(
     clippy::too_many_lines,
     reason = "one MCP scenario keeps catalog discovery, command drafting, and terminal validation contiguous"

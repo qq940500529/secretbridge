@@ -102,7 +102,7 @@ For an ordinary deployment, require a healthy `status` response and a loopback-o
 ### 7. Upgrade or rollback
 
 - Never treat rollback as a database downgrade.
-- The current development schema is 20 and can migrate published Beta 7 schema 18 and Beta 8 schema 19. Preserve a compatible independent backup before an upgrade; older unpublished development databases remain unsupported. An older binary cannot reopen a migrated schema 20 database.
+- The current development schema is 21 and can migrate published Beta 7 schema 18 and Beta 8 schema 19. Preserve a compatible independent backup before an upgrade; older unpublished development databases remain unsupported. An older binary cannot reopen a migrated schema 21 database.
 - On activation failure, verify the old pointer and old process were restored. If recovery also fails, stop and report the fixed public error code.
 - After a successful upgrade or rollback, update the MCP `command` to the absolute `binary` returned by that command, reload the host and repeat the read-only capability call.
 
