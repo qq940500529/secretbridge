@@ -128,10 +128,8 @@ impl Catalog {
         }
         let private = SecretKey::generate();
         let public = Sec1Point::from(private.public_key());
-        let mut salt = [0_u8; 16];
-        let mut nonce = [0_u8; 12];
-        rand::fill(&mut salt);
-        rand::fill(&mut nonce);
+        let salt: [u8; 16] = rand::random();
+        let nonce: [u8; 12] = rand::random();
         let key = derive_wrap_key(pin, &salt)?;
         let mut private_bytes = private.to_bytes();
         let wrapped = seal(&key, &nonce, &private_bytes, WRAP_AAD)?;
@@ -151,10 +149,8 @@ impl Catalog {
         let connection = self.lock();
         let header = header(&connection)?.ok_or(CatalogError::Invalid)?;
         let private = unwrap_private(&header, old_pin)?;
-        let mut salt = [0_u8; 16];
-        let mut nonce = [0_u8; 12];
-        rand::fill(&mut salt);
-        rand::fill(&mut nonce);
+        let salt: [u8; 16] = rand::random();
+        let nonce: [u8; 12] = rand::random();
         let key = derive_wrap_key(new_pin, &salt)?;
         let mut private_bytes = private.to_bytes();
         let wrapped = seal(&key, &nonce, &private_bytes, WRAP_AAD)?;
@@ -193,8 +189,7 @@ impl Catalog {
         Hkdf::<Sha256>::new(Some(RECORD_AAD), shared.raw_secret_bytes().as_slice())
             .expand(&header.public_key, &mut *key)
             .map_err(|_| CatalogError::Storage)?;
-        let mut nonce = [0_u8; 12];
-        rand::fill(&mut nonce);
+        let nonce: [u8; 12] = rand::random();
         let ciphertext = seal(&key, &nonce, &plaintext, RECORD_AAD)?;
         connection.execute(
             "INSERT INTO diagnostic_records(ephemeral_public_key, nonce, ciphertext) VALUES(?1, ?2, ?3)",
