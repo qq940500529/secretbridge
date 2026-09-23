@@ -5,6 +5,8 @@ use std::{fs, path::PathBuf};
 
 use uuid::Uuid;
 
+use super::ai_conversations::{ALL_OPERATIONS_ACKNOWLEDGEMENT, ConversationApprovalPolicy};
+use super::{ApprovalNotificationChannel, SetAiConversationPolicy};
 use super::{
     ApprovalOperation, ApprovalResultScope, ApprovalState, BrowserAuthChannel,
     BrowserAuthEventKind, BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError,
@@ -15,6 +17,146 @@ use super::{
     SafeEventKind, SecretState, TargetEnvironment, TargetKind, UpdateActionTemplate,
     UpdateCredentialReference, UpdateTarget,
 };
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "conversation policy transitions and revocation form one security regression"
+)]
+fn conversation_policies_preserve_human_control_and_task_scope() {
+    let catalog = Catalog::in_memory().expect("catalog");
+    let credential = create_credential(&catalog);
+    let target = create_target(&catalog, credential.id);
+    let template = create_action_template(&catalog, target.id);
+    let conversation = catalog.create_ai_conversation("Synthetic session").unwrap();
+    let request = |template_id| CreateApproval {
+        authorization_mode: crate::parameters::AuthorizationMode::default(),
+        parameters: crate::parameters::ParameterValues::default(),
+        action_template_id: template_id,
+        conversation_id: Some(conversation.id),
+        reason: None,
+        expires_in_seconds: 300,
+    };
+
+    let first = catalog.create_approval(&request(template.id)).unwrap();
+    assert_eq!(first.state, ApprovalState::Pending);
+    assert_eq!(first.conversation_id, Some(conversation.id));
+    let approved = catalog
+        .approve_approval(
+            first.id,
+            &DecideApproval {
+                expected_version: first.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    assert!(!approved.preauthorized);
+
+    let same_task = catalog
+        .set_ai_conversation_policy(
+            conversation.id,
+            &SetAiConversationPolicy {
+                expected_version: conversation.version,
+                approval_policy: ConversationApprovalPolicy::SameTaskOnce,
+                risk_acknowledgement: None,
+            },
+        )
+        .unwrap();
+    let reused = catalog.create_approval(&request(template.id)).unwrap();
+    assert_eq!(reused.state, ApprovalState::Approved);
+    assert!(reused.preauthorized);
+
+    let second_template = create_action_template(&catalog, target.id);
+    let changed = catalog
+        .create_approval(&request(second_template.id))
+        .unwrap();
+    assert_eq!(changed.state, ApprovalState::Pending);
+    assert!(matches!(
+        catalog.set_ai_conversation_policy(
+            conversation.id,
+            &SetAiConversationPolicy {
+                expected_version: same_task.version,
+                approval_policy: ConversationApprovalPolicy::ConversationOnce,
+                risk_acknowledgement: None,
+            }
+        ),
+        Err(CatalogError::Invalid)
+    ));
+    let all_operations = catalog
+        .set_ai_conversation_policy(
+            conversation.id,
+            &SetAiConversationPolicy {
+                expected_version: same_task.version,
+                approval_policy: ConversationApprovalPolicy::ConversationOnce,
+                risk_acknowledgement: Some(ALL_OPERATIONS_ACKNOWLEDGEMENT.to_owned()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        catalog.get_approval(changed.id).unwrap().state,
+        ApprovalState::Approved
+    );
+    let broad = catalog
+        .create_approval(&request(second_template.id))
+        .unwrap();
+    assert!(broad.preauthorized);
+    assert!(broad.expires_at_unix_ms <= all_operations.grant_expires_at_unix_ms.unwrap());
+
+    catalog
+        .set_ai_conversation_policy(
+            conversation.id,
+            &SetAiConversationPolicy {
+                expected_version: all_operations.version,
+                approval_policy: ConversationApprovalPolicy::EveryTask,
+                risk_acknowledgement: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        catalog.get_approval(broad.id).unwrap().state,
+        ApprovalState::Revoked
+    );
+    assert_eq!(
+        catalog.get_approval(changed.id).unwrap().state,
+        ApprovalState::Revoked
+    );
+    assert_eq!(
+        catalog.get_approval(approved.id).unwrap().state,
+        ApprovalState::Approved
+    );
+    assert_eq!(
+        catalog
+            .create_approval(&request(second_template.id))
+            .unwrap()
+            .state,
+        ApprovalState::Pending
+    );
+}
+
+#[test]
+fn notification_channel_is_persisted_in_catalog() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).unwrap();
+    assert_eq!(
+        catalog.approval_notification_channel().unwrap(),
+        ApprovalNotificationChannel::Browser
+    );
+    catalog
+        .set_approval_notification_channel(ApprovalNotificationChannel::System)
+        .unwrap();
+    assert_eq!(
+        catalog.approval_notification_channel().unwrap(),
+        ApprovalNotificationChannel::System
+    );
+    drop(catalog);
+    assert_eq!(
+        Catalog::open(&database.path)
+            .unwrap()
+            .approval_notification_channel()
+            .unwrap(),
+        ApprovalNotificationChannel::System
+    );
+}
 
 #[test]
 fn totp_replay_guard_is_monotonic_and_resettable() {
@@ -847,6 +989,7 @@ fn authorization_modes_control_consumption_and_revalidate_every_run() {
         let approval = catalog
             .create_approval(&CreateApproval {
                 action_template_id: initial.action_template_id.unwrap(),
+                conversation_id: None,
                 reason: None,
                 expires_in_seconds: 60,
                 authorization_mode: mode,
@@ -1334,6 +1477,7 @@ fn disabled_templates_reject_new_approvals_and_preserve_existing_snapshots() {
             authorization_mode: crate::parameters::AuthorizationMode::default(),
             parameters: crate::parameters::ParameterValues::default(),
             action_template_id: template.id,
+            conversation_id: None,
             reason: None,
             expires_in_seconds: 300,
         }),
@@ -1519,6 +1663,218 @@ fn one_time_drafts_remain_reviewable_without_becoming_saved_templates() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "denial, expiry, success and cancellation share one one-time lifecycle fixture"
+)]
+fn one_time_drafts_retire_after_denial_expiry_and_completed_run() {
+    let catalog = Catalog::in_memory().unwrap();
+    let credential = create_credential(&catalog);
+    let target = create_target(&catalog, credential.id);
+    let request = CreateActionTemplate {
+        command: None,
+        target_id: target.id,
+        name: "One-time synthetic review".to_owned(),
+        operation: ApprovalOperation::InspectMetadata,
+        result_scope: ApprovalResultScope::MetadataSummary,
+        description: None,
+        timeout_seconds: 15,
+    };
+    let denied = catalog.create_one_time_draft(&request).unwrap();
+    let approval = create_approval(&catalog, denied.id);
+    assert!(matches!(
+        catalog.create_approval(&CreateApproval {
+            authorization_mode: crate::parameters::AuthorizationMode::default(),
+            parameters: crate::parameters::ParameterValues::default(),
+            action_template_id: denied.id,
+            conversation_id: None,
+            reason: None,
+            expires_in_seconds: 300,
+        }),
+        Err(CatalogError::ApprovalConsumed)
+    ));
+    catalog
+        .deny_approval(
+            approval.id,
+            &DecideApproval {
+                expected_version: approval.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    assert!(!catalog.get_action_template(denied.id).unwrap().enabled);
+
+    let expired = catalog.create_one_time_draft(&request).unwrap();
+    let approval = create_approval(&catalog, expired.id);
+    catalog
+        .lock()
+        .execute(
+            "UPDATE approvals SET expires_at_unix_ms = 0 WHERE id = ?1",
+            [approval.id.to_string()],
+        )
+        .unwrap();
+    catalog.list_approvals().unwrap();
+    assert!(!catalog.get_action_template(expired.id).unwrap().enabled);
+
+    let completed = catalog.create_one_time_draft(&request).unwrap();
+    let approval = create_approval(&catalog, completed.id);
+    catalog
+        .approve_approval(
+            approval.id,
+            &DecideApproval {
+                expected_version: approval.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    let run = catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: "one-time-completed-run".to_owned(),
+        })
+        .unwrap()
+        .run;
+    catalog.start_run(run.id).unwrap();
+    catalog.complete_synthetic_run(run.id).unwrap();
+    assert!(!catalog.get_action_template(completed.id).unwrap().enabled);
+    assert!(catalog.list_action_templates().unwrap().is_empty());
+    assert_eq!(
+        catalog
+            .get_approval(approval.id)
+            .unwrap()
+            .action_template_id,
+        Some(completed.id)
+    );
+
+    let cancelled = catalog.create_one_time_draft(&request).unwrap();
+    let approval = create_approval(&catalog, cancelled.id);
+    catalog
+        .approve_approval(
+            approval.id,
+            &DecideApproval {
+                expected_version: approval.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    let run = catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: "one-time-cancelled-run".to_owned(),
+        })
+        .unwrap()
+        .run;
+    catalog
+        .cancel_synthetic_run(
+            run.id,
+            &CancelSyntheticRun {
+                expected_version: run.version,
+            },
+        )
+        .unwrap();
+    assert!(!catalog.get_action_template(cancelled.id).unwrap().enabled);
+
+    let failed = catalog.create_one_time_draft(&request).unwrap();
+    let approval = create_approval(&catalog, failed.id);
+    catalog
+        .approve_approval(
+            approval.id,
+            &DecideApproval {
+                expected_version: approval.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    let run = catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: "one-time-timed-out-run".to_owned(),
+        })
+        .unwrap()
+        .run;
+    catalog.start_run(run.id).unwrap();
+    catalog
+        .transition_run(
+            run.id,
+            None,
+            &[RunState::Running],
+            RunState::Failed,
+            Some("timed_out"),
+            SafeEventKind::Failed,
+            "command run failed",
+            false,
+        )
+        .unwrap();
+    assert!(!catalog.get_action_template(failed.id).unwrap().enabled);
+}
+
+#[test]
+fn orphan_one_time_draft_is_removed_on_reopen() {
+    let database = TemporaryDatabase::new();
+    let draft_id = {
+        let catalog = Catalog::open(&database.path).unwrap();
+        let credential = create_credential(&catalog);
+        let target = create_target(&catalog, credential.id);
+        catalog
+            .create_one_time_draft(&CreateActionTemplate {
+                command: None,
+                target_id: target.id,
+                name: "Interrupted one-time request".to_owned(),
+                operation: ApprovalOperation::InspectMetadata,
+                result_scope: ApprovalResultScope::MetadataSummary,
+                description: None,
+                timeout_seconds: 15,
+            })
+            .unwrap()
+            .id
+    };
+    let reopened = Catalog::open(&database.path).unwrap();
+    assert!(matches!(
+        reopened.get_action_template(draft_id),
+        Err(CatalogError::NotFound)
+    ));
+    let target_id = reopened.list_targets().unwrap()[0].id;
+    let interrupted = reopened
+        .create_one_time_draft(&CreateActionTemplate {
+            command: None,
+            target_id,
+            name: "Interrupted one-time run".to_owned(),
+            operation: ApprovalOperation::InspectMetadata,
+            result_scope: ApprovalResultScope::MetadataSummary,
+            description: None,
+            timeout_seconds: 15,
+        })
+        .unwrap();
+    let approval = create_approval(&reopened, interrupted.id);
+    reopened
+        .approve_approval(
+            approval.id,
+            &DecideApproval {
+                expected_version: approval.version,
+                note: None,
+            },
+        )
+        .unwrap();
+    let run = reopened
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: "one-time-interrupted-run".to_owned(),
+        })
+        .unwrap()
+        .run;
+    reopened.start_run(run.id).unwrap();
+    drop(reopened);
+    let recovered = Catalog::open(&database.path).unwrap();
+    assert_eq!(recovered.recover_interrupted_runs().unwrap(), 1);
+    assert!(
+        !recovered
+            .get_action_template(interrupted.id)
+            .unwrap()
+            .enabled
+    );
+}
+
+#[test]
 fn diagnostic_failures_only_keep_fixed_codes_and_time_bounds() {
     let database = TemporaryDatabase::new();
     let catalog = Catalog::open(&database.path).expect("catalog");
@@ -1551,6 +1907,7 @@ fn create_approval(catalog: &Catalog, action_template_id: Uuid) -> super::Approv
             authorization_mode: crate::parameters::AuthorizationMode::default(),
             parameters: crate::parameters::ParameterValues::default(),
             action_template_id,
+            conversation_id: None,
             reason: Some("Synthetic workflow validation".to_owned()),
             expires_in_seconds: 300,
         })

@@ -5,6 +5,7 @@ import { ActionTemplatesView } from "./ActionTemplatesView";
 import { ApprovalView } from "./ApprovalView";
 import { OperationsView } from "./OperationsView";
 import { AuditView } from "./AuditView";
+import { AiConversationsView } from "./AiConversationsView";
 import { SectionTabs } from "./Workbench";
 
 export function TaskWorkspace({
@@ -12,49 +13,36 @@ export function TaskWorkspace({
   sessionToken,
   templateId,
   targetId,
+  section,
+  onRequestTemplate,
 }: {
   language: "zh-CN" | "en";
   sessionToken: string;
   templateId?: string;
   targetId?: string;
+  section: "templates" | "approvals" | "runs";
+  onRequestTemplate: (id: string) => void;
 }) {
-  const [section, setSection] = useState<"templates" | "approvals" | "runs">(
-    templateId ? "approvals" : "templates",
-  );
-  const [requested, setRequested] = useState<string | undefined>(templateId);
-  const zh = language === "zh-CN";
   return (
     <>
-      <SectionTabs
-        selected={section}
-        onSelect={setSection}
-        items={[
-          { id: "templates", label: zh ? "任务模板" : "Templates" },
-          { id: "approvals", label: zh ? "授权确认" : "Authorization" },
-          { id: "runs", label: zh ? "执行与结果" : "Execution & results" },
-        ]}
-      />
       {section === "templates" ? (
         <ActionTemplatesView
           language={language}
           sessionToken={sessionToken}
           initialTargetId={targetId}
-          onRequest={(id) => {
-            setRequested(id);
-            setSection("approvals");
-          }}
+          onRequest={onRequestTemplate}
         />
       ) : section === "approvals" ? (
         <ApprovalView
           language={language}
           sessionToken={sessionToken}
-          initialTemplateId={requested ?? templateId}
+          initialTemplateId={templateId}
         />
       ) : (
         <OperationsView
           language={language}
           sessionToken={sessionToken}
-          initialTemplateId={requested ?? templateId}
+          initialTemplateId={templateId}
         />
       )}
     </>
@@ -68,7 +56,9 @@ export function HistoryWorkspace({
   language: "zh-CN" | "en";
   sessionToken: string;
 }) {
-  const [section, setSection] = useState<"runs" | "events">("runs");
+  const [section, setSection] = useState<"runs" | "events" | "conversations">(
+    "runs",
+  );
   return (
     <>
       <SectionTabs
@@ -80,6 +70,10 @@ export function HistoryWorkspace({
             label: language === "zh-CN" ? "执行历史" : "Run history",
           },
           { id: "events", label: language === "zh-CN" ? "事件记录" : "Events" },
+          {
+            id: "conversations",
+            label: language === "zh-CN" ? "AI 会话" : "AI conversations",
+          },
         ]}
       />
       {section === "runs" ? (
@@ -88,8 +82,10 @@ export function HistoryWorkspace({
           sessionToken={sessionToken}
           historyOnly
         />
-      ) : (
+      ) : section === "events" ? (
         <AuditView language={language} sessionToken={sessionToken} />
+      ) : (
+        <AiConversationsView language={language} sessionToken={sessionToken} />
       )}
     </>
   );

@@ -72,6 +72,7 @@ export function AuditView({
           download: "下载已筛选安全日志",
           exportFormat: "导出格式",
           result: "运行结果",
+          errorCode: "错误代码",
           timeout: "超时",
           period: "时间范围",
           lastDay: "最近 24 小时",
@@ -128,6 +129,7 @@ export function AuditView({
           download: "Download filtered safe log",
           exportFormat: "Export format",
           result: "Run result",
+          errorCode: "Error code",
           timeout: "Timed out",
           period: "Time range",
           lastDay: "Last 24 hours",
@@ -160,6 +162,7 @@ export function AuditView({
   >("all");
   const [targetFilter, setTargetFilter] = useState("all");
   const [templateFilter, setTemplateFilter] = useState("all");
+  const [errorCodeFilter, setErrorCodeFilter] = useState("all");
   const [visibleCount, setVisibleCount] = useState(100);
   const [exportFormat, setExportFormat] = useState<SafeLogFormat>("json");
   const [loading, setLoading] = useState(true);
@@ -190,6 +193,18 @@ export function AuditView({
     () => new Map(targets.map((item) => [item.id, item.name])),
     [targets],
   );
+  const errorCodes = useMemo(
+    () =>
+      [
+        ...new Set(
+          runs
+            .filter((run) => run.state === "failed")
+            .map((run) => run.result_status)
+            .filter((code) => code !== null),
+        ),
+      ].sort(),
+    [runs],
+  );
   const needle = query.trim().toLocaleLowerCase();
   const since =
     period === "all"
@@ -210,6 +225,8 @@ export function AuditView({
         (result === "timed_out"
           ? runMap.get(event.run_id)?.result_status === "timed_out"
           : runMap.get(event.run_id)?.state === result)) &&
+      (errorCodeFilter === "all" ||
+        runMap.get(event.run_id)?.result_status === errorCodeFilter) &&
       (!needle ||
         [
           event.kind,
@@ -225,6 +242,7 @@ export function AuditView({
   const visibleAuthEvents = authEvents.filter(
     (event) =>
       result === "all" &&
+      errorCodeFilter === "all" &&
       targetFilter === "all" &&
       templateFilter === "all" &&
       filter === "all" &&
@@ -259,6 +277,7 @@ export function AuditView({
     setRuns(runResponse.items);
     setTemplates(templateResponse.items);
     setTargets(targetResponse.items);
+    setError(null);
   }
 
   useEffect(() => {
@@ -274,7 +293,7 @@ export function AuditView({
       void refresh().catch(() => {
         if (active) setError(text.error);
       });
-    }, 2_000);
+    }, 10_000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -297,6 +316,7 @@ export function AuditView({
       </div>
       {source !== "run" &&
         result === "all" &&
+        errorCodeFilter === "all" &&
         targetFilter === "all" &&
         templateFilter === "all" &&
         filter === "all" && (
@@ -419,6 +439,21 @@ export function AuditView({
           </select>
         </label>
         <label className="text-sm font-semibold text-slate-700">
+          {text.errorCode}
+          <select
+            value={errorCodeFilter}
+            onChange={(event) => setErrorCodeFilter(event.target.value)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            {errorCodes.map((code) => (
+              <option key={code} value={code}>
+                {code}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
           {text.template}
           <select
             value={templateFilter}
@@ -438,7 +473,8 @@ export function AuditView({
         </label>
         <button
           type="button"
-          onClick={() => void refresh()}
+          aria-label={zh ? "刷新安全事件" : "Refresh safe events"}
+          onClick={() => void refresh().catch(() => setError(text.error))}
           className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600"
         >
           <RefreshCw className="size-4" />
@@ -507,6 +543,7 @@ export function AuditView({
                 kind: filter,
                 period,
                 result,
+                error_code: errorCodeFilter === "all" ? null : errorCodeFilter,
                 target_id: targetFilter === "all" ? null : targetFilter,
                 template_id: templateFilter === "all" ? null : templateFilter,
                 keyword_applied: needle.length > 0,

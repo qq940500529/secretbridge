@@ -38,7 +38,10 @@ try {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let body = {};
-    if (path === "/api/v1/status")
+    if (path === "/api/v1/ai-conversations") body = { items: [] };
+    else if (path === "/api/v1/notification-settings")
+      body = { channel: "browser" };
+    else if (path === "/api/v1/status")
       body = {
         product: "SecretBridge",
         api_version: "v1",

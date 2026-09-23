@@ -614,6 +614,8 @@ export interface UpdateActionTemplate extends CreateActionTemplate {
 }
 
 export interface Approval {
+  conversation_id: string | null;
+  preauthorized: boolean;
   authorization_mode: AuthorizationMode;
   parameters: Record<string, ParameterValue>;
   id: string;
@@ -630,6 +632,77 @@ export interface Approval {
   updated_at_unix_ms: number;
   expires_at_unix_ms: number;
   version: number;
+}
+
+export type ConversationApprovalPolicy =
+  "every_task" | "same_task_once" | "conversation_once";
+export interface AiConversation {
+  id: string;
+  summary: string;
+  approval_policy: ConversationApprovalPolicy;
+  grant_expires_at_unix_ms: number | null;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  version: number;
+}
+
+export type ApprovalNotificationChannel = "browser" | "system";
+export async function getApprovalNotificationSettings(
+  token: string,
+): Promise<{ channel: ApprovalNotificationChannel }> {
+  return readJson(
+    await fetch("/api/v1/notification-settings", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(token),
+    }),
+  );
+}
+export async function setApprovalNotificationSettings(
+  token: string,
+  channel: ApprovalNotificationChannel,
+): Promise<{ channel: ApprovalNotificationChannel }> {
+  return readJson(
+    await fetch("/api/v1/notification-settings", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ channel }),
+    }),
+  );
+}
+
+export async function listAiConversations(
+  sessionToken: string,
+): Promise<{ items: AiConversation[] }> {
+  return readJson(
+    await fetch("/api/v1/ai-conversations", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function setAiConversationPolicy(
+  sessionToken: string,
+  id: string,
+  request: {
+    expected_version: number;
+    approval_policy: ConversationApprovalPolicy;
+    risk_acknowledgement?: string;
+  },
+): Promise<AiConversation> {
+  return readJson(
+    await fetch(`/api/v1/ai-conversations/${encodeURIComponent(id)}/policy`, {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify(request),
+    }),
+  );
 }
 
 export interface CreateApproval {

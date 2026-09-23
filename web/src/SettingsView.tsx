@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import { useState } from "react";
 import { Activity } from "lucide-react";
 
 import type { ServiceStatus } from "./api";
 import { ISSUE_URL, SECURITY_URL } from "./LegalConsent";
-import type { Language } from "./preferences";
+import type { ApprovalNotificationChannel, Language } from "./preferences";
 
 interface StatusCopy {
   overview: string;
@@ -30,6 +31,10 @@ interface SettingsViewProps {
   status: ServiceStatus | null;
   language: Language;
   onLanguageChange: (language: Language) => void;
+  notificationChannel: ApprovalNotificationChannel;
+  onNotificationChannelChange: (
+    channel: ApprovalNotificationChannel,
+  ) => Promise<boolean>;
   onReviewLegal: () => void;
 }
 
@@ -38,14 +43,24 @@ export function SettingsView({
   status,
   language,
   onLanguageChange,
+  notificationChannel,
+  onNotificationChannelChange,
   onReviewLegal,
 }: SettingsViewProps) {
+  const [notificationError, setNotificationError] = useState(false);
   const settingsCopy =
     language === "zh-CN"
       ? {
           preferences: "语言、许可与反馈",
           language: "界面默认语言",
           languageHelp: "选择会保存在当前浏览器中，并在下次打开时继续使用。",
+          notification: "审批通知渠道",
+          notificationHelp:
+            "页内审批弹窗始终显示。浏览器通知可点击返回弹窗，但需保持页面打开并授予浏览器通知权限；系统通知由本机后台调用操作系统通知接口，页面关闭后仍可提醒，但需后台运行及系统允许通知。通知内容不包含目标或命令。",
+          browserNotification: "浏览器通知",
+          systemNotification: "系统级通知",
+          permissionDenied:
+            "通知设置未生效：浏览器权限不足或服务未响应。页内弹窗仍可用。",
           legal: "许可协议与免责协议",
           legalHelp: "重新查看首次运行时同意的完整双语条款。",
           review: "查看协议",
@@ -59,6 +74,13 @@ export function SettingsView({
           language: "Default interface language",
           languageHelp:
             "The choice is saved in this browser and used the next time you open the app.",
+          notification: "Approval notification channel",
+          notificationHelp:
+            "The in-page approval dialog always appears. Browser notifications can reopen it but need an open page and browser permission. System notifications use the OS notification API from the local broker, so they work with the page closed while the broker runs and OS notifications are allowed. Neither includes targets or commands.",
+          browserNotification: "Browser notification",
+          systemNotification: "System notification",
+          permissionDenied:
+            "Notification setting was not applied: browser permission or service unavailable. The in-page dialog remains available.",
           legal: "License Agreement and Disclaimer",
           legalHelp:
             "Review the complete bilingual terms accepted at first run.",
@@ -158,6 +180,40 @@ export function SettingsView({
                   aria-pressed={language === option}
                 >
                   {option === "zh-CN" ? "简体中文" : "English"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-4 px-5 py-5 md:grid-cols-[1fr_auto] md:items-center">
+            <div>
+              <h3 className="m-0 text-sm font-semibold text-slate-900">
+                {settingsCopy.notification}
+              </h3>
+              <p className="mb-0 mt-1 text-sm leading-6 text-slate-500">
+                {settingsCopy.notificationHelp}
+              </p>
+              {notificationError && (
+                <p role="alert" className="mb-0 mt-1 text-sm text-rose-700">
+                  {settingsCopy.permissionDenied}
+                </p>
+              )}
+            </div>
+            <div className="inline-flex w-fit rounded-lg border border-slate-300 bg-slate-50 p-1">
+              {(["browser", "system"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() =>
+                    void onNotificationChannelChange(option).then((accepted) =>
+                      setNotificationError(!accepted),
+                    )
+                  }
+                  className={`rounded-md px-3 py-1.5 text-sm font-semibold ${notificationChannel === option ? "bg-white text-cyan-800 shadow-sm" : "text-slate-500 hover:text-slate-900"}`}
+                  aria-pressed={notificationChannel === option}
+                >
+                  {option === "browser"
+                    ? settingsCopy.browserNotification
+                    : settingsCopy.systemNotification}
                 </button>
               ))}
             </div>

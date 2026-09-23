@@ -41,7 +41,7 @@ export function CommandReview({
   });
   if (config.database)
     return (
-      <details className="mt-3 border-y border-slate-200 py-3">
+      <details open={expanded} className="mt-3 border-y border-slate-200 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
           {zh
             ? "查看数据库、查询与结果范围"
@@ -67,7 +67,7 @@ export function CommandReview({
     );
   if (config.git)
     return (
-      <details className="mt-3 border-y border-slate-200 py-3">
+      <details open={expanded} className="mt-3 border-y border-slate-200 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
           {zh ? "查看 Git 仓库与操作" : "Review Git repository and operation"}
         </summary>
@@ -95,7 +95,7 @@ export function CommandReview({
     );
   if (config.ssh)
     return (
-      <details className="mt-3 border-y border-slate-200 py-3">
+      <details open={expanded} className="mt-3 border-y border-slate-200 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
           {config.ssh.transfer
             ? zh
@@ -144,7 +144,10 @@ export function CommandReview({
     );
   if (config.telnet)
     return (
-      <details className="mt-3 border-y border-amber-300 bg-amber-50 px-3 py-3">
+      <details
+        open={expanded}
+        className="mt-3 border-y border-amber-300 bg-amber-50 px-3 py-3"
+      >
         <summary className="cursor-pointer text-sm font-semibold text-amber-950">
           {zh
             ? "查看 Telnet 明文连接、登录对话与固定脚本"
@@ -182,7 +185,7 @@ export function CommandReview({
     );
   if (config.http)
     return (
-      <details className="mt-3 border-y border-slate-200 py-3">
+      <details open={expanded} className="mt-3 border-y border-slate-200 py-3">
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
           {zh ? "查看 HTTP 请求与插槽" : "Review HTTP request and slots"}
         </summary>

@@ -451,6 +451,35 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              COMMIT;",
         )?;
     }
+    if version < 22 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE ai_conversations (
+                id TEXT PRIMARY KEY NOT NULL,
+                summary TEXT NOT NULL CHECK (length(trim(summary)) BETWEEN 1 AND 160),
+                approval_policy TEXT NOT NULL DEFAULT 'every_task'
+                  CHECK (approval_policy IN ('every_task', 'same_task_once', 'conversation_once')),
+                grant_expires_at_unix_ms INTEGER,
+                created_at_unix_ms INTEGER NOT NULL,
+                updated_at_unix_ms INTEGER NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1)
+             );
+             ALTER TABLE approvals
+               ADD COLUMN conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE RESTRICT;
+             ALTER TABLE approvals
+               ADD COLUMN scope_hash TEXT;
+             ALTER TABLE approvals
+               ADD COLUMN preauthorized INTEGER NOT NULL DEFAULT 0
+               CHECK (preauthorized IN (0, 1));
+             ALTER TABLE browser_auth_settings
+               ADD COLUMN approval_notification_channel TEXT NOT NULL DEFAULT 'browser'
+               CHECK (approval_notification_channel IN ('browser', 'system'));
+             CREATE INDEX approvals_conversation_idx
+               ON approvals(conversation_id, created_at_unix_ms);
+             PRAGMA user_version = 22;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 

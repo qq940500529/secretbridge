@@ -16,16 +16,25 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+mod ai_conversations;
+mod approval_rows;
 mod browser_auth;
 mod browser_session;
 mod diagnostics;
 pub(crate) mod maintenance;
+mod notification_settings;
+mod one_time;
 mod rows;
 mod schema;
 
+pub use ai_conversations::AiConversation;
+pub use ai_conversations::SetAiConversationPolicy;
+use approval_rows::{approval_by_id, approval_from_row};
 pub use browser_auth::{
     BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind, BrowserAuthMode,
 };
+pub use notification_settings::ApprovalNotificationChannel;
+use one_time::expire_approvals;
 use rows::{action_template_by_id, action_template_from_row, credential_from_row, target_from_row};
 
 pub(crate) const SCHEMA_VERSION: i64 = secretbridge_core::SCHEMA_VERSION;
@@ -498,6 +507,8 @@ pub struct Approval {
     pub authorization_mode: AuthorizationMode,
     pub parameters: ParameterValues,
     pub id: Uuid,
+    pub conversation_id: Option<Uuid>,
+    pub preauthorized: bool,
     pub action_template_id: Option<Uuid>,
     pub action_template_version: Option<u64>,
     pub target_id: Uuid,
@@ -521,6 +532,8 @@ pub struct CreateApproval {
     #[serde(default)]
     pub(crate) parameters: ParameterValues,
     pub(crate) action_template_id: Uuid,
+    #[serde(default)]
+    pub(crate) conversation_id: Option<Uuid>,
     pub(crate) reason: Option<String>,
     pub(crate) expires_in_seconds: u64,
 }
@@ -716,6 +729,7 @@ impl Catalog {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         schema::prepare(&connection)?;
+        one_time::repair_lifecycle(&connection)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -1143,13 +1157,6 @@ impl Catalog {
         self.create_action_template_with_lifecycle(request, "saved")
     }
 
-    pub(crate) fn create_one_time_draft(
-        &self,
-        request: &CreateActionTemplate,
-    ) -> Result<ActionTemplate, CatalogError> {
-        self.create_action_template_with_lifecycle(request, "one_time")
-    }
-
     fn create_action_template_with_lifecycle(
         &self,
         request: &CreateActionTemplate,
@@ -1301,7 +1308,7 @@ impl Catalog {
                 "SELECT id, action_template_id, action_template_version, target_id, target_version,
                         operation, result_scope, reason, state, decision_note,
                         created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
-                        authorization_mode, parameters_json
+                        authorization_mode, parameters_json, conversation_id, preauthorized
                    FROM approvals
                   ORDER BY created_at_unix_ms DESC, id",
             )
@@ -1327,10 +1334,19 @@ impl Catalog {
         }
         let reason = normalize_optional(request.reason.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let connection = self.lock();
+        let conversation = request
+            .conversation_id
+            .map(|id| {
+                ai_conversations::conversation_by_id(&connection, id)?.ok_or(CatalogError::NotFound)
+            })
+            .transpose()?;
         ensure_capacity(&connection, "approvals", MAX_ACTIVE_APPROVALS)?;
         let template = action_template_by_id(&connection, request.action_template_id)?
             .filter(|template| template.enabled)
             .ok_or(CatalogError::NotFound)?;
+        if template.one_time && one_time::already_requested(&connection, template.id)? {
+            return Err(CatalogError::ApprovalConsumed);
+        }
         let target =
             target_by_id(&connection, template.target_id)?.ok_or(CatalogError::NotFound)?;
         let parameters = crate::parameters::resolve(
@@ -1347,6 +1363,16 @@ impl Catalog {
         }
         let id = Uuid::new_v4();
         let now = now_unix_ms_i64()?;
+        let fingerprint = conversation
+            .as_ref()
+            .map(|_| ai_conversations::scope_hash(&template, &target, &parameters))
+            .transpose()?;
+        let preauthorized = match (&conversation, &fingerprint) {
+            (Some(conversation), Some(fingerprint)) => {
+                ai_conversations::may_reuse_approval(&connection, conversation, fingerprint, now)?
+            }
+            _ => false,
+        };
         let ttl_ms = i64::try_from(request.expires_in_seconds)
             .map_err(|_| CatalogError::Invalid)?
             .checked_mul(1_000)
@@ -1358,8 +1384,8 @@ impl Catalog {
                     (id, action_template_id, action_template_version, target_id, target_version,
                      operation, result_scope, reason, state, decision_note,
                      created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
-                     authorization_mode, parameters_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, ?9, ?9, ?10, 1, ?11, ?12)",
+                     authorization_mode, parameters_json, conversation_id, scope_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', NULL, ?9, ?9, ?10, 1, ?11, ?12, ?13, ?14)",
                 params![
                     id.to_string(),
                     template.id.to_string(),
@@ -1372,10 +1398,31 @@ impl Catalog {
                     now,
                     expires_at,
                     serde_json::to_string(&request.authorization_mode).map_err(|_| CatalogError::Invalid)?,
-                    serde_json::to_string(&parameters).map_err(|_| CatalogError::Invalid)?
+                    serde_json::to_string(&parameters).map_err(|_| CatalogError::Invalid)?,
+                    request.conversation_id.map(|id| id.to_string()),
+                    fingerprint
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
+        if preauthorized {
+            let grant_expiry = conversation
+                .as_ref()
+                .and_then(|item| item.grant_expires_at_unix_ms)
+                .ok_or(CatalogError::Storage)?;
+            connection
+                .execute(
+                    "UPDATE approvals SET state = 'approved', preauthorized = 1,
+                    decision_note = 'Conversation approval policy',
+                    expires_at_unix_ms = MIN(expires_at_unix_ms, ?1),
+                    updated_at_unix_ms = ?2, version = version + 1 WHERE id = ?3",
+                    params![
+                        i64::try_from(grant_expiry).map_err(|_| CatalogError::Storage)?,
+                        now,
+                        id.to_string()
+                    ],
+                )
+                .map_err(|_| CatalogError::Storage)?;
+        }
         approval_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
@@ -1428,7 +1475,10 @@ impl Catalog {
         if next_state == ApprovalState::Approved {
             ensure_approval_policy(&connection, &current)?;
         }
-        let changed = connection
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|_| CatalogError::Storage)?;
+        let changed = transaction
             .execute(
                 "UPDATE approvals
                     SET state = ?1, decision_note = ?2, updated_at_unix_ms = ?3,
@@ -1447,6 +1497,10 @@ impl Catalog {
         if changed == 0 {
             return Err(CatalogError::VersionConflict);
         }
+        if matches!(next_state, ApprovalState::Denied | ApprovalState::Revoked) {
+            one_time::retire_draft(&transaction, current.action_template_id, now)?;
+        }
+        transaction.commit().map_err(|_| CatalogError::Storage)?;
         approval_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
@@ -1811,6 +1865,9 @@ impl Catalog {
             event_message,
             now,
         )?;
+        if finished_at.is_some() {
+            one_time::retire_draft(&transaction, Some(current.action_template_id), now)?;
+        }
         transaction.commit().map_err(|_| CatalogError::Storage)?;
         synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
@@ -2153,50 +2210,6 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
         .map_err(|_| CatalogError::Storage)
 }
 
-fn approval_by_id(connection: &Connection, id: Uuid) -> Result<Option<Approval>, CatalogError> {
-    connection
-        .query_row(
-            "SELECT id, action_template_id, action_template_version, target_id, target_version,
-                    operation, result_scope, reason, state, decision_note,
-                    created_at_unix_ms, updated_at_unix_ms, expires_at_unix_ms, version,
-                    authorization_mode, parameters_json
-               FROM approvals WHERE id = ?1",
-            [id.to_string()],
-            approval_from_row,
-        )
-        .optional()
-        .map_err(|_| CatalogError::Storage)
-}
-
-fn approval_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Approval> {
-    let template_id = row.get::<_, Option<String>>(1)?;
-    Ok(Approval {
-        authorization_mode: serde_json::from_str(&row.get::<_, String>(14)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        parameters: serde_json::from_str(&row.get::<_, String>(15)?)
-            .map_err(|_| rusqlite::Error::InvalidQuery)?,
-        id: uuid_from_row(row, 0)?,
-        action_template_id: template_id
-            .map(|value| Uuid::parse_str(&value).map_err(|_| rusqlite::Error::InvalidQuery))
-            .transpose()?,
-        action_template_version: row
-            .get::<_, Option<i64>>(2)?
-            .map(|value| value.try_into().map_err(|_| rusqlite::Error::InvalidQuery))
-            .transpose()?,
-        target_id: uuid_from_row(row, 3)?,
-        target_version: u64_from_row(row, 4)?,
-        operation: ApprovalOperation::from_storage(&row.get::<_, String>(5)?)?,
-        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(6)?)?,
-        reason: row.get(7)?,
-        state: ApprovalState::from_storage(&row.get::<_, String>(8)?)?,
-        decision_note: row.get(9)?,
-        created_at_unix_ms: u64_from_row(row, 10)?,
-        updated_at_unix_ms: u64_from_row(row, 11)?,
-        expires_at_unix_ms: u64_from_row(row, 12)?,
-        version: u64_from_row(row, 13)?,
-    })
-}
-
 fn synthetic_run_by_id(
     connection: &Connection,
     id: Uuid,
@@ -2304,18 +2317,6 @@ fn insert_safe_event(
                 message,
                 created_at
             ],
-        )
-        .map(|_| ())
-        .map_err(|_| CatalogError::Storage)
-}
-
-fn expire_approvals(connection: &Connection, now: i64) -> Result<(), CatalogError> {
-    connection
-        .execute(
-            "UPDATE approvals
-                SET state = 'expired', updated_at_unix_ms = ?1, version = version + 1
-              WHERE state IN ('pending', 'approved') AND expires_at_unix_ms <= ?1",
-            [now],
         )
         .map(|_| ())
         .map_err(|_| CatalogError::Storage)

@@ -3,8 +3,10 @@
 
 #![forbid(unsafe_code)]
 
+mod approval_notifications;
 mod catalog;
 mod command;
+mod conversation_api;
 mod credential_service;
 mod database_task;
 mod git_task;
@@ -806,6 +808,8 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/terminals/{id}/attach", get(attach_terminal))
         .route("/api/v1/events", get(attach_events))
         .merge(maintenance_api::routes(state.clone()))
+        .merge(conversation_api::routes())
+        .merge(approval_notifications::routes())
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -1592,6 +1596,7 @@ async fn create_approval(
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
+    approval_notifications::notify_pending_approval(&state, &approval);
     Ok((StatusCode::CREATED, Json(approval)))
 }
 

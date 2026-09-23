@@ -266,6 +266,7 @@ async fn advertises_only_the_bounded_tool_surface() {
     assert_eq!(
         actual,
         vec![
+            "secretbridge_begin_conversation",
             "secretbridge_cancel_run",
             "secretbridge_confirm_approval",
             "secretbridge_create_run",
@@ -293,6 +294,7 @@ async fn advertises_only_the_bounded_tool_surface() {
     );
 
     let expected_properties = BTreeMap::from([
+        ("secretbridge_begin_conversation", vec!["summary"]),
         ("secretbridge_list_action_templates", vec![]),
         ("secretbridge_list_catalog", vec![]),
         (
@@ -305,6 +307,7 @@ async fn advertises_only_the_bounded_tool_surface() {
             vec![
                 "action_template_id",
                 "authorization_mode",
+                "conversation_id",
                 "expires_in_seconds",
                 "language",
                 "parameters",
@@ -317,6 +320,7 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "arguments",
                 "authorization_mode",
                 "connection_id",
+                "conversation_id",
                 "credential_slots",
                 "expires_in_seconds",
                 "language",
@@ -333,6 +337,7 @@ async fn advertises_only_the_bounded_tool_surface() {
             vec![
                 "arguments",
                 "connection_id",
+                "conversation_id",
                 "expires_in_seconds",
                 "host_key_sha256",
                 "language",
