@@ -6,12 +6,14 @@ import {
   downloadBackup,
   exportConfiguration,
   getDiagnostics,
+  unlockDiagnostics,
   importConfiguration,
   previewBackup,
   previewConfiguration,
   type BackupReport,
   type ConfigurationBundle,
   type Diagnostics,
+  type DiagnosticExport,
   type ImportReport,
 } from "./api";
 
@@ -46,6 +48,11 @@ export function DataMaintenanceView({
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [diagnosticPin, setDiagnosticPin] = useState("");
+  const [includeCommands, setIncludeCommands] = useState(false);
+  const [includeEvents, setIncludeEvents] = useState(true);
+  const [unlockedDiagnostics, setUnlockedDiagnostics] =
+    useState<DiagnosticExport | null>(null);
   async function perform(action: () => Promise<void>) {
     setBusy(true);
     setError(false);
@@ -281,8 +288,8 @@ export function DataMaintenanceView({
           <>
             <p className="text-sm text-slate-600">
               {zh
-                ? "精简诊断包含版本、状态计数、固定 MCP 与运行错误类别及首次/最近时间，不包含主机地址、路径、凭据名称、参数或输出。导出前请预览；发生时间和操作规律仍可能属于个人信息。"
-                : "Diagnostics include versions, state counts, fixed MCP and run error classes with first/last times, without host addresses, paths, credential names, arguments or output. Preview before export; activity times can still be personal information."}
+                ? "运行时持续加密保存详细诊断记录。输入初始化时设置的 PIN 后，可选择导出事件和完整命令配置。命令默认不导出。导出的 JSON 是明文，可能包含路径、地址或业务参数，请先预览并谨慎分享；注入的凭据值不写入诊断记录。"
+                : "Detailed diagnostic records are encrypted continuously. Enter your setup PIN to select events and complete command configurations. Commands are excluded by default. Exported JSON is plaintext and may contain paths, addresses, or business arguments. Preview it before sharing. Injected credential values are not recorded."}
             </p>
             <button
               className="workbench-button"
@@ -377,29 +384,94 @@ export function DataMaintenanceView({
                 </ul>
               </div>
             )}
-            <button
-              className="workbench-button"
-              disabled={busy}
-              onClick={() =>
-                void perform(async () =>
-                  saveDownload(
-                    new Blob(
-                      [
-                        JSON.stringify(
-                          await getDiagnostics(sessionToken),
-                          null,
-                          2,
+            <div className="space-y-3 rounded-lg border border-slate-200 p-4">
+              <label className="block text-sm font-semibold">
+                {zh ? "PIN/口令" : "PIN/passphrase"}
+                <input
+                  type="password"
+                  autoComplete="off"
+                  minLength={12}
+                  maxLength={64}
+                  value={diagnosticPin}
+                  onChange={(event) => {
+                    setDiagnosticPin(event.target.value);
+                    setUnlockedDiagnostics(null);
+                  }}
+                  className="mt-2 w-full rounded-xl border border-slate-200 px-3.5 py-2.5"
+                />
+              </label>
+              <label className="flex gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={includeEvents}
+                  onChange={(event) => {
+                    setIncludeEvents(event.target.checked);
+                    setUnlockedDiagnostics(null);
+                  }}
+                />
+                {zh ? "事件记录" : "Event records"}
+              </label>
+              <label className="flex gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={includeCommands}
+                  onChange={(event) => {
+                    setIncludeCommands(event.target.checked);
+                    setUnlockedDiagnostics(null);
+                  }}
+                />
+                {zh
+                  ? "完整命令配置（可能含敏感参数）"
+                  : "Complete command configurations (may contain sensitive arguments)"}
+              </label>
+              <button
+                className="workbench-button"
+                disabled={
+                  busy ||
+                  diagnosticPin.length < 12 ||
+                  (!includeEvents && !includeCommands)
+                }
+                onClick={() =>
+                  void perform(async () => {
+                    const result = await unlockDiagnostics(
+                      sessionToken,
+                      diagnosticPin,
+                      includeCommands,
+                      includeEvents,
+                    );
+                    setDiagnosticPin("");
+                    setUnlockedDiagnostics(result);
+                  })
+                }
+              >
+                {zh ? "解锁并预览所选内容" : "Unlock and preview selection"}
+              </button>
+              {unlockedDiagnostics && (
+                <>
+                  <p role="status" className="text-sm">
+                    {zh ? "已解锁记录" : "Unlocked records"}:{" "}
+                    {unlockedDiagnostics.records.length}
+                  </p>
+                  <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs">
+                    {JSON.stringify(unlockedDiagnostics, null, 2)}
+                  </pre>
+                  <button
+                    className="workbench-button"
+                    onClick={() =>
+                      saveDownload(
+                        new Blob(
+                          [JSON.stringify(unlockedDiagnostics, null, 2)],
+                          { type: "application/json" },
                         ),
-                      ],
-                      { type: "application/json" },
-                    ),
-                    "secretbridge-diagnostics.json",
-                  ),
-                )
-              }
-            >
-              {zh ? "下载诊断信息" : "Download diagnostics"}
-            </button>
+                        "secretbridge-diagnostics-selected.json",
+                      )
+                    }
+                  >
+                    {zh ? "下载预览内容" : "Download previewed content"}
+                  </button>
+                </>
+              )}
+            </div>
           </>
         )}
         {busy && (

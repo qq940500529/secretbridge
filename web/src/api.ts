@@ -152,6 +152,27 @@ export const importConfiguration = (
   });
 export const getDiagnostics = (token: string) =>
   maintenanceJson<Diagnostics>(token, "diagnostics");
+export interface UnlockedDiagnosticRecord {
+  category: "command" | "event";
+  created_at_unix_ms: number;
+  data: unknown;
+}
+export interface DiagnosticExport {
+  format: "secretbridge-encrypted-diagnostics-export";
+  format_version: 1;
+  records: UnlockedDiagnosticRecord[];
+}
+export const unlockDiagnostics = (
+  token: string,
+  pin: string,
+  includeCommands: boolean,
+  includeEvents: boolean,
+) =>
+  maintenanceJson<DiagnosticExport>(token, "diagnostics/export", {
+    pin,
+    include_commands: includeCommands,
+    include_events: includeEvents,
+  });
 export async function downloadBackup(token: string): Promise<Blob> {
   const response = await fetch("/api/v1/maintenance/backup", {
     credentials: "omit",
@@ -253,7 +274,6 @@ export async function pairWithTotp(code: string): Promise<PairResponse> {
 
 export interface CurrentBrowserAuthProof {
   current_pin?: string;
-  current_totp_code?: string;
 }
 
 export async function startTotpSetup(
@@ -300,7 +320,7 @@ export async function listBrowserAuthEvents(
 
 export async function setBrowserAuthMethod(
   token: string,
-  method: "pairing_link" | "pin",
+  method: "pin" | "disable_totp",
   pin?: string,
   proof: CurrentBrowserAuthProof = {},
 ): Promise<void> {

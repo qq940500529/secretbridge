@@ -66,9 +66,9 @@ try {
       body = { items: credentials };
     else if (path === "/api/v1/session/methods")
       body = {
-        pin_enabled: false,
+        pin_enabled: true,
         totp_enabled: false,
-        pairing_link_enabled: true,
+        pairing_link_enabled: false,
       };
     else if (path === "/api/v1/targets") body = { items: targets };
     else if (path === "/api/v1/runs" || path === "/api/v1/approvals")

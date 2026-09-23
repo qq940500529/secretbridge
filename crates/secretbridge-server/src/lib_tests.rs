@@ -212,12 +212,13 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         .await
         .expect("router response");
     assert_eq!(configured.status(), StatusCode::NO_CONTENT);
-    let stored_verifier = state
-        .secret_store
-        .get(super::BROWSER_PIN_CREDENTIAL_ID)
-        .expect("stored browser PIN verifier");
-    assert!(stored_verifier.starts_with("$argon2"));
-    assert!(!stored_verifier.contains("synthetic-local-pin"));
+    assert!(state.catalog.diagnostic_vault_ready().unwrap());
+    assert!(
+        state
+            .catalog
+            .verify_diagnostic_pin("synthetic-local-pin")
+            .unwrap()
+    );
 
     let methods = app
         .clone()
@@ -244,7 +245,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         ))
         .await
         .expect("current PIN is required to disable it");
-    assert_eq!(missing_current_proof.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(missing_current_proof.status(), StatusCode::BAD_REQUEST);
 
     let incorrect = app
         .clone()
@@ -315,7 +316,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
     assert_eq!(blocked.status(), StatusCode::UNAUTHORIZED);
 
     super::reset_authentication_attempts(&state).await;
-    let disabled = app
+    let rejected_disable = app
         .clone()
         .oneshot(authenticated_json_request(
             "PUT",
@@ -326,12 +327,26 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         ))
         .await
         .expect("router response");
-    assert_eq!(disabled.status(), StatusCode::NO_CONTENT);
+    assert_eq!(rejected_disable.status(), StatusCode::BAD_REQUEST);
+    let rotated = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT", "/api/v1/session/method", &token, ORIGIN,
+            r#"{"method":"pin","pin":"new-synthetic-local-pin","current_pin":"synthetic-local-pin"}"#,
+        ))
+        .await.unwrap();
+    assert_eq!(rotated.status(), StatusCode::NO_CONTENT);
+    assert!(
+        !state
+            .catalog
+            .verify_diagnostic_pin("synthetic-local-pin")
+            .unwrap()
+    );
     assert!(
         state
-            .secret_store
-            .get(super::BROWSER_PIN_CREDENTIAL_ID)
-            .is_err()
+            .catalog
+            .verify_diagnostic_pin("new-synthetic-local-pin")
+            .unwrap()
     );
     let audit = app
         .clone()
@@ -343,7 +358,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         ))
         .await
         .expect("PIN disablement audit");
-    assert!(response_json(audit).await.to_string().contains("disabled"));
+    assert_eq!(audit.status(), StatusCode::OK);
     let methods = app
         .oneshot(
             Request::builder()
@@ -353,7 +368,51 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         )
         .await
         .expect("router response");
-    assert_eq!(response_json(methods).await["pin_enabled"], false);
+    assert_eq!(response_json(methods).await["pin_enabled"], true);
+}
+
+#[tokio::test]
+async fn installed_broker_blocks_operations_until_pin_initialization() {
+    let (mut state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    state.enable_runtime_control(
+        ORIGIN.to_owned(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let app = router(state);
+    let token = pair_test_session(&app, &bootstrap).await;
+    let before = app
+        .clone()
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/targets",
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(before.status(), StatusCode::CONFLICT);
+    let initialized = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pin","pin":"synthetic-initial-pin"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initialized.status(), StatusCode::NO_CONTENT);
+    let after = app
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/targets",
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(after.status(), StatusCode::OK);
 }
 
 fn totp_code(secret: &str, step_offset: i64) -> String {
@@ -381,6 +440,18 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
     let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
     let app = router(state.clone());
     let token = pair_test_session(&app, &bootstrap).await;
+    let pin_setup = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pin","pin":"synthetic-local-pin"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(pin_setup.status(), StatusCode::NO_CONTENT);
     let setup = app
         .clone()
         .oneshot(authenticated_json_request(
@@ -388,7 +459,7 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
             "/api/v1/session/totp/setup",
             &token,
             ORIGIN,
-            "{}",
+            r#"{"current_pin":"synthetic-local-pin"}"#,
         ))
         .await
         .expect("start TOTP setup");
@@ -426,6 +497,7 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
         .expect("methods response");
     let methods = response_json(methods).await;
     assert_eq!(methods["totp_enabled"], true);
+    assert_eq!(methods["pin_enabled"], true);
     assert!(!methods.to_string().contains(manual_key));
 
     let replay = app
@@ -495,8 +567,8 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
             &token,
             ORIGIN,
             &serde_json::json!({
-                "method": "pairing_link",
-                "current_totp_code": totp_code(manual_key, -1),
+                "method": "disable_totp",
+                "current_pin": "synthetic-local-pin",
             })
             .to_string(),
         ))
@@ -508,6 +580,12 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
             .secret_store
             .get(super::BROWSER_TOTP_CREDENTIAL_ID)
             .is_err()
+    );
+    assert!(
+        state
+            .catalog
+            .verify_diagnostic_pin("synthetic-local-pin")
+            .unwrap()
     );
     let disabled_events = app
         .oneshot(authenticated_request(

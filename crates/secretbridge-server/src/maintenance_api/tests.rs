@@ -438,3 +438,60 @@ async fn diagnostics_group_non_mcp_failures_without_command_or_credential_data()
     assert!(!diagnostic.to_string().contains("Synthetic-SB-command_A&z"));
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
 }
+
+#[tokio::test]
+async fn diagnostic_export_requires_pin_and_explicit_command_selection() {
+    let (state, _) = AppState::new([ORIGIN.to_owned()]);
+    let pin = "synthetic-export-passphrase";
+    state.catalog.initialize_diagnostic_vault(pin).unwrap();
+    state
+        .catalog
+        .record_encrypted_diagnostic("event", json!({ "code": "test_event" }))
+        .unwrap();
+    state
+        .catalog
+        .record_encrypted_diagnostic("command", json!({ "program": "synthetic-command-marker" }))
+        .unwrap();
+    let (token, _) = state.issue_session().await.unwrap();
+    let app = router(state);
+    let path = "/api/v1/maintenance/diagnostics/export";
+    let wrong = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            path,
+            &token,
+            json!({ "pin": "wrong-synthetic-passphrase", "include_events": true }).to_string(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    let selected = json_body(
+        app.clone()
+            .oneshot(request(
+                "POST",
+                path,
+                &token,
+                json!({ "pin": pin, "include_events": true }).to_string(),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(selected["records"].as_array().unwrap().len(), 1);
+    assert!(!selected.to_string().contains("synthetic-command-marker"));
+    let commands = json_body(
+        app.oneshot(request(
+            "POST",
+            path,
+            &token,
+            json!({ "pin": pin, "include_commands": true }).to_string(),
+        ))
+        .await
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(commands["records"].as_array().unwrap().len(), 1);
+    assert!(commands.to_string().contains("synthetic-command-marker"));
+    assert!(!commands.to_string().contains(pin));
+}

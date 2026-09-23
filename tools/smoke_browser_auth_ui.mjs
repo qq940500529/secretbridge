@@ -7,7 +7,11 @@ import { acceptLegalConsent, launchBrowser } from "./browser_test_support.mjs";
 const { browser } = await launchBrowser();
 const baseUrl = process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799";
 
-async function openCase({ savedSession, failedMethodReads = 0 }) {
+async function openCase({
+  savedSession,
+  failedMethodReads = 0,
+  initialMethod = "totp",
+}) {
   const context = await browser.newContext({ locale: "zh-CN" });
   const page = await context.newPage();
   if (savedSession) {
@@ -18,7 +22,7 @@ async function openCase({ savedSession, failedMethodReads = 0 }) {
       );
     });
   }
-  let method = "totp";
+  let method = initialMethod;
   let reads = 0;
   let writes = 0;
   await page.route("**/api/v1/**", async (route) => {
@@ -32,7 +36,7 @@ async function openCase({ savedSession, failedMethodReads = 0 }) {
       }
       await route.fulfill({
         json: {
-          pin_enabled: method === "pin",
+          pin_enabled: method !== "pairing_link",
           totp_enabled: method === "totp",
           pairing_link_enabled: method === "pairing_link",
         },
@@ -41,7 +45,10 @@ async function openCase({ savedSession, failedMethodReads = 0 }) {
     }
     if (path === "/api/v1/session/method" && request.method() === "PUT") {
       writes++;
-      method = request.postDataJSON().method;
+      method =
+        request.postDataJSON().method === "disable_totp"
+          ? "pin"
+          : request.postDataJSON().method;
       await route.fulfill({ status: 204 });
       return;
     }
@@ -90,29 +97,27 @@ async function openCase({ savedSession, failedMethodReads = 0 }) {
 
 try {
   const restored = await openCase({ savedSession: true });
-  await restored.page.getByText("已绑定身份验证器").waitFor();
+  await restored.page.getByText("已设置 PIN，并绑定身份验证器").waitFor();
   await restored.page.getByRole("button", { name: "更换身份验证器" }).waitFor();
   await restored.page.reload();
   await restored.showSettings();
-  await restored.page.getByText("已绑定身份验证器").waitFor();
+  await restored.page.getByText("已设置 PIN，并绑定身份验证器").waitFor();
   assert.ok(restored.reads() >= 2, "refresh reloads the configured method");
-  await restored.page.getByRole("button", { name: "改用配对链接" }).click();
+  await restored.page.getByRole("button", { name: "解除验证码绑定" }).click();
   assert.equal(restored.writes(), 0, "disabling requires confirmation");
   await restored.page
     .getByRole("button", { name: "取消", exact: true })
     .click();
   assert.equal(restored.writes(), 0);
-  await restored.page.getByRole("button", { name: "改用配对链接" }).click();
-  await restored.page
-    .getByRole("textbox", { name: "当前身份验证器验证码" })
-    .fill("123456");
+  await restored.page.getByRole("button", { name: "解除验证码绑定" }).click();
+  await restored.page.getByLabel("当前 PIN/口令").fill("synthetic-current-pin");
   await restored.page.getByRole("button", { name: "确认更改" }).click();
-  await restored.page.getByText("当前使用一次性配对链接").waitFor();
+  await restored.page.getByText("已设置 PIN/口令").waitFor();
   assert.equal(restored.writes(), 1);
   await restored.context.close();
 
   const bootstrap = await openCase({ savedSession: false });
-  await bootstrap.page.getByText("已绑定身份验证器").waitFor();
+  await bootstrap.page.getByText("已设置 PIN，并绑定身份验证器").waitFor();
   assert.ok(
     bootstrap.reads() > 0,
     "bootstrap pairing loads the configured method",
@@ -130,11 +135,25 @@ try {
     "failed loading cannot appear unconfigured",
   );
   await failed.page.getByRole("button", { name: "重试" }).click();
-  await failed.page.getByText("已绑定身份验证器").waitFor();
+  await failed.page.getByText("已设置 PIN，并绑定身份验证器").waitFor();
   await failed.context.close();
 
+  const initial = await openCase({
+    savedSession: false,
+    initialMethod: "pairing_link",
+  });
+  await initial.page.getByText("初始化待完成：请先设置 PIN").waitFor();
+  await initial.page
+    .getByPlaceholder("至少 12 个字符")
+    .fill("synthetic-initial-pin");
+  await initial.page.getByRole("button", { name: "设置或更换" }).click();
+  await initial.page.getByText("是否再绑定身份验证器验证码？").waitFor();
+  await initial.page.getByRole("button", { name: "暂不绑定" }).click();
+  assert.equal(initial.writes(), 1);
+  await initial.context.close();
+
   console.log(
-    "Browser authentication UI smoke passed: saved session, bootstrap, refresh, confirmation and failed-load retry.",
+    "Browser authentication UI smoke passed: required PIN initialization, optional authenticator, saved session, refresh, confirmation and failed-load retry.",
   );
 } finally {
   await browser.close();

@@ -36,6 +36,7 @@ export function BrowserAuthenticationSettings({
   const [totpCode, setTotpCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [askTotp, setAskTotp] = useState(true);
   const [confirmation, setConfirmation] = useState<
     "pin" | "replace" | "disable" | null
   >(null);
@@ -43,7 +44,6 @@ export function BrowserAuthenticationSettings({
   const zh = language === "zh-CN";
 
   function proof(): CurrentBrowserAuthProof {
-    if (totpEnabled) return { current_totp_code: currentProof };
     if (pinEnabled) return { current_pin: currentProof };
     return {};
   }
@@ -85,7 +85,7 @@ export function BrowserAuthenticationSettings({
     }
   }
 
-  async function usePairingLinks() {
+  async function disableTotp() {
     const current = proof();
     clearConfirmation();
     setBusy(true);
@@ -93,13 +93,15 @@ export function BrowserAuthenticationSettings({
     try {
       await setBrowserAuthMethod(
         sessionToken,
-        "pairing_link",
+        "disable_totp",
         undefined,
         current,
       );
-      onChanged("pairing_link");
+      onChanged("pin");
       setMessage(
-        zh ? "已改回一次性配对链接。" : "Switched to one-time pairing links.",
+        zh
+          ? "已解除验证码绑定，PIN 保持有效。"
+          : "Authenticator removed; the PIN remains active.",
       );
     } catch {
       setMessage(zh ? "修改失败。" : "Could not change the method.");
@@ -114,8 +116,8 @@ export function BrowserAuthenticationSettings({
       </h2>
       <p className="text-sm leading-6 text-slate-600">
         {zh
-          ? "可使用本机 PIN 或身份验证器恢复浏览器访问。TOTP 密钥只保存在操作系统凭据库；请勿向 AI 提供 PIN、二维码或手动密钥。只有在确认具体审批后，才可把当前六位验证码交给 AI。"
-          : "Use a local PIN or authenticator to recover browser access. The TOTP key stays in the OS credential store. Never give an AI the PIN, QR code, or setup key; share only a current six-digit code after reviewing a specific approval."}
+          ? "首次使用必须设置 PIN/口令，建议至少 12 个不易猜测的字符。它用于浏览器登录和解锁持续加密保存的诊断记录；遗失后无法恢复旧诊断。设置完成后可选择绑定身份验证器验证码。请勿向 AI 提供 PIN、二维码或手动密钥。"
+          : "First set a PIN/passphrase of at least 12 hard-to-guess characters. It signs you in and unlocks continuously encrypted diagnostics; lost PINs cannot recover old records. You may then add an authenticator. Never share your PIN, QR code, or setup key with an AI."}
       </p>
       {authMethodStatus === "loading" && (
         <p role="status" className="text-sm text-slate-600">
@@ -140,31 +142,31 @@ export function BrowserAuthenticationSettings({
         <p role="status" className="text-sm font-medium text-slate-700">
           {totpEnabled
             ? zh
-              ? "已绑定身份验证器"
-              : "Authenticator configured"
+              ? "已设置 PIN，并绑定身份验证器"
+              : "PIN set; authenticator configured"
             : pinEnabled
               ? zh
                 ? "已设置 PIN/口令"
                 : "PIN/passphrase configured"
               : zh
-                ? "当前使用一次性配对链接"
-                : "Using one-time pairing links"}
+                ? "初始化待完成：请先设置 PIN"
+                : "Initialization pending: set a PIN"}
         </p>
       )}
       {authMethodStatus === "ready" && (
         <div className="flex flex-col gap-3 sm:flex-row">
           <input
             type="password"
-            minLength={6}
+            minLength={12}
             maxLength={64}
             value={pin}
             onChange={(event) => setPin(event.target.value)}
-            placeholder={zh ? "至少 6 个字符" : "At least 6 characters"}
+            placeholder={zh ? "至少 12 个字符" : "At least 12 characters"}
             className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
           />
           <button
             type="button"
-            disabled={busy || pin.length < 6}
+            disabled={busy || pin.length < 12}
             className="workbench-button"
             onClick={() => {
               if (pinEnabled || totpEnabled) setConfirmation("pin");
@@ -175,7 +177,7 @@ export function BrowserAuthenticationSettings({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || !pinEnabled}
             className="workbench-button"
             onClick={() => {
               if (pinEnabled || totpEnabled) setConfirmation("replace");
@@ -190,16 +192,49 @@ export function BrowserAuthenticationSettings({
                 ? "绑定身份验证器"
                 : "Add authenticator"}
           </button>
-          {(pinEnabled || totpEnabled) && (
+          {totpEnabled && (
             <button
               type="button"
               disabled={busy}
               className="workbench-button"
               onClick={() => setConfirmation("disable")}
             >
-              {zh ? "改用配对链接" : "Use pairing links"}
+              {zh ? "解除验证码绑定" : "Remove authenticator"}
             </button>
           )}
+        </div>
+      )}
+      {askTotp && pinEnabled && !totpEnabled && (
+        <div className="mt-4 rounded-xl border border-cyan-300 bg-cyan-50 p-4 text-sm">
+          <p className="mt-0 font-semibold">
+            {zh
+              ? "是否再绑定身份验证器验证码？"
+              : "Would you also like to add an authenticator?"}
+          </p>
+          <p>
+            {zh
+              ? "可以增强浏览器登录验证；PIN 仍是诊断记录的解锁密码。"
+              : "It adds another browser sign-in option. Your PIN remains the diagnostic unlock password."}
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className="workbench-button"
+              onClick={() => {
+                setAskTotp(false);
+                setConfirmation("replace");
+              }}
+            >
+              {zh ? "绑定验证码" : "Add authenticator"}
+            </button>
+            <button
+              type="button"
+              className="workbench-button"
+              onClick={() => setAskTotp(false)}
+            >
+              {zh ? "暂不绑定" : "Not now"}
+            </button>
+          </div>
         </div>
       )}
       {confirmation && (
@@ -210,11 +245,11 @@ export function BrowserAuthenticationSettings({
           <p className="mt-0">
             {confirmation === "disable"
               ? zh
-                ? "确认停用当前 PIN 或身份验证器？之后需使用新的一次性配对链接恢复访问。"
-                : "Disable the current PIN or authenticator? A new one-time pairing link will be needed to recover access."
+                ? "确认解除验证码绑定？PIN 仍用于登录和解锁诊断记录。"
+                : "Remove the authenticator? Your PIN still signs you in and unlocks diagnostics."
               : zh
-                ? "确认更换当前身份验证方式？完成后原方式将不再可用。"
-                : "Replace the current verification method? The previous method will no longer work after the change."}
+                ? "请使用当前 PIN 确认更改。更换 PIN 会重新加密诊断解锁密钥。"
+                : "Confirm with your current PIN. Changing it rewraps the diagnostic unlock key."}
           </p>
           {pinEnabled && (
             <input
@@ -222,43 +257,21 @@ export function BrowserAuthenticationSettings({
               aria-label={zh ? "当前 PIN/口令" : "Current PIN/passphrase"}
               value={currentProof}
               onChange={(event) => setCurrentProof(event.target.value)}
-              minLength={6}
+              minLength={12}
               maxLength={64}
               autoComplete="off"
-              className="mb-3 w-full rounded-xl border border-amber-300 bg-white px-3.5 py-2.5"
-            />
-          )}
-          {totpEnabled && (
-            <input
-              aria-label={
-                zh ? "当前身份验证器验证码" : "Current authenticator code"
-              }
-              value={currentProof}
-              onChange={(event) =>
-                setCurrentProof(
-                  event.target.value.replace(/\D/g, "").slice(0, 6),
-                )
-              }
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              autoComplete="one-time-code"
               className="mb-3 w-full rounded-xl border border-amber-300 bg-white px-3.5 py-2.5"
             />
           )}
           <div className="flex gap-3">
             <button
               type="button"
-              disabled={
-                busy ||
-                (pinEnabled && currentProof.length < 6) ||
-                (totpEnabled && currentProof.length !== 6)
-              }
+              disabled={busy || (pinEnabled && currentProof.length < 12)}
               className="workbench-button"
               onClick={() => {
                 if (confirmation === "pin") void savePin();
                 else if (confirmation === "replace") void beginTotpSetup();
-                else void usePairingLinks();
+                else void disableTotp();
               }}
             >
               {zh ? "确认更改" : "Confirm change"}

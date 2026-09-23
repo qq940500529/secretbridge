@@ -71,6 +71,8 @@ Skip this phase when installing a verified published package. For a source fallb
 
 For an ordinary deployment, require a healthy `status` response and a loopback-only listener after start. Opening the management page and guiding required first-use actions are part of the ordinary deployment; browser interaction, stop/start, login startup and lifecycle acceptance remain maintainer checks unless requested.
 
+First-use handoff: ask the person to enter a new PIN/passphrase (at least 12 characters) directly in the local management page. Explain that it is required for browser sign-in and to unlock continuously encrypted diagnostic records; losing it makes old encrypted diagnostics unrecoverable. The page then asks whether to bind an optional authenticator. Never request, type, capture or relay the PIN or TOTP setup material in agent tools or chat. Before initialization, normal broker operations remain unavailable.
+
 ### 5. Connect the user's MCP host
 
 - Identify the MCP-capable AI client currently in use. If that cannot be established from the task context or an available client surface, ask the user once which host to configure.
@@ -102,7 +104,7 @@ For an ordinary deployment, require a healthy `status` response and a loopback-o
 ### 7. Upgrade or rollback
 
 - Never treat rollback as a database downgrade.
-- The current development schema is 22 and can migrate published Beta 7 schema 18 and Beta 8 schema 19. Preserve a compatible independent backup before an upgrade; older unpublished development databases remain unsupported. An older binary cannot reopen a migrated schema 22 database.
+- The current development schema is 23. This prerelease PIN/TOTP initialization flow does not promise compatibility with older authentication settings. Preserve an independent backup before an upgrade; an older binary cannot reopen a schema 23 database.
 - On activation failure, verify the old pointer and old process were restored. If recovery also fails, stop and report the fixed public error code.
 - After a successful upgrade or rollback, update the MCP `command` to the absolute `binary` returned by that command, reload the host and repeat the read-only capability call.
 

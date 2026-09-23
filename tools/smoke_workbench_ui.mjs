@@ -87,9 +87,9 @@ try {
       body = { authenticated: true, expires_in_seconds: 3600 };
     else if (path === "/api/v1/session/methods")
       body = {
-        pin_enabled: false,
+        pin_enabled: true,
         totp_enabled: false,
-        pairing_link_enabled: true,
+        pairing_link_enabled: false,
       };
     else if (path === "/api/v1/credential-references") {
       if (method === "POST") {

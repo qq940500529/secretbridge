@@ -95,6 +95,7 @@ Report a reproducible ordinary defect through the [Beta bug form](https://github
 ## Security boundary
 
 - MCP cannot read secrets, setup keys, QR codes or PINs. It can only relay a user-supplied, single-use TOTP code for one identified pending approval; without that code it cannot approve its own request.
+- On first launch, the local management page requires a user-chosen PIN/passphrase of at least 12 characters. It signs the user in and unlocks encrypted diagnostic records. The page then asks whether to add an optional authenticator; binding TOTP keeps the PIN active. Losing the PIN makes previously encrypted diagnostics unrecoverable. Never give the PIN to an AI or include it in an issue.
 - TLS, SSH host verification and target-system permissions must not be disabled to make a test pass.
 - Output filtering reduces accidental echo risk; it is not a program sandbox and cannot decide whether all business data is safe to share with a model.
 - Malicious software already running arbitrary code as the credential owner may bypass application controls and access that account's processes, files or credential store.

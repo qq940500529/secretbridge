@@ -27,6 +27,10 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
             post(preview_backup).layer(DefaultBodyLimit::max(MAX_BACKUP_BYTES)),
         )
         .route("/api/v1/maintenance/diagnostics", get(diagnostics))
+        .route(
+            "/api/v1/maintenance/diagnostics/export",
+            post(export_diagnostics),
+        )
         .route_layer(middleware::from_fn_with_state(state, authenticate))
 }
 
@@ -126,6 +130,59 @@ struct Diagnostics {
     mcp_failures: Vec<catalog::DiagnosticFailure>,
     terminal_states: std::collections::BTreeMap<&'static str, usize>,
     stale_terminal_references: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnosticExportRequest {
+    pin: String,
+    #[serde(default)]
+    include_commands: bool,
+    #[serde(default)]
+    include_events: bool,
+}
+
+#[derive(Serialize)]
+struct DiagnosticExport {
+    format: &'static str,
+    format_version: u8,
+    records: Vec<catalog::diagnostic_vault::UnlockedDiagnosticRecord>,
+}
+
+async fn export_diagnostics(
+    State(state): State<AppState>,
+    Json(request): Json<DiagnosticExportRequest>,
+) -> Result<Json<DiagnosticExport>, ApiError> {
+    if !super::authentication_attempt_allowed(&state).await {
+        return Err(ApiError::Unauthorized);
+    }
+    if !super::valid_browser_pin(&request.pin) {
+        super::record_authentication_failure(&state).await;
+        return Err(ApiError::Unauthorized);
+    }
+    let catalog = state.catalog.clone();
+    let pin = zeroize::Zeroizing::new(request.pin);
+    let result = task::spawn_blocking(move || {
+        if !catalog.verify_diagnostic_pin(&pin)? {
+            return Ok(None);
+        }
+        catalog
+            .unlock_diagnostic_records(&pin, request.include_commands, request.include_events)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
+    let Some(records) = result else {
+        super::record_authentication_failure(&state).await;
+        return Err(ApiError::Unauthorized);
+    };
+    super::reset_authentication_attempts(&state).await;
+    Ok(Json(DiagnosticExport {
+        format: "secretbridge-encrypted-diagnostics-export",
+        format_version: 1,
+        records,
+    }))
 }
 
 #[derive(Serialize)]

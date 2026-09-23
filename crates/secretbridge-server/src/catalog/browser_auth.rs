@@ -123,6 +123,7 @@ impl Catalog {
             .and_then(|changed| (changed == 1).then_some(()).ok_or(CatalogError::Storage))
     }
 
+    #[cfg(test)]
     pub fn reset_totp_replay_guard(&self) -> Result<(), CatalogError> {
         self.lock()
             .execute(
@@ -163,6 +164,18 @@ impl Catalog {
             )
             .map_err(|_| CatalogError::Storage)
             .and_then(|changed| (changed == 1).then_some(()).ok_or(CatalogError::Storage))
+    }
+
+    pub fn deactivate_totp(&self) -> Result<(), CatalogError> {
+        self.lock()
+            .execute(
+                "UPDATE browser_auth_settings
+                    SET mode = 'pin', last_totp_step = NULL, updated_at_unix_ms = ?1
+                  WHERE singleton = 1 AND mode = 'totp'",
+                [now_unix_ms_i64()?],
+            )
+            .map_err(|_| CatalogError::Storage)
+            .and_then(|changed| (changed == 1).then_some(()).ok_or(CatalogError::Invalid))
     }
 
     pub fn record_browser_auth_event(

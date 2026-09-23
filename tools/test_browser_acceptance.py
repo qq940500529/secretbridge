@@ -41,7 +41,7 @@ def acceptance_plan(browsers: list[str]) -> list[tuple[str, str]]:
 
 def wait_for_preview(url: str, process: subprocess.Popen[bytes]) -> None:
     opener = build_opener(ProxyHandler({}))
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError("Web preview exited before it became ready")

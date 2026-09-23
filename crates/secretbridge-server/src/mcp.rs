@@ -29,10 +29,14 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod bridge_response;
 mod conversation;
 mod errors;
+mod ready;
+use bridge_response::safe_bridge_error_code;
 use conversation::{BeginConversationParams, resolve_conversation_id};
 use errors::{catalog_error, parse_uuid, remote_error};
+use ready::ensure_bridge_ready;
 
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -57,12 +61,12 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = r#"SecretBridge controlled operations / SecretBridge 安全操作
+const SERVER_INSTRUCTIONS: &str = r"SecretBridge controlled operations / SecretBridge 安全操作
 Use only these MCP tools. The local Web console is for the human; never inspect or automate it. Start each AI chat with secretbridge_begin_conversation using a short non-secret summary, then pass its conversation_id to every request in that chat. Only the human can set conversation approval policy in Web. A prior policy may preapprove a request; disclose its scope and risk before creating a run.
 Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. The catalog returns credentials and connections as non-secret metadata. Prefer a structured connection operation where supported, a one-time request for a changing command, and a saved template only when the user explicitly wants reuse. With no template, use secretbridge_request_command for a controlled local command or secretbridge_request_ssh for a structured SSH operation; do not create helper scripts to handle credentials.
 Response paths: terminal creation returns terminal.id (not a top-level id); approval requests return id, state, version, next_actions and possibly console_url; run creation returns run.id and run.state; read_run_output returns items and next_cursor. Check advertised output schemas. For a pending approval, show its exact ID, target, program/parameters, opaque credential references, expiry and risk. Invite the human to approve in the local Web console, or accept only a current six-digit TOTP code the human voluntarily provides for that exact ID and version. Never ask for a PIN, passphrase, setup key, QR code or credential; never retain, repeat, log or reuse a TOTP code. Use secretbridge_confirm_approval only for that pending request.
 Create a run only after approval; read sanitized output with the returned cursor. Inspect next_actions and stable error codes for recovery. Terminal input and output remain broker-mediated. Replace a timed-out or context-unknown terminal; do not blindly retry writes or use a shell to bypass approval.
-中文：每段 AI 对话先登记不含秘密的摘要，并把会话 ID 传入后续申请。会话审批策略只由人在本机网页设置；先前策略可能使申请直接获批，执行前应说明范围与风险。先发现终端能力和非秘密目录；有结构化连接器时优先使用，一次性变化命令使用动态申请，只有用户明确要求复用时才保存模板。创建终端的 ID 位于 terminal.id；审批的 id、state、version、next_actions 表明下一步；创建运行后读取 run.id，再用输出的 next_cursor 继续读取。待审批时请用户在本机网页处理，或仅转交用户主动提供给该审批的当前六位 TOTP；不得索要或保存 PIN、凭据或 TOTP 密钥，也不得自动化网页。"#;
+中文：每段 AI 对话先登记不含秘密的摘要，并把会话 ID 传入后续申请。会话审批策略只由人在本机网页设置；先前策略可能使申请直接获批，执行前应说明范围与风险。先发现终端能力和非秘密目录；有结构化连接器时优先使用，一次性变化命令使用动态申请，只有用户明确要求复用时才保存模板。创建终端的 ID 位于 terminal.id；审批的 id、state、version、next_actions 表明下一步；创建运行后读取 run.id，再用输出的 next_cursor 继续读取。待审批时请用户在本机网页处理，或仅转交用户主动提供给该审批的当前六位 TOTP；不得索要或保存 PIN、凭据或 TOTP 密钥，也不得自动化网页。";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -1637,6 +1641,10 @@ async fn process_bridge_request(
         Err(error) => {
             let code = safe_bridge_error_code(error.message.as_ref());
             let _ = state.catalog.record_diagnostic_failure(&code);
+            let _ = state.catalog.record_encrypted_diagnostic(
+                "event",
+                serde_json::json!({ "source": "mcp", "code": code }),
+            );
             BridgeResponse::from_error(error)
         }
     }
@@ -1652,13 +1660,7 @@ async fn dispatch_bridge_request(
             crate::runtime::handle(&state, parse_bridge_payload(payload)?).await?,
         );
     }
-    if state
-        .runtime_control
-        .as_ref()
-        .is_some_and(|control| control.stopping.is_cancelled())
-    {
-        return Err(ErrorData::internal_error("broker_stopping", None));
-    }
+    ensure_bridge_ready(&state, operation)?;
     let backend = McpBackend::Local(state);
     match operation {
         OP_HEALTH => {
@@ -1754,113 +1756,6 @@ fn parse_bridge_payload<T: DeserializeOwned>(payload: serde_json::Value) -> Resu
 fn serialize_bridge_payload<T: Serialize>(payload: T) -> Result<serde_json::Value, ErrorData> {
     serde_json::to_value(payload)
         .map_err(|_| ErrorData::internal_error("secretbridge_operation_failed", None))
-}
-
-fn safe_bridge_error_code(code: &str) -> String {
-    match code {
-        "not_found"
-        | "approval_consumed"
-        | "approval_not_usable"
-        | "approval_not_pending"
-        | "capacity_exceeded"
-        | "credential_reference_not_found"
-        | "invalid_request"
-        | "invalid_approval_transition"
-        | "invalid_run_transition"
-        | "idempotency_conflict"
-        | "policy_denied"
-        | "resource_in_use"
-        | "version_conflict"
-        | "verification_failed"
-        | "terminal_attach_required"
-        | "terminal_input_required"
-        | "terminal_busy"
-        | "terminal_context_unknown"
-        | "secure_terminal_not_usable"
-        | "secure_terminal_not_running"
-        | "ssh_connection_required"
-        | "ssh_connection_address_required"
-        | "ssh_connection_username_required"
-        | "ssh_connection_credential_required"
-        | "ssh_password_credential_required"
-        | "ssh_credential_target_mismatch"
-        | "terminal_closed"
-        | "terminal_spawn_failed"
-        | "terminal_unsupported_shell"
-        | "runtime_control_unavailable"
-        | "browser_open_failed"
-        | "broker_stopping"
-        | "command_arguments_too_large"
-        | "command_argument_too_large"
-        | "unknown_credential_placeholder" => code.to_owned(),
-        _ => "secretbridge_operation_failed".to_owned(),
-    }
-}
-
-impl BridgeResponse {
-    fn success(payload: serde_json::Value) -> Self {
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: true,
-            payload: Some(payload),
-            error: None,
-            error_data: None,
-        }
-    }
-
-    fn error(code: &str) -> Self {
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: false,
-            payload: None,
-            error: Some(code.to_owned()),
-            error_data: None,
-        }
-    }
-
-    fn from_error(error: ErrorData) -> Self {
-        let code = safe_bridge_error_code(error.message.as_ref());
-        let error_data = if matches!(
-            code.as_str(),
-            "command_arguments_too_large"
-                | "command_argument_too_large"
-                | "unknown_credential_placeholder"
-        ) {
-            error.data.and_then(|value| {
-                let field = value.get("field")?.as_str()?;
-                if field != "arguments"
-                    && !(field.starts_with("arguments[")
-                        && field.ends_with(']')
-                        && field.len() <= 32
-                        && field[10..field.len() - 1].bytes().all(|byte| byte.is_ascii_digit()))
-                {
-                    return None;
-                }
-                Some(if code == "unknown_credential_placeholder" {
-                    serde_json::json!({
-                        "field": field,
-                        "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
-                    })
-                } else {
-                    serde_json::json!({
-                        "field": field,
-                        "actual_bytes": value.get("actual_bytes")?.as_u64()?,
-                        "limit_bytes": value.get("limit_bytes")?.as_u64()?,
-                        "next_actions": ["split_the_operation", "use_a_structured_connector"]
-                    })
-                })
-            })
-        } else {
-            None
-        };
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: false,
-            payload: None,
-            error: Some(code),
-            error_data,
-        }
-    }
 }
 
 async fn read_frame<S>(stream: &mut S, maximum: usize) -> io::Result<Zeroizing<Vec<u8>>>
