@@ -56,9 +56,7 @@ export function HistoryWorkspace({
   language: "zh-CN" | "en";
   sessionToken: string;
 }) {
-  const [section, setSection] = useState<"runs" | "events" | "conversations">(
-    "runs",
-  );
+  const [section, setSection] = useState<"logs" | "conversations">("logs");
   return (
     <>
       <SectionTabs
@@ -66,23 +64,16 @@ export function HistoryWorkspace({
         onSelect={setSection}
         items={[
           {
-            id: "runs",
-            label: language === "zh-CN" ? "执行历史" : "Run history",
+            id: "logs",
+            label: language === "zh-CN" ? "安全日志" : "Safe log",
           },
-          { id: "events", label: language === "zh-CN" ? "事件记录" : "Events" },
           {
             id: "conversations",
             label: language === "zh-CN" ? "AI 会话" : "AI conversations",
           },
         ]}
       />
-      {section === "runs" ? (
-        <OperationsView
-          language={language}
-          sessionToken={sessionToken}
-          historyOnly
-        />
-      ) : section === "events" ? (
+      {section === "logs" ? (
         <AuditView language={language} sessionToken={sessionToken} />
       ) : (
         <AiConversationsView language={language} sessionToken={sessionToken} />

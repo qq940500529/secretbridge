@@ -26,6 +26,7 @@ pub(crate) mod maintenance;
 mod notification_settings;
 mod one_time;
 mod rows;
+mod safe_events;
 mod schema;
 
 pub use ai_conversations::AiConversation;
@@ -658,6 +659,7 @@ pub struct SafeEvent {
     pub state: RunState,
     pub message: String,
     pub created_at_unix_ms: u64,
+    pub terminal_id: Option<Uuid>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1870,39 +1872,6 @@ impl Catalog {
         synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
-    pub fn list_safe_events(&self, run_id: Option<Uuid>) -> Result<Vec<SafeEvent>, CatalogError> {
-        let connection = self.lock();
-        if let Some(id) = run_id {
-            synthetic_run_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
-        }
-        let (query, parameter) = run_id.map_or(
-            (
-                "SELECT id, run_id, sequence, kind, state, message, created_at_unix_ms
-                   FROM safe_events ORDER BY created_at_unix_ms DESC, id DESC",
-                None,
-            ),
-            |id| {
-                (
-                    "SELECT id, run_id, sequence, kind, state, message, created_at_unix_ms
-                       FROM safe_events WHERE run_id = ?1 ORDER BY sequence",
-                    Some(id.to_string()),
-                )
-            },
-        );
-        let mut statement = connection
-            .prepare(query)
-            .map_err(|_| CatalogError::Storage)?;
-        let mapped = if let Some(parameter) = parameter {
-            statement.query_map([parameter], safe_event_from_row)
-        } else {
-            statement.query_map([], safe_event_from_row)
-        }
-        .map_err(|_| CatalogError::Storage)?;
-        mapped
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|_| CatalogError::Storage)
-    }
-
     pub fn recover_interrupted_runs(&self) -> Result<usize, CatalogError> {
         let ids = {
             let connection = self.lock();
@@ -2278,18 +2247,6 @@ fn synthetic_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Synthetic
         started_at_unix_ms: optional_u64_from_row(row, 11)?,
         finished_at_unix_ms: optional_u64_from_row(row, 12)?,
         version: u64_from_row(row, 13)?,
-    })
-}
-
-fn safe_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SafeEvent> {
-    Ok(SafeEvent {
-        id: u64_from_row(row, 0)?,
-        run_id: uuid_from_row(row, 1)?,
-        sequence: u64_from_row(row, 2)?,
-        kind: SafeEventKind::from_storage(&row.get::<_, String>(3)?)?,
-        state: RunState::from_storage(&row.get::<_, String>(4)?)?,
-        message: row.get(5)?,
-        created_at_unix_ms: u64_from_row(row, 6)?,
     })
 }
 

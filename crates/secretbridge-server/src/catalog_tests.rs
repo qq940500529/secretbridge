@@ -211,6 +211,24 @@ fn browser_auth_events_are_fixed_and_bounded() {
 }
 
 #[test]
+fn browser_auth_event_list_exposes_the_entire_retained_window() {
+    let catalog = Catalog::in_memory().unwrap();
+    for _ in 0..2050 {
+        catalog
+            .record_browser_auth_event(
+                BrowserAuthEventKind::VerificationFailed,
+                BrowserAuthChannel::Browser,
+                None,
+            )
+            .unwrap();
+    }
+    let events = catalog.list_browser_auth_events().unwrap();
+    assert_eq!(events.len(), 2048);
+    assert_eq!(events.first().unwrap().id, 2050);
+    assert_eq!(events.last().unwrap().id, 3);
+}
+
+#[test]
 fn linked_reference_cannot_be_deleted_before_its_target() {
     let catalog = Catalog::in_memory().expect("in-memory catalog");
     let credential = create_credential(&catalog);
@@ -2130,6 +2148,43 @@ fn create_approved_workflow(catalog: &Catalog) -> super::Approval {
             },
         )
         .expect("approve synthetic workflow")
+}
+
+#[test]
+fn sanitized_output_survives_catalog_reopen_with_sequence_and_stream() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).unwrap();
+    let approval = create_approved_workflow(&catalog);
+    let run = catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    catalog.start_run(run.id).unwrap();
+    catalog
+        .append_output(run.id, "stdout", "safe first\n")
+        .unwrap();
+    catalog
+        .append_output(run.id, "stderr", "safe second\n")
+        .unwrap();
+    catalog
+        .complete_command_run(run.id, "command_ok", Some(0))
+        .unwrap();
+    drop(catalog);
+
+    let reopened = Catalog::open(&database.path).unwrap();
+    let page = reopened.output(run.id, 0).unwrap();
+    assert_eq!(page.state, RunState::Succeeded);
+    assert_eq!(page.exit_code, Some(0));
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.items[0].sequence, 1);
+    assert_eq!(page.items[0].stream, "stdout");
+    assert_eq!(page.items[1].sequence, 2);
+    assert_eq!(page.items[1].stream, "stderr");
+    assert_eq!(page.items[0].text, "safe first\n");
+    assert!(!page.truncated);
 }
 
 struct TemporaryDatabase {

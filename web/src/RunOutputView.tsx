@@ -28,6 +28,7 @@ export function RunOutputView({
   const busy = useRef(false);
   const active = useRef(true);
   const generation = useRef(0);
+  const latestRunState = useRef<RunOutput["state"] | null>(null);
   async function load() {
     if (busy.current || !active.current) return;
     const requestedGeneration = generation.current;
@@ -42,6 +43,7 @@ export function RunOutputView({
         setChunks((previous) => [...previous, ...result.items].slice(-2048));
         setExit(result.exit_code);
         setRunState(result.state);
+        latestRunState.current = result.state;
         setError(false);
         if (!result.has_more) break;
       }
@@ -91,6 +93,7 @@ export function RunOutputView({
     setCleared(false);
     setExit(null);
     setRunState(null);
+    latestRunState.current = null;
     setConfirmDelete(false);
     setDeleting(false);
     void load();
@@ -98,6 +101,18 @@ export function RunOutputView({
       active.current = false;
       generation.current += 1;
     };
+  }, [id, sessionToken]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (
+        latestRunState.current === null ||
+        latestRunState.current === "queued" ||
+        latestRunState.current === "running"
+      ) {
+        void load();
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, [id, sessionToken]);
   useServiceChanges(sessionToken, () => void load());
   const zh = language === "zh-CN";

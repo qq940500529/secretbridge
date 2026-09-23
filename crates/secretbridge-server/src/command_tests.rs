@@ -179,18 +179,6 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
             .result_status,
         terminal_output.text
     );
-    assert!(
-        page.items
-            .iter()
-            .any(|item| item.text.contains("stdout-marker")),
-        "terminal-backed output is retained for run history"
-    );
-    assert!(page.items.iter().all(|item| item.created_at_unix_ms > 0));
-    assert!(
-        !serde_json::to_string(&page)
-            .unwrap()
-            .contains("Synthetic-SB-command_A&z")
-    );
 
     let read = terminal_output;
     assert_eq!(read.terminal.id, terminal.id);
@@ -221,6 +209,35 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
         .terminals
         .remove(terminal.id)
         .expect("remove secure terminal");
+    assert_retained_terminal_evidence(&state, result.run.id, terminal.id);
+}
+
+fn assert_retained_terminal_evidence(state: &AppState, run_id: Uuid, terminal_id: Uuid) {
+    let events = state.catalog.list_safe_events(Some(run_id)).unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|event| event.terminal_id == Some(terminal_id))
+    );
+    let retained = state.catalog.output(run_id, 0).unwrap();
+    assert_eq!(retained.state, RunState::Succeeded);
+    assert!(
+        retained
+            .items
+            .iter()
+            .any(|item| item.text.contains("stdout-marker"))
+    );
+    assert!(
+        retained
+            .items
+            .iter()
+            .all(|item| item.created_at_unix_ms > 0)
+    );
+    assert!(
+        !serde_json::to_string(&retained)
+            .unwrap()
+            .contains("Synthetic-SB-command_A&z")
+    );
 }
 
 #[cfg(windows)]

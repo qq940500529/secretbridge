@@ -218,7 +218,7 @@ impl Catalog {
         let mut statement = connection
             .prepare(
                 "SELECT id, kind, channel, approval_id, created_at_unix_ms
-                   FROM browser_auth_events ORDER BY id DESC LIMIT 200",
+                   FROM browser_auth_events ORDER BY id DESC LIMIT 2048",
             )
             .map_err(|_| CatalogError::Storage)?;
         statement

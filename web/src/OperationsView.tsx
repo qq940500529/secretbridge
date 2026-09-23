@@ -40,12 +40,10 @@ export function OperationsView({
   language,
   sessionToken,
   initialTemplateId,
-  historyOnly = false,
 }: {
   language: Language;
   sessionToken: string;
   initialTemplateId?: string;
-  historyOnly?: boolean;
 }) {
   const text =
     language === "zh-CN"
@@ -83,7 +81,7 @@ export function OperationsView({
             running: "运行中",
             succeeded: "已成功",
             cancelled: "已取消",
-            failed: "已中断",
+            failed: "失败",
           } satisfies Record<RunState, string>,
           results: {
             command_ok: "程序执行成功",
@@ -136,7 +134,7 @@ export function OperationsView({
             running: "Running",
             succeeded: "Succeeded",
             cancelled: "Cancelled",
-            failed: "Interrupted",
+            failed: "Failed",
           } satisfies Record<RunState, string>,
           results: {
             command_ok: "Program completed",
@@ -351,84 +349,73 @@ export function OperationsView({
     <section className="space-y-6">
       <header>
         <h1 className="m-0 text-3xl font-bold tracking-tight text-slate-950">
-          {historyOnly
-            ? language === "zh-CN"
-              ? "执行历史"
-              : "Run history"
-            : language === "zh-CN"
-              ? "执行与结果"
-              : "Execution & results"}
+          {language === "zh-CN" ? "执行与结果" : "Execution & results"}
         </h1>
         <p className="mb-0 mt-3 max-w-3xl text-sm leading-6 text-slate-600">
           {text.subtitle}
         </p>
       </header>
-      {!historyOnly && (
-        <EditorDialog
-          title={text.request}
-          open={requestOpen}
-          onOpen={() => setRequestOpen(true)}
-          onClose={() => setRequestOpen(false)}
-          busy={busy}
-        >
-          {error && (
-            <p role="alert" className="px-5 text-sm text-rose-700">
-              {error}
-            </p>
-          )}
-          <form
-            onSubmit={submit}
-            className="border-t border-slate-200 px-5 py-5"
-          >
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <label className="flex-1 text-sm font-semibold text-slate-700">
-                <span className="mb-2 block">{text.approval}</span>
-                <select
-                  required
-                  value={approvalId}
-                  onChange={(event) => setApprovalId(event.target.value)}
-                  className={inputClass}
-                >
-                  <option value="">{text.choose}</option>
-                  {availableApprovals.map((approval) => (
-                    <option key={approval.id} value={approval.id}>
-                      {approval.action_template_id
-                        ? templateNames.get(approval.action_template_id)
-                        : approval.operation}{" "}
-                      · {targetNames.get(approval.target_id)} ·{" "}
-                      {text.approvalVersion} {approval.version}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={!selectedApproval || busy}
-                className="mt-auto inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
+      <EditorDialog
+        title={text.request}
+        open={requestOpen}
+        onOpen={() => setRequestOpen(true)}
+        onClose={() => setRequestOpen(false)}
+        busy={busy}
+      >
+        {error && (
+          <p role="alert" className="px-5 text-sm text-rose-700">
+            {error}
+          </p>
+        )}
+        <form onSubmit={submit} className="border-t border-slate-200 px-5 py-5">
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <label className="flex-1 text-sm font-semibold text-slate-700">
+              <span className="mb-2 block">{text.approval}</span>
+              <select
+                required
+                value={approvalId}
+                onChange={(event) => setApprovalId(event.target.value)}
+                className={inputClass}
               >
-                <PlayCircle className="size-4" />
-                {busy ? text.submitting : text.submit}
-              </button>
+                <option value="">{text.choose}</option>
+                {availableApprovals.map((approval) => (
+                  <option key={approval.id} value={approval.id}>
+                    {approval.action_template_id
+                      ? templateNames.get(approval.action_template_id)
+                      : approval.operation}{" "}
+                    · {targetNames.get(approval.target_id)} ·{" "}
+                    {text.approvalVersion} {approval.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={!selectedApproval || busy}
+              className="mt-auto inline-flex h-[42px] items-center justify-center gap-2 rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
+            >
+              <PlayCircle className="size-4" />
+              {busy ? text.submitting : text.submit}
+            </button>
+          </div>
+          {selectedApproval && (
+            <div className="mt-3 text-xs text-slate-600">
+              <p>
+                {authorizationLabel(
+                  selectedApproval.authorization_mode,
+                  language === "zh-CN",
+                )}
+              </p>
+              <pre className="whitespace-pre-wrap break-all">
+                {JSON.stringify(selectedApproval.parameters, null, 2)}
+              </pre>
             </div>
-            {selectedApproval && (
-              <div className="mt-3 text-xs text-slate-600">
-                <p>
-                  {authorizationLabel(
-                    selectedApproval.authorization_mode,
-                    language === "zh-CN",
-                  )}
-                </p>
-                <pre className="whitespace-pre-wrap break-all">
-                  {JSON.stringify(selectedApproval.parameters, null, 2)}
-                </pre>
-              </div>
-            )}
-            {availableApprovals.length === 0 && !loading && (
-              <p className="mb-0 mt-3 text-sm text-amber-700">{text.none}</p>
-            )}
-          </form>
-        </EditorDialog>
-      )}
+          )}
+          {availableApprovals.length === 0 && !loading && (
+            <p className="mb-0 mt-3 text-sm text-amber-700">{text.none}</p>
+          )}
+        </form>
+      </EditorDialog>
 
       <div>
         <div className="mb-4 flex items-center justify-between">
