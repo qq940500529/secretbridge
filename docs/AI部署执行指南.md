@@ -66,7 +66,7 @@ Skip this phase when installing a verified published package. For a source fallb
 - Run the packaged executable's `verify-package` before `install`.
 - Install only to the user-approved absolute directory.
 - Capture the absolute active path from `status.installation.binary` for a reused installation or `binary` from a successful `install`. Do not use a temporary extraction path or a source-tree `target` binary for persistent MCP configuration.
-- Check `status`, loopback-only listening, `open`, browser pairing, stop/start and the documented login-start descriptor.
+- Check `status`, loopback-only listening, the install result's management-page handoff, browser pairing, stop/start and the documented login-start descriptor. Use `open` only when the page was not already opened.
 - Do not claim desktop, credential-store, reboot or accessibility acceptance unless actually observed on that platform.
 
 For an ordinary deployment, require a healthy `status` response and a loopback-only listener after start. Opening the management page and guiding required first-use actions are part of the ordinary deployment; browser interaction, stop/start, login startup and lifecycle acceptance remain maintainer checks unless requested.
@@ -96,10 +96,11 @@ First-use handoff: ask the person to enter a new PIN/passphrase (at least 12 cha
 
 ### 6. Open the management page and guide first use
 
-- After MCP tool discovery and the read-only capability call, check whether the current machine has an interactive desktop session. On a fresh local desktop install, run the installed active `binary open`; it creates a one-time local pairing page and asks the OS to open it. Do not capture, copy, print or send the pairing URL or token to the AI client.
+- After MCP tool discovery and the read-only capability call, inspect `install.management_page`. A fresh local desktop install normally reports `opened`; do not rotate its one-time pairing page by calling `open` again. If it reports `manual_open_required`, check whether the current machine has an interactive desktop session and run the installed active `binary open` there. Do not capture, copy, print or send the pairing URL or token to the AI client.
 - If a reused installation is already initialized and no license, pairing or authentication action is needed, do not force another browser window. When a human action is required, explain whether it is license acceptance, local pairing, selecting a PIN/authenticator, or connection setup, and open the page on a local desktop.
 - If there is no desktop, this is a remote SSH session, or `open` returns `browser_open_failed`, keep the loopback boundary and tell the user to run the active `binary open` in an interactive session **on the machine running SecretBridge**. Do not expose the port, alter firewall rules, tunnel a pairing token, or claim the page opened.
 - Recheck `status` and `secretbridge_terminal_capabilities` after the handoff. Report page-open success, failure or headless limitation separately from service health and MCP health. User-completed initialization is a separate outcome; do not infer it from a successful `open` command.
+- If an MCP operation returns `initialization_required`, read its loopback `console_url` and `next_actions`: the person must set the required PIN in the local page and may bind an authenticator before the AI retries. The AI must not open or automate the approval or setup UI itself.
 
 ### 7. Upgrade or rollback
 

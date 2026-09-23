@@ -33,6 +33,7 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
         | "capacity_exceeded"
         | "credential_reference_not_found"
         | "invalid_request"
+        | "initialization_required"
         | "invalid_approval_transition"
         | "invalid_run_transition"
         | "idempotency_conflict"
@@ -68,6 +69,7 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
                     | "command_argument_too_large"
                     | "legacy_credential_placeholder"
                     | "unknown_credential_placeholder"
+                    | "initialization_required"
             ) {
                 data
             } else {

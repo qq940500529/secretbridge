@@ -47,8 +47,10 @@ pub(super) async fn handle(
             stop().await?;
             println!("{}", serde_json::json!({"running":false}));
         }
-        "install" if arguments.len() == 2 => {
-            installation::install(Path::new(&arguments[1])).await?;
+        "install"
+            if arguments.len() == 2 || (arguments.len() == 3 && arguments[2] == "--no-open") =>
+        {
+            installation::install(Path::new(&arguments[1]), arguments.len() == 3).await?;
         }
         "verify-package" if arguments.len() == 2 => {
             let verification = installation::verify(Path::new(&arguments[1]))?;

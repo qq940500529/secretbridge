@@ -30,6 +30,26 @@ use crate::{
 const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
 
 #[test]
+fn initialization_error_points_to_local_page_and_required_pin() {
+    let (mut state, _) = AppState::new([]);
+    state.enable_runtime_control("http://127.0.0.1:8787".into(), CancellationToken::new());
+    let error = super::ready::ensure_bridge_ready(&state, super::OP_LIST_CATALOG)
+        .expect_err("new broker must require initialization");
+    let response = BridgeResponse::from_error(error);
+    assert_eq!(response.error.as_deref(), Some("initialization_required"));
+    let guidance = response.error_data.unwrap();
+    assert_eq!(guidance["console_url"], "http://127.0.0.1:8787");
+    assert_eq!(guidance["next_actions"][1], "set_required_pin");
+    assert!(!guidance.to_string().contains(SENSITIVE_MARKER));
+    let forwarded = super::errors::remote_error("initialization_required", Some(guidance));
+    assert_eq!(forwarded.message, "initialization_required");
+    assert_eq!(
+        forwarded.data.unwrap()["console_url"],
+        "http://127.0.0.1:8787"
+    );
+}
+
+#[test]
 fn bridge_argument_errors_preserve_field_bounds_without_echoing_values() {
     let response = BridgeResponse::from_error(ErrorData::invalid_params(
         "command_argument_too_large",

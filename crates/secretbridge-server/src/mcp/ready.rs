@@ -10,7 +10,14 @@ pub(super) fn ensure_bridge_ready(state: &AppState, operation: &str) -> Result<(
         && operation != OP_HEALTH
         && !state.catalog.diagnostic_vault_ready().unwrap_or(false)
     {
-        return Err(ErrorData::invalid_params("initialization_required", None));
+        let console_url = state
+            .runtime_control
+            .as_ref()
+            .map(|control| &control.origin);
+        return Err(ErrorData::invalid_params(
+            "initialization_required",
+            Some(serde_json::json!({ "console_url": console_url })),
+        ));
     }
     if state
         .runtime_control
