@@ -58,6 +58,7 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         program: program.to_string_lossy().into_owned(),
         working_directory: directory.to_string_lossy().into_owned(),
         arguments,
+        stdin_content: None,
         slots: vec![CredentialSlot {
             name: "password".into(),
             credential_id: id,
@@ -577,6 +578,187 @@ fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
     second.name = "second".into();
     config.slots.push(second);
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn stdin_content_has_a_strict_budget_and_cannot_share_secret_stdin() {
+    let mut command = fixture("environment", Uuid::new_v4());
+    command.stdin_content = Some("echo synthetic\n".into());
+    assert!(command.validate().is_ok());
+    command.stdin_content = Some("x".repeat(MAX_STDIN_CONTENT_BYTES));
+    assert!(command.validate().is_ok());
+    command.stdin_content = Some("x".repeat(MAX_STDIN_CONTENT_BYTES + 1));
+    assert!(command.validate().is_err());
+    command.stdin_content = Some("echo {{secret:password}}".into());
+    assert!(command.validate().is_err());
+    command.stdin_content = Some("echo\0synthetic".into());
+    assert!(command.validate().is_err());
+    command.stdin_content = Some("echo synthetic".into());
+    command.slots[0].injection = Injection::Stdin;
+    command.slots[0].environment_variable = None;
+    assert!(command.validate().is_err());
+}
+
+#[test]
+fn terminal_script_is_kept_out_of_the_pty_command_and_temporary_file_is_removed() {
+    let (state, _) = AppState::new([]);
+    let mut config = fixture("environment", Uuid::new_v4());
+    config.slots.clear();
+    let marker = "synthetic-private-script-content";
+    config.stdin_content = Some(marker.into());
+    let mut files = TemporaryFiles { paths: Vec::new() };
+    let shell = if cfg!(windows) {
+        crate::terminal::TerminalShell::PowerShell
+    } else {
+        crate::terminal::TerminalShell::Bash
+    };
+    let rendered = terminal_command(
+        &state,
+        Uuid::new_v4(),
+        shell,
+        &config,
+        &[],
+        &std::collections::BTreeMap::default(),
+        &mut files,
+    )
+    .unwrap();
+    assert!(!rendered.contains(marker));
+    assert_eq!(files.paths.len(), 1);
+    let path = files.paths[0].clone();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), marker);
+    drop(files);
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one script scenario verifies both direct execution and continuous terminal delivery"
+)]
+async fn bounded_stdin_script_runs_locally_and_in_a_secure_terminal() {
+    for use_terminal in [false, true] {
+        let (state, _) = AppState::new([]);
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let terminal = use_terminal.then(|| {
+            state
+                .terminals
+                .create(&crate::terminal::CreateTerminal {
+                    rows: 24,
+                    cols: 100,
+                    shell: None,
+                    name: Some("Synthetic stdin script".into()),
+                    working_directory: Some(directory.to_string_lossy().into_owned()),
+                    environment: std::collections::BTreeMap::new(),
+                })
+                .unwrap()
+        });
+        let target = state
+            .catalog
+            .create_target(
+                &serde_json::from_value(serde_json::json!({
+                    "name":"Synthetic script target","kind":"http_service","environment":"test"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let (program, arguments, script) = if cfg!(windows) {
+            let root = std::env::var_os("SystemRoot").expect("Windows root");
+            (
+                PathBuf::from(root).join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+                vec![
+                    "-NoLogo".to_owned(),
+                    "-NoProfile".to_owned(),
+                    "-NonInteractive".to_owned(),
+                    "-Command".to_owned(),
+                    "-".to_owned(),
+                ],
+                "Write-Output 'stdin-script-marker'\r\n",
+            )
+        } else {
+            (
+                PathBuf::from("/bin/sh"),
+                vec!["-s".to_owned()],
+                "printf '%s\\n' stdin-script-marker\n",
+            )
+        };
+        let script = format!("{}{}", " ".repeat(9_000), script);
+        let config = CommandConfig {
+            terminal_id: terminal.as_ref().map(|terminal| terminal.id),
+            database: None,
+            http: None,
+            ssh: None,
+            telnet: None,
+            git: None,
+            parameters: Vec::new(),
+            program: program.to_string_lossy().into_owned(),
+            working_directory: directory.to_string_lossy().into_owned(),
+            arguments,
+            stdin_content: Some(script),
+            slots: Vec::new(),
+        };
+        config.validate().unwrap();
+        let template = CreateActionTemplate {
+            command: Some(config),
+            target_id: target.id,
+            name: "Synthetic stdin script".into(),
+            operation: crate::catalog::ApprovalOperation::CommandExecution,
+            result_scope: crate::catalog::ApprovalResultScope::SanitizedOutput,
+            description: None,
+            timeout_seconds: SUCCESSFUL_COMMAND_TIMEOUT_SECONDS,
+        };
+        let template = if use_terminal {
+            state.catalog.create_one_time_draft(&template).unwrap()
+        } else {
+            state.catalog.create_action_template(&template).unwrap()
+        };
+        let approval = state
+            .catalog
+            .create_approval(
+                &serde_json::from_value(serde_json::json!({
+                    "action_template_id":template.id,"expires_in_seconds":60
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        state
+            .catalog
+            .approve_approval(
+                approval.id,
+                &DecideApproval {
+                    expected_version: approval.version,
+                    note: None,
+                },
+            )
+            .unwrap();
+        let run = crate::create_run_for_state(
+            &state,
+            CreateSyntheticRun {
+                approval_id: approval.id,
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let page = wait(&state, run.run.id).await;
+        assert_eq!(
+            page.state,
+            RunState::Succeeded,
+            "terminal={use_terminal}, status={:?}",
+            state
+                .catalog
+                .get_synthetic_run(run.run.id)
+                .unwrap()
+                .result_status
+        );
+        assert!(
+            page.items
+                .iter()
+                .any(|item| item.text.contains("stdin-script-marker"))
+        );
+        if let Some(terminal) = terminal {
+            state.terminals.remove(terminal.id).unwrap();
+        }
+    }
 }
 
 #[tokio::test]

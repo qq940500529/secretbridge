@@ -41,6 +41,8 @@ pub struct CommandConfig {
     pub program: String,
     pub working_directory: String,
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub stdin_content: Option<String>,
     pub slots: Vec<CredentialSlot>,
 }
 
@@ -65,6 +67,7 @@ pub enum Injection {
 
 pub const MAX_ARGUMENT_BYTES: usize = 8192;
 pub const MAX_ARGUMENTS_BYTES: usize = 12_000;
+pub const MAX_STDIN_CONTENT_BYTES: usize = 32 * 1024;
 const MAX_RUN_OUTPUT_CHUNKS: i64 = 2048;
 
 fn credential_placeholder(name: &str) -> String {
@@ -82,6 +85,19 @@ impl CommandConfig {
     )]
     pub fn validate(&self) -> Result<(), CatalogError> {
         crate::parameters::validate(&self.parameters)?;
+        if self.stdin_content.as_ref().is_some_and(|content| {
+            content.len() > MAX_STDIN_CONTENT_BYTES
+                || content.contains('\0')
+                || content.contains("{{secret:")
+        }) || (self.stdin_content.is_some()
+            && (self.database.is_some()
+                || self.http.is_some()
+                || self.ssh.is_some()
+                || self.telnet.is_some()
+                || self.git.is_some()))
+        {
+            return Err(CatalogError::Invalid);
+        }
         if usize::from(self.http.is_some())
             + usize::from(self.ssh.is_some())
             + usize::from(self.telnet.is_some())
@@ -167,6 +183,9 @@ impl CommandConfig {
             if slot.injection != Injection::Environment && slot.environment_variable.is_some() {
                 return Err(CatalogError::Invalid);
             }
+        }
+        if stdin && self.stdin_content.is_some() {
+            return Err(CatalogError::Invalid);
         }
         for argument in &self.arguments {
             if (argument.contains("{{secret:") || argument.contains("{{param:"))
@@ -673,14 +692,35 @@ fn terminal_command(
     for secret in secrets {
         secret_paths.push(secret_file(&state.command_directory, files, secret).ok()?);
     }
+    let stdin_path = match &config.stdin_content {
+        Some(content) => Some(
+            secret_file(
+                &state.command_directory,
+                files,
+                &Zeroizing::new(content.clone()),
+            )
+            .ok()?,
+        ),
+        None => None,
+    };
     let marker = format!("__SECRETBRIDGE_RUN_{}", run_id.simple());
     match shell {
         crate::terminal::TerminalShell::Bash | crate::terminal::TerminalShell::Zsh => {
-            terminal_command_posix(config, &arguments, &secret_paths, &marker)
+            terminal_command_posix(
+                config,
+                &arguments,
+                &secret_paths,
+                stdin_path.as_deref(),
+                &marker,
+            )
         }
-        crate::terminal::TerminalShell::PowerShell => {
-            terminal_command_powershell(config, &arguments, &secret_paths, &marker)
-        }
+        crate::terminal::TerminalShell::PowerShell => terminal_command_powershell(
+            config,
+            &arguments,
+            &secret_paths,
+            stdin_path.as_deref(),
+            &marker,
+        ),
         crate::terminal::TerminalShell::Cmd | crate::terminal::TerminalShell::Synthetic => None,
     }
 }
@@ -689,11 +729,12 @@ fn terminal_command_posix(
     config: &CommandConfig,
     arguments: &[String],
     secret_paths: &[PathBuf],
+    stdin_path: Option<&Path>,
     marker: &str,
 ) -> Option<Zeroizing<String>> {
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
     let mut command = format!(" cd -- {} && ", quote(&config.working_directory));
-    let mut stdin = None;
+    let mut stdin = stdin_path.map(|path| quote(&path.to_string_lossy()));
     for (slot, path) in config.slots.iter().zip(secret_paths) {
         let path = quote(&path.to_string_lossy());
         match slot.injection {
@@ -743,6 +784,7 @@ fn terminal_command_powershell(
     config: &CommandConfig,
     arguments: &[String],
     secret_paths: &[PathBuf],
+    stdin_path: Option<&Path>,
     marker: &str,
 ) -> Option<Zeroizing<String>> {
     let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
@@ -751,7 +793,7 @@ fn terminal_command_powershell(
         quote(&config.working_directory)
     );
     let mut restore = String::new();
-    let mut stdin = None;
+    let mut stdin = stdin_path.map(|path| quote(&path.to_string_lossy()));
     for (index, (slot, path)) in config.slots.iter().zip(secret_paths).enumerate() {
         let path = quote(&path.to_string_lossy());
         match slot.injection {
@@ -974,11 +1016,17 @@ fn execute(
     drop(arguments);
     let stdin = child.stdin.take().expect("piped stdin");
     let input = config
-        .slots
-        .iter()
-        .zip(secrets)
-        .find(|(s, _)| s.injection == Injection::Stdin)
-        .map(|(_, s)| s.clone());
+        .stdin_content
+        .as_ref()
+        .map(|content| Zeroizing::new(content.clone()))
+        .or_else(|| {
+            config
+                .slots
+                .iter()
+                .zip(secrets)
+                .find(|(s, _)| s.injection == Injection::Stdin)
+                .map(|(_, s)| s.clone())
+        });
     std::thread::spawn(move || {
         let mut stdin = stdin;
         if let Some(input) = input {

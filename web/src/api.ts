@@ -509,6 +509,7 @@ export interface CommandConfig {
   program: string;
   working_directory: string;
   arguments: string[];
+  stdin_content?: string | null;
   slots: CredentialSlot[];
 }
 export interface DatabaseConfig {

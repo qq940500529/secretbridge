@@ -290,6 +290,24 @@ export function CommandReview({
             </span>
           )}
         </dd>
+        {config.stdin_content != null && (
+          <>
+            <dt className="text-slate-500">
+              {zh ? "标准输入内容" : "Standard input content"}
+            </dt>
+            <dd className="m-0 min-w-0">
+              <details open={expanded}>
+                <summary className="cursor-pointer font-semibold">
+                  {zh ? "展开核对完整输入" : "Expand and review full input"}
+                  {` (${new TextEncoder().encode(config.stdin_content).length} bytes)`}
+                </summary>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-2 font-mono text-xs">
+                  {config.stdin_content || (zh ? "（空）" : "(empty)")}
+                </pre>
+              </details>
+            </dd>
+          </>
+        )}
         <dt className="text-slate-500">{zh ? "凭据插槽" : "Slots"}</dt>
         <dd className="m-0 space-y-1">
           {config.slots.map((slot) => (
