@@ -132,8 +132,7 @@ try {
     else if (path === "/api/v1/action-templates/another-task") {
       status = 404;
       body = { code: "not_found" };
-    }
-    else if (path === "/api/v1/action-templates/task/policy-evaluation")
+    } else if (path === "/api/v1/action-templates/task/policy-evaluation")
       body = {
         decision: "eligible_for_approval",
         requirements: [],
@@ -621,7 +620,9 @@ try {
   await page.reload();
   const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
   await staleQueue.waitFor();
-  await staleQueue.getByText("操作快照不可用或已变化", { exact: true }).waitFor();
+  await staleQueue
+    .getByText("操作快照不可用或已变化", { exact: true })
+    .waitFor();
   assert.equal(
     await staleQueue.getByRole("button", { name: "批准当前项" }).isDisabled(),
     true,
