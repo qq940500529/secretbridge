@@ -6,7 +6,23 @@ use uuid::Uuid;
 
 use super::{Catalog, CatalogError, CreateActionTemplate, now_unix_ms_i64};
 
+pub(super) fn reject_saved_terminal_binding(
+    command: Option<&crate::command::CommandConfig>,
+) -> Result<(), CatalogError> {
+    if command.is_some_and(|command| command.terminal_id.is_some()) {
+        return Err(CatalogError::Invalid);
+    }
+    Ok(())
+}
+
 impl Catalog {
+    pub fn create_action_template(
+        &self,
+        request: &CreateActionTemplate,
+    ) -> Result<super::ActionTemplate, CatalogError> {
+        self.create_action_template_with_lifecycle(request, "saved")
+    }
+
     pub(crate) fn create_one_time_draft(
         &self,
         request: &CreateActionTemplate,
@@ -97,6 +113,14 @@ pub(super) fn repair_lifecycle(connection: &Connection) -> rusqlite::Result<()> 
                           WHERE synthetic_runs.action_template_id = action_templates.id
                             AND synthetic_runs.state IN ('succeeded', 'cancelled', 'failed'))
             )",
+        [now],
+    )?;
+    transaction.execute(
+        "UPDATE action_templates
+            SET enabled = 0, updated_at_unix_ms = ?1, version = version + 1
+          WHERE lifecycle = 'saved' AND enabled = 1
+            AND command_json IS NOT NULL
+            AND json_extract(command_json, '$.terminal_id') IS NOT NULL",
         [now],
     )?;
     transaction.commit()

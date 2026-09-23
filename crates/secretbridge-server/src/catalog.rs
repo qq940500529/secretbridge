@@ -1151,13 +1151,6 @@ impl Catalog {
         policy_evaluation(&connection, &template, &target)
     }
 
-    pub fn create_action_template(
-        &self,
-        request: &CreateActionTemplate,
-    ) -> Result<ActionTemplate, CatalogError> {
-        self.create_action_template_with_lifecycle(request, "saved")
-    }
-
     fn create_action_template_with_lifecycle(
         &self,
         request: &CreateActionTemplate,
@@ -1171,6 +1164,9 @@ impl Catalog {
         }
         let connection = self.lock();
         validate_command(&connection, request.operation, request.command.as_ref())?;
+        if lifecycle == "saved" {
+            one_time::reject_saved_terminal_binding(request.command.as_ref())?;
+        }
         let count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM action_templates WHERE lifecycle = ?1",
@@ -1237,6 +1233,7 @@ impl Catalog {
         }
         let connection = self.lock();
         validate_command(&connection, request.operation, request.command.as_ref())?;
+        one_time::reject_saved_terminal_binding(request.command.as_ref())?;
         ensure_target_exists(&connection, request.target_id)?;
         let transaction = connection
             .unchecked_transaction()
