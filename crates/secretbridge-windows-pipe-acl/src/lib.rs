@@ -162,7 +162,8 @@ mod tests {
             r"\\.\pipe\secretbridge-acl-test-{}-{unique}",
             std::process::id()
         );
-        let options = ServerOptions::new()
+        let mut options = ServerOptions::new();
+        options
             .first_pipe_instance(true)
             .reject_remote_clients(true);
         let pipe = create_private_named_pipe(&options, &name).unwrap();

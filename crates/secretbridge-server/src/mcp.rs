@@ -1823,7 +1823,8 @@ fn bind_bridge_listener(
     instance_id: Uuid,
 ) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
     let name = format!(r"\\.\pipe\secretbridge-{}", instance_id.simple());
-    let options = ServerOptions::new()
+    let mut options = ServerOptions::new();
+    options
         .first_pipe_instance(true)
         .reject_remote_clients(true)
         .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
@@ -1895,7 +1896,8 @@ async fn serve_bridge_listener(
             result = server.connect() => result?,
         }
         let connected = server;
-        let options = ServerOptions::new()
+        let mut options = ServerOptions::new();
+        options
             .reject_remote_clients(true)
             .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
             .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
