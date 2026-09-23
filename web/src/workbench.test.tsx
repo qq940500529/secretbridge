@@ -147,4 +147,40 @@ describe("workbench surfaces", () => {
     expect(html).toContain("terminal");
     expect(html).toContain('open=""');
   });
+  it("shows the complete bounded stdin script and byte count before approval", () => {
+    const stdinContent = "echo synthetic\n".repeat(1500);
+    const template = {
+      id: "draft",
+      target_id: "target",
+      name: "Synthetic stdin script",
+      operation: "command_execution",
+      result_scope: "sanitized_output",
+      description: null,
+      timeout_seconds: 30,
+      enabled: true,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+      version: 1,
+      command: {
+        program: "/bin/sh",
+        working_directory: "/tmp",
+        arguments: ["-s"],
+        stdin_content: stdinContent,
+        slots: [],
+      },
+    } as ActionTemplate;
+    const html = renderToStaticMarkup(
+      <CommandReview
+        template={template}
+        expectedVersion={1}
+        language="en"
+        expanded
+      />,
+    );
+    expect(html).toContain(stdinContent);
+    expect(html).toContain(
+      `${new TextEncoder().encode(stdinContent).length} bytes`,
+    );
+    expect(html).toContain("Expand and review full input");
+  });
 });

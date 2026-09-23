@@ -76,6 +76,106 @@ fn bridge_argument_errors_preserve_field_bounds_without_echoing_values() {
 }
 
 #[test]
+fn bounded_stdin_errors_report_only_field_size_and_repair_actions() {
+    let request = |content: String| -> super::RequestCommandParams {
+        serde_json::from_value(json!({
+            "name":"Synthetic script", "connection_id":Uuid::new_v4(),
+            "terminal_id":Uuid::new_v4(), "program":"/bin/sh", "working_directory":"/tmp",
+            "arguments":["-s"], "stdin_content":content,
+            "expires_in_seconds":60, "timeout_seconds":30
+        }))
+        .unwrap()
+    };
+    let oversize = request(SENSITIVE_MARKER.repeat(3000));
+    let error = super::errors::validate_dynamic_arguments(&oversize).unwrap_err();
+    let response = BridgeResponse::from_error(error);
+    assert_eq!(response.error.as_deref(), Some("command_stdin_too_large"));
+    assert_eq!(
+        response.error_data.as_ref().unwrap()["field"],
+        "stdin_content"
+    );
+    assert_eq!(response.error_data.as_ref().unwrap()["limit_bytes"], 32768);
+    assert!(
+        !serde_json::to_string(&response)
+            .unwrap()
+            .contains(SENSITIVE_MARKER)
+    );
+    let forwarded = super::errors::remote_error("command_stdin_too_large", response.error_data);
+    assert_eq!(forwarded.data.unwrap()["field"], "stdin_content");
+    let placeholder = request("echo {{secret:missing}}".into());
+    let error = super::errors::validate_dynamic_arguments(&placeholder).unwrap_err();
+    assert_eq!(error.message, "command_stdin_invalid");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_bridge_accepts_bounded_script_without_putting_it_in_approval_summary() {
+    let directory = std::env::temp_dir().join(format!(
+        "sb-input-{}",
+        &Uuid::new_v4().simple().to_string()[..8]
+    ));
+    fs::create_dir(&directory).unwrap();
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    let (state, _) = AppState::new([]);
+    let target = state
+        .catalog
+        .create_target(&CreateTarget {
+            name: "Synthetic script target".into(),
+            kind: TargetKind::HttpService,
+            environment: TargetEnvironment::Test,
+            description: None,
+            address: None,
+            username: None,
+            allow_insecure_protocol: false,
+            credential_reference_id: None,
+            postgres: None,
+        })
+        .unwrap();
+    let terminal = state
+        .terminals
+        .create(&crate::terminal::CreateTerminal {
+            rows: 24,
+            cols: 80,
+            shell: None,
+            name: None,
+            working_directory: None,
+            environment: BTreeMap::new(),
+        })
+        .unwrap();
+    let bridge = LocalMcpBridge::bind(&directory, state.clone()).unwrap();
+    let stop = CancellationToken::new();
+    let broker_stop = stop.clone();
+    let broker = tokio::spawn(async move { bridge.serve(broker_stop).await.unwrap() });
+    let (client, server) = connect_server(SecretBridgeMcp::new_remote(BridgeClient::from_file(
+        directory.join("mcp-bridge.json"),
+    )))
+    .await;
+    let content = format!("# synthetic input\n{}", "x".repeat(24_000));
+    let approval = terminal_tool(
+        &client,
+        "secretbridge_request_command",
+        json!({
+            "name":"Synthetic bounded script", "connection_id":target.id,
+            "terminal_id":terminal.id, "program":std::env::current_exe().unwrap(),
+            "working_directory":std::env::current_dir().unwrap(),
+            "arguments":[], "stdin_content":content,
+            "expires_in_seconds":60, "timeout_seconds":30
+        }),
+    )
+    .await;
+    assert_eq!(approval["state"], "pending");
+    assert!(!approval.to_string().contains(&content));
+    client.cancel().await.unwrap();
+    server.await.unwrap();
+    stop.cancel();
+    broker.await.unwrap();
+    state.terminals.remove(terminal.id).unwrap();
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn legacy_credential_placeholder_returns_a_field_level_repair_hint() {
     let slots = vec![super::DynamicCredentialSlot {
         name: "password".to_owned(),
@@ -581,6 +681,7 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "name",
                 "program",
                 "reason",
+                "stdin_content",
                 "terminal_id",
                 "timeout_seconds",
                 "working_directory",

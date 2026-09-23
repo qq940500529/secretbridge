@@ -18,6 +18,9 @@ pub struct DiagnosticFailure {
 const DIAGNOSTIC_FAILURE_CODES: &[(&str, &str)] = &[
     ("command_arguments_too_large", "mcp_validation"),
     ("command_argument_too_large", "mcp_validation"),
+    ("command_stdin_too_large", "mcp_validation"),
+    ("command_stdin_invalid", "mcp_validation"),
+    ("command_stdin_conflict", "mcp_validation"),
     ("unknown_credential_placeholder", "mcp_validation"),
     ("invalid_request", "mcp_validation"),
     ("verification_failed", "authorization"),

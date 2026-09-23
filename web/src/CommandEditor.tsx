@@ -14,6 +14,7 @@ export const emptyCommand: CommandConfig = {
   program: "",
   working_directory: "",
   arguments: [],
+  stdin_content: null,
   slots: [],
 };
 
@@ -81,6 +82,7 @@ export function CommandEditor({
             program: "",
             working_directory: "",
             arguments: [],
+            stdin_content: null,
             slots: [],
           })
         }
@@ -238,6 +240,27 @@ export function CommandEditor({
           className={`${input} font-mono`}
         />
       </label>
+      <label className="block text-sm font-semibold">
+        {zh
+          ? "标准输入内容（可选，无凭据）"
+          : "Standard input content (optional, no credentials)"}
+        <textarea
+          rows={8}
+          maxLength={32768}
+          value={value.stdin_content ?? ""}
+          onChange={(e) =>
+            onChange({ ...value, stdin_content: e.target.value || null })
+          }
+          className={`${input} font-mono`}
+          aria-describedby="stdin-content-help"
+        />
+      </label>
+      <p id="stdin-content-help" className="text-xs text-slate-600">
+        {zh
+          ? "最多 32 KiB UTF-8；批准前可展开查看完整内容。不能包含凭据或与标准输入凭据插槽并用。"
+          : "Up to 32 KiB UTF-8. Review the full content before approval. Do not include credentials or combine it with a stdin credential slot."}
+        {` ${new TextEncoder().encode(value.stdin_content ?? "").length}/32768 bytes`}
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="bg-slate-50 text-slate-600">

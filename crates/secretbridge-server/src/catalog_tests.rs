@@ -1684,6 +1684,7 @@ fn temporary_terminal_binding_cannot_be_saved_or_exported_as_reusable() {
         program: executable.to_string_lossy().into_owned(),
         working_directory: executable.parent().unwrap().to_string_lossy().into_owned(),
         arguments: Vec::new(),
+        stdin_content: None,
         slots: Vec::new(),
     };
     let request = CreateActionTemplate {

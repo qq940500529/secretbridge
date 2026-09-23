@@ -43,6 +43,9 @@ pub(super) fn safe_bridge_error_code(code: &str) -> String {
         | "broker_stopping"
         | "command_arguments_too_large"
         | "command_argument_too_large"
+        | "command_stdin_too_large"
+        | "command_stdin_invalid"
+        | "command_stdin_conflict"
         | "legacy_credential_placeholder"
         | "unknown_credential_placeholder" => code.to_owned(),
         _ => "secretbridge_operation_failed".to_owned(),
@@ -76,12 +79,16 @@ impl BridgeResponse {
             code.as_str(),
             "command_arguments_too_large"
                 | "command_argument_too_large"
+                | "command_stdin_too_large"
+                | "command_stdin_invalid"
+                | "command_stdin_conflict"
                 | "legacy_credential_placeholder"
                 | "unknown_credential_placeholder"
         ) {
             error.data.and_then(|value| {
                 let field = value.get("field")?.as_str()?;
                 if field != "arguments"
+                    && field != "stdin_content"
                     && !(field.starts_with("arguments[")
                         && field.ends_with(']')
                         && field.len() <= 32
@@ -98,6 +105,16 @@ impl BridgeResponse {
                     serde_json::json!({
                         "field": field,
                         "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
+                    })
+                } else if code == "command_stdin_invalid" {
+                    serde_json::json!({
+                        "field": field,
+                        "next_actions": ["remove_secret_placeholder_or_nul"]
+                    })
+                } else if code == "command_stdin_conflict" {
+                    serde_json::json!({
+                        "field": field,
+                        "next_actions": ["choose_either_stdin_content_or_stdin_credential"]
                     })
                 } else {
                     serde_json::json!({

@@ -35,7 +35,9 @@ mod errors;
 mod ready;
 use bridge_response::safe_bridge_error_code;
 use conversation::{BeginConversationParams, resolve_conversation_id};
-use errors::{catalog_error, parse_uuid, recoverable_error, remote_error};
+use errors::{
+    catalog_error, parse_uuid, recoverable_error, remote_error, validate_dynamic_arguments,
+};
 use ready::ensure_bridge_ready;
 
 #[cfg(unix)]
@@ -396,6 +398,7 @@ impl McpBackend {
                         program: params.program,
                         working_directory: params.working_directory,
                         arguments: params.arguments,
+                        stdin_content: params.stdin_content,
                         slots: params
                             .credential_slots
                             .into_iter()
@@ -532,6 +535,7 @@ impl McpBackend {
                     program: String::new(),
                     working_directory: String::new(),
                     arguments: Vec::new(),
+                    stdin_content: None,
                     slots: vec![crate::command::CredentialSlot {
                         name: "login".to_owned(),
                         credential_id,
@@ -684,50 +688,6 @@ impl McpBackend {
             Self::Remote(client) => client.call(OP_LIST_RUN_EVENTS, &params).await,
         }
     }
-}
-
-fn validate_dynamic_arguments(params: &RequestCommandParams) -> Result<(), ErrorData> {
-    let total = params.arguments.iter().map(String::len).sum::<usize>();
-    if total > crate::command::MAX_ARGUMENTS_BYTES {
-        return Err(ErrorData::invalid_params(
-            "command_arguments_too_large",
-            Some(serde_json::json!({
-                "field": "arguments",
-                "actual_bytes": total,
-                "limit_bytes": crate::command::MAX_ARGUMENTS_BYTES,
-                "next_actions": ["split_the_operation", "use_a_structured_connector"]
-            })),
-        ));
-    }
-    for (index, argument) in params.arguments.iter().enumerate() {
-        errors::reject_legacy_placeholder(argument, index, &params.credential_slots)?;
-        if argument.len() > crate::command::MAX_ARGUMENT_BYTES {
-            return Err(ErrorData::invalid_params(
-                "command_argument_too_large",
-                Some(serde_json::json!({
-                    "field": format!("arguments[{index}]"),
-                    "actual_bytes": argument.len(),
-                    "limit_bytes": crate::command::MAX_ARGUMENT_BYTES,
-                    "next_actions": ["split_the_operation", "use_a_structured_connector"]
-                })),
-            ));
-        }
-        if argument.contains("{{secret:")
-            && !params
-                .credential_slots
-                .iter()
-                .any(|slot| argument == &format!("{{{{secret:{}}}}}", slot.name))
-        {
-            return Err(ErrorData::invalid_params(
-                "unknown_credential_placeholder",
-                Some(serde_json::json!({
-                    "field": format!("arguments[{index}]"),
-                    "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
-                })),
-            ));
-        }
-    }
-    Ok(())
 }
 
 async fn open_console_for_human(state: &AppState) {
@@ -1068,7 +1028,7 @@ pub async fn serve_stdio_bridge(
 const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
 pub(crate) const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
 const BRIDGE_PROTOCOL: &str = "secretbridge-native-ipc-v1";
-const MAX_BRIDGE_REQUEST_BYTES: usize = 16 * 1024;
+const MAX_BRIDGE_REQUEST_BYTES: usize = 64 * 1024;
 #[cfg(windows)]
 const MAX_BRIDGE_PIPE_BUFFER_BYTES: u32 = 16 * 1024;
 const MAX_BRIDGE_RESPONSE_BYTES: usize = 512 * 1024;
@@ -2054,6 +2014,11 @@ struct RequestCommandParams {
         description = "Exact argv items; argument/file credential slots require one complete {{secret:slot_name}} item. Other double-brace text such as {{.Names}} is literal"
     )]
     arguments: Vec<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional non-secret script or data sent to program stdin, up to 32768 UTF-8 bytes; cannot be combined with a stdin credential slot"
+    )]
+    stdin_content: Option<String>,
     #[serde(default)]
     #[schemars(description = "Opaque credential bindings and injection modes; no secret values")]
     credential_slots: Vec<DynamicCredentialSlot>,

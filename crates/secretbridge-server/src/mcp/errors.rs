@@ -74,6 +74,83 @@ pub(super) fn reject_legacy_placeholder(
     Ok(())
 }
 
+pub(super) fn validate_dynamic_arguments(
+    params: &super::RequestCommandParams,
+) -> Result<(), ErrorData> {
+    let total = params.arguments.iter().map(String::len).sum::<usize>();
+    if total > crate::command::MAX_ARGUMENTS_BYTES {
+        return Err(ErrorData::invalid_params(
+            "command_arguments_too_large",
+            Some(serde_json::json!({
+                "field": "arguments", "actual_bytes": total,
+                "limit_bytes": crate::command::MAX_ARGUMENTS_BYTES,
+                "next_actions": ["split_the_operation", "use_bounded_stdin_content", "use_a_structured_connector"]
+            })),
+        ));
+    }
+    for (index, argument) in params.arguments.iter().enumerate() {
+        reject_legacy_placeholder(argument, index, &params.credential_slots)?;
+        if argument.len() > crate::command::MAX_ARGUMENT_BYTES {
+            return Err(ErrorData::invalid_params(
+                "command_argument_too_large",
+                Some(serde_json::json!({
+                    "field": format!("arguments[{index}]"),
+                    "actual_bytes": argument.len(),
+                    "limit_bytes": crate::command::MAX_ARGUMENT_BYTES,
+                    "next_actions": ["split_the_operation", "use_bounded_stdin_content", "use_a_structured_connector"]
+                })),
+            ));
+        }
+        if argument.contains("{{secret:")
+            && !params
+                .credential_slots
+                .iter()
+                .any(|slot| argument == &format!("{{{{secret:{}}}}}", slot.name))
+        {
+            return Err(ErrorData::invalid_params(
+                "unknown_credential_placeholder",
+                Some(serde_json::json!({
+                    "field": format!("arguments[{index}]"),
+                    "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
+                })),
+            ));
+        }
+    }
+    if let Some(content) = &params.stdin_content {
+        if content.len() > crate::command::MAX_STDIN_CONTENT_BYTES {
+            return Err(ErrorData::invalid_params(
+                "command_stdin_too_large",
+                Some(serde_json::json!({
+                    "field": "stdin_content", "actual_bytes": content.len(),
+                    "limit_bytes": crate::command::MAX_STDIN_CONTENT_BYTES,
+                    "next_actions": ["split_the_operation", "use_a_structured_connector"]
+                })),
+            ));
+        }
+        if content.contains('\0') || content.contains("{{secret:") {
+            return Err(ErrorData::invalid_params(
+                "command_stdin_invalid",
+                Some(serde_json::json!({
+                    "field": "stdin_content", "next_actions": ["remove_secret_placeholder_or_nul"]
+                })),
+            ));
+        }
+        if params
+            .credential_slots
+            .iter()
+            .any(|slot| matches!(slot.injection, super::DynamicInjection::Stdin))
+        {
+            return Err(ErrorData::invalid_params(
+                "command_stdin_conflict",
+                Some(serde_json::json!({
+                    "field": "stdin_content", "next_actions": ["choose_either_stdin_content_or_stdin_credential"]
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> ErrorData {
     match code {
         "not_found" => ErrorData::resource_not_found("not_found", None),
@@ -91,6 +168,9 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
         | "version_conflict"
         | "command_arguments_too_large"
         | "command_argument_too_large"
+        | "command_stdin_too_large"
+        | "command_stdin_invalid"
+        | "command_stdin_conflict"
         | "legacy_credential_placeholder"
         | "unknown_credential_placeholder"
         | "verification_failed"
@@ -118,6 +198,9 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
                 code,
                 "command_arguments_too_large"
                     | "command_argument_too_large"
+                    | "command_stdin_too_large"
+                    | "command_stdin_invalid"
+                    | "command_stdin_conflict"
                     | "legacy_credential_placeholder"
                     | "unknown_credential_placeholder"
                     | "initialization_required"
