@@ -241,7 +241,13 @@ async fn real_telnet_negotiates_logs_in_runs_fixed_script_and_redacts_echo() {
     assert!(output.contains("status: ready"));
     assert!(output.contains("[REDACTED]"));
     assert!(!output.contains(SECRET));
-    assert!(fixture.disconnected.load(Ordering::SeqCst));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !fixture.disconnected.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("test server did not observe the logout and disconnect");
 }
 
 #[tokio::test]

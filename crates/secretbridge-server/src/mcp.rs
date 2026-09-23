@@ -1513,11 +1513,14 @@ impl Drop for BridgeConnectionGuard {
 }
 
 fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.create_new(true).write(true);
+    #[cfg(windows)]
+    let mut file = secretbridge_windows_pipe_acl::create_private_file(path)?;
     #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path)?;
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(path)?;
     file.write_all(contents)?;
     file.sync_all()
 }
@@ -1536,6 +1539,10 @@ fn validate_bridge_data_directory(path: &Path) -> io::Result<()> {
             io::ErrorKind::PermissionDenied,
             "the SecretBridge data directory permissions are too broad",
         ));
+    }
+    #[cfg(windows)]
+    if !secretbridge_windows_pipe_acl::is_private_path(path)? {
+        return Err(io::ErrorKind::PermissionDenied.into());
     }
     Ok(())
 }
@@ -1594,8 +1601,8 @@ fn valid_bridge_connection_metadata(metadata: &fs::Metadata, path: &Path) -> boo
 }
 
 #[cfg(windows)]
-fn valid_bridge_connection_metadata(_metadata: &fs::Metadata, _path: &Path) -> bool {
-    true
+fn valid_bridge_connection_metadata(_metadata: &fs::Metadata, path: &Path) -> bool {
+    secretbridge_windows_pipe_acl::is_private_connection_path(path).unwrap_or(false)
 }
 
 fn new_bridge_token() -> String {
@@ -1823,13 +1830,14 @@ fn bind_bridge_listener(
     instance_id: Uuid,
 ) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
     let name = format!(r"\\.\pipe\secretbridge-{}", instance_id.simple());
-    let server = ServerOptions::new()
+    let mut options = ServerOptions::new();
+    options
         .first_pipe_instance(true)
         .reject_remote_clients(true)
         .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
         .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
-        .out_buffer_size(64 * 1024)
-        .create(&name)?;
+        .out_buffer_size(64 * 1024);
+    let server = secretbridge_windows_pipe_acl::create_private_named_pipe(&options, &name)?;
     Ok((
         BridgeListener::Windows {
             server,
@@ -1895,12 +1903,13 @@ async fn serve_bridge_listener(
             result = server.connect() => result?,
         }
         let connected = server;
-        server = ServerOptions::new()
+        let mut options = ServerOptions::new();
+        options
             .reject_remote_clients(true)
             .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
             .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
-            .out_buffer_size(64 * 1024)
-            .create(&name)?;
+            .out_buffer_size(64 * 1024);
+        server = secretbridge_windows_pipe_acl::create_private_named_pipe(&options, &name)?;
         let state = state.clone();
         tokio::spawn(async move {
             let _permit = permit;

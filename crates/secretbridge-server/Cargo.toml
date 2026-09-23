@@ -54,5 +54,8 @@ rmcp = { workspace = true, features = ["client"] }
 tokio-tungstenite.workspace = true
 tower.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+secretbridge-windows-pipe-acl = { path = "../secretbridge-windows-pipe-acl" }
+
 [lints]
 workspace = true

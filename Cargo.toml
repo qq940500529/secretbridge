@@ -2,6 +2,7 @@
 members = [
     "crates/secretbridge-core",
     "crates/secretbridge-server",
+    "crates/secretbridge-windows-pipe-acl",
 ]
 resolver = "3"
 
