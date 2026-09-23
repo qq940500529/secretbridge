@@ -120,7 +120,10 @@ def accept(archive: Path) -> None:
             installed = run("install", package)
             assert installed["management_page"] in {"opened", "manual_open_required"}
             if installed["management_page"] == "manual_open_required":
-                assert installed["management_page_next_action"] == "run_active_binary_open_on_local_desktop"
+                assert (
+                    installed["management_page_next_action"]
+                    == "run_active_binary_open_on_local_desktop"
+                )
             assert not any(key in installed for key in ("token", "pairing_url", "console_url"))
             replayed = run("install", package)
             assert replayed["replayed"]
@@ -245,7 +248,9 @@ def accept(archive: Path) -> None:
             env["SECRETBRIDGE_INSTALL_DIR"] = str(workspace / "second-install")
             skipped = run("install", package, "--no-open")
             assert skipped["management_page"] == "manual_open_required"
-            assert skipped["management_page_next_action"] == "run_active_binary_open_on_local_desktop"
+            assert (
+                skipped["management_page_next_action"] == "run_active_binary_open_on_local_desktop"
+            )
             (data / "user-note.txt").write_text("retain", encoding="utf-8")
             result = run("uninstall", "--remove-configuration")
             assert result["system_credentials_retained"] and not result["data_retained"]
