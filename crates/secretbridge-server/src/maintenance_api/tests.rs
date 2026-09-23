@@ -154,13 +154,15 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
     );
     assert!(diagnostic["run_states"].is_object());
     assert!(diagnostic["failure_stages"].is_object());
-    assert_eq!(diagnostic["diagnostic_schema_version"], 3);
+    assert_eq!(diagnostic["diagnostic_schema_version"], 4);
     assert_eq!(diagnostic["bridge_schema_version"], 2);
     assert_eq!(diagnostic["authentication_mode"], "pairing_link");
+    assert_eq!(diagnostic["encrypted_diagnostics_ready"], false);
     assert!(diagnostic["mcp_failures"].is_array());
     assert!(diagnostic["run_failures"].is_array());
     assert!(diagnostic["terminal_states"].is_object());
     assert_eq!(diagnostic["stale_terminal_references"], 0);
+    assert_eq!(diagnostic["state_consistency_issues"], 0);
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
     let bytes = app
         .clone()
@@ -398,6 +400,16 @@ async fn maintenance_body_limits_and_origin_checks_apply_before_import() {
 #[tokio::test]
 async fn diagnostics_group_non_mcp_failures_without_command_or_credential_data() {
     let (state, _) = AppState::new([ORIGIN.to_owned()]);
+    for sensitive in [
+        "synthetic-password-secret",
+        "synthetic-api-token-secret",
+        "synthetic-totp-123456",
+        "synthetic-user-name",
+        "192.0.2.77",
+        "/synthetic/home/private",
+    ] {
+        state.catalog.record_diagnostic_failure(sensitive).unwrap();
+    }
     let (approval, _) = configure(&state, "environment", 10);
     let run = state
         .catalog
@@ -425,10 +437,19 @@ async fn diagnostics_group_non_mcp_failures_without_command_or_credential_data()
             .unwrap(),
     )
     .await;
-    assert_eq!(diagnostic["diagnostic_schema_version"], 3);
+    assert_eq!(diagnostic["diagnostic_schema_version"], 4);
     assert_eq!(diagnostic["run_failures"][0]["code"], "command_failed");
     assert_eq!(diagnostic["run_failures"][0]["stage"], "execution");
     assert_eq!(diagnostic["run_failures"][0]["occurrences"], 1);
+    assert_eq!(
+        diagnostic["run_failures"][0]["failures_with_later_same_template_success"],
+        0
+    );
+    assert_eq!(
+        diagnostic["run_failures"][0]["recovery_actions"][0],
+        "inspect_sanitized_output"
+    );
+    assert_eq!(diagnostic["state_consistency_issues"], 0);
     assert!(
         diagnostic["run_failures"][0]["first_at_unix_ms"]
             .as_u64()
@@ -437,6 +458,44 @@ async fn diagnostics_group_non_mcp_failures_without_command_or_credential_data()
     );
     assert!(!diagnostic.to_string().contains("Synthetic-SB-command_A&z"));
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
+    for sensitive in [
+        "synthetic-password-secret",
+        "synthetic-api-token-secret",
+        "synthetic-totp-123456",
+        "synthetic-user-name",
+        "192.0.2.77",
+        "/synthetic/home/private",
+    ] {
+        assert!(!diagnostic.to_string().contains(sensitive));
+    }
+}
+
+#[test]
+fn state_consistency_detects_broken_run_timestamps_and_missing_template() {
+    let (state, _) = AppState::new([ORIGIN.to_owned()]);
+    let (approval, _) = configure(&state, "environment", 10);
+    let run = state
+        .catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    let mut active = run.clone();
+    active.state = RunState::Running;
+    active.action_template_id = Uuid::new_v4();
+    let mut finished = run;
+    finished.state = RunState::Failed;
+    let report = super::diagnostics::check_state_consistency(
+        &[active, finished],
+        &state.catalog.list_action_templates().unwrap(),
+        &[],
+    );
+    assert_eq!(report.active_runs_missing_start, 1);
+    assert_eq!(report.finished_runs_missing_finish, 1);
+    assert_eq!(report.active_runs_missing_template, 1);
+    assert_eq!(report.total_issues(), 3);
 }
 
 #[tokio::test]

@@ -2003,6 +2003,7 @@ fn diagnostic_failures_only_keep_fixed_codes_and_time_bounds() {
     assert_eq!(failures.len(), 1);
     assert_eq!(failures[0].code, "terminal_busy");
     assert_eq!(failures[0].stage, "terminal_lease");
+    assert_eq!(failures[0].recovery_actions[0], "wait_for_active_run");
     assert_eq!(failures[0].occurrences, 2);
     assert!(failures[0].first_at_unix_ms <= failures[0].last_at_unix_ms);
     drop(catalog);

@@ -17,6 +17,28 @@ use super::{AppState, SESSION_TTL, apply_security_headers, router};
 
 const ORIGIN: &str = "http://127.0.0.1:8787";
 
+#[test]
+fn bridge_startup_failure_records_fixed_summary_and_encrypted_event() {
+    let (state, _) = AppState::new([ORIGIN.to_owned()]);
+    let pin = "synthetic-bridge-startup-pin";
+    state.catalog.initialize_diagnostic_vault(pin).unwrap();
+    state.record_bridge_startup_failure();
+    let failures = state.catalog.list_diagnostic_failures().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].code, "bridge_startup_failed");
+    assert_eq!(failures[0].stage, "bridge_startup");
+    assert_eq!(
+        failures[0].recovery_actions,
+        &["check_local_broker_health", "review_private_data_directory"]
+    );
+    let events = state
+        .catalog
+        .unlock_diagnostic_records(pin, false, true)
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].data["code"], "bridge_startup_failed");
+}
+
 fn test_app() -> (axum::Router, String) {
     let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
     (router(state), bootstrap)

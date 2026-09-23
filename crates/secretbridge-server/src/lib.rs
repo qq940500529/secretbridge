@@ -9,6 +9,7 @@ mod command;
 mod conversation_api;
 mod credential_service;
 mod database_task;
+mod diagnostic_startup;
 mod git_task;
 mod http_task;
 mod maintenance;

@@ -10,6 +10,8 @@ use catalog::maintenance::{
     ConfigurationBundle, ImportReport, ImportRequest, MAX_BACKUP_BYTES, MAX_CONFIGURATION_BYTES,
 };
 
+mod diagnostics;
+
 pub(super) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/api/v1/maintenance/configuration", get(export))
@@ -113,6 +115,7 @@ struct Diagnostics {
     platform: &'static str,
     bridge_schema_version: u8,
     authentication_mode: &'static str,
+    encrypted_diagnostics_ready: bool,
     generated_at_unix_ms: u64,
     schema_version: i64,
     storage: ConfigurationStorage,
@@ -130,6 +133,8 @@ struct Diagnostics {
     mcp_failures: Vec<catalog::DiagnosticFailure>,
     terminal_states: std::collections::BTreeMap<&'static str, usize>,
     stale_terminal_references: usize,
+    state_consistency: diagnostics::StateConsistency,
+    state_consistency_issues: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -189,7 +194,9 @@ async fn export_diagnostics(
 struct RunFailureWindow {
     code: &'static str,
     stage: &'static str,
+    recovery_actions: &'static [&'static str],
     occurrences: usize,
+    failures_with_later_same_template_success: usize,
     first_at_unix_ms: u64,
     last_at_unix_ms: u64,
 }
@@ -207,6 +214,18 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             .catalog
             .list_synthetic_runs()
             .map_err(map_catalog_error)?;
+        let templates = state
+            .catalog
+            .list_action_templates()
+            .map_err(map_catalog_error)?;
+        let latest_success_by_template = runs
+            .iter()
+            .filter(|run| run.state == catalog::RunState::Succeeded)
+            .fold(std::collections::HashMap::new(), |mut latest, run| {
+                let timestamp = latest.entry(run.action_template_id).or_insert(0_u64);
+                *timestamp = (*timestamp).max(run.updated_at_unix_ms);
+                latest
+            });
         let mut error_codes = std::collections::BTreeMap::new();
         let mut run_states = std::collections::BTreeMap::new();
         let mut failure_stages = std::collections::BTreeMap::new();
@@ -265,11 +284,19 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             let entry = run_failures.entry(code).or_insert(RunFailureWindow {
                 code,
                 stage: failure_stage,
+                recovery_actions: diagnostics::run_recovery_actions(code),
                 occurrences: 0,
+                failures_with_later_same_template_success: 0,
                 first_at_unix_ms: run.updated_at_unix_ms,
                 last_at_unix_ms: run.updated_at_unix_ms,
             });
             entry.occurrences += 1;
+            if latest_success_by_template
+                .get(&run.action_template_id)
+                .is_some_and(|timestamp| *timestamp > run.updated_at_unix_ms)
+            {
+                entry.failures_with_later_same_template_success += 1;
+            }
             entry.first_at_unix_ms = entry.first_at_unix_ms.min(run.updated_at_unix_ms);
             entry.last_at_unix_ms = entry.last_at_unix_ms.max(run.updated_at_unix_ms);
         }
@@ -284,14 +311,13 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             };
             *terminal_states.entry(name).or_insert(0) += 1;
         }
-        let stale_terminal_references = state
-            .catalog
-            .list_action_templates()
-            .map_err(map_catalog_error)?
+        let stale_terminal_references = templates
             .iter()
             .filter_map(|template| template.command.as_ref()?.terminal_id)
             .filter(|id| !terminals.iter().any(|terminal| terminal.id == *id))
             .count();
+        let state_consistency = diagnostics::check_state_consistency(&runs, &templates, &terminals);
+        let state_consistency_issues = state_consistency.total_issues();
         let authentication_mode = match state
             .catalog
             .browser_auth_mode()
@@ -303,11 +329,15 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
         };
         Ok(Json(Diagnostics {
             format: "secretbridge-diagnostics",
-            diagnostic_schema_version: 3,
+            diagnostic_schema_version: 4,
             version: env!("CARGO_PKG_VERSION"),
             platform: std::env::consts::OS,
             bridge_schema_version: crate::mcp::BRIDGE_CONNECTION_SCHEMA,
             authentication_mode,
+            encrypted_diagnostics_ready: state
+                .catalog
+                .diagnostic_vault_ready()
+                .map_err(map_catalog_error)?,
             generated_at_unix_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -326,11 +356,7 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 .list_targets()
                 .map_err(map_catalog_error)?
                 .len(),
-            templates: state
-                .catalog
-                .list_action_templates()
-                .map_err(map_catalog_error)?
-                .len(),
+            templates: templates.len(),
             pending_authorizations: state
                 .catalog
                 .list_approvals()
@@ -353,6 +379,8 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 .map_err(map_catalog_error)?,
             terminal_states,
             stale_terminal_references,
+            state_consistency,
+            state_consistency_issues,
         }))
     })
     .await

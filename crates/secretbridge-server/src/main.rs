@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut state, _) = AppState::new_persistent(trusted_origins, &database_path)?;
     let cancellation = CancellationToken::new();
     state.enable_runtime_control(origin, cancellation.clone());
-    let bridge = LocalMcpBridge::bind(&data_directory, state.clone())?;
+    let bridge = bind_local_bridge(&data_directory, &state)?;
     let app = router_with_web(state.clone(), web_root);
 
     info!(%address, mode = "controlled_operations", "SecretBridge local broker started");
@@ -128,6 +128,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn bind_local_bridge(
+    data_directory: &Path,
+    state: &AppState,
+) -> Result<LocalMcpBridge, Box<dyn std::error::Error>> {
+    LocalMcpBridge::bind(data_directory, state.clone()).map_err(|_| {
+        state.record_bridge_startup_failure();
+        Box::new(io::Error::other("bridge_startup_failed")) as Box<dyn std::error::Error>
+    })
 }
 
 fn run_maintenance(arguments: &[std::ffi::OsString]) -> Result<bool, Box<dyn std::error::Error>> {
@@ -424,8 +434,21 @@ mod tests {
     }
 
     use super::{
-        StartupMode, bounded_argument, parse_startup_mode, require_loopback, resolve_data_directory,
+        StartupMode, bind_local_bridge, bounded_argument, parse_startup_mode, require_loopback,
+        resolve_data_directory,
     };
+
+    #[test]
+    fn bridge_startup_failure_is_fixed_and_recorded_without_the_path() {
+        let (state, _) = secretbridge_server::AppState::new([]);
+        let path =
+            std::env::temp_dir().join(format!("secretbridge-missing-{}", uuid::Uuid::new_v4()));
+        let error = bind_local_bridge(&path, &state)
+            .err()
+            .expect("bind must fail");
+        assert_eq!(error.to_string(), "bridge_startup_failed");
+        assert!(!error.to_string().contains(path.to_string_lossy().as_ref()));
+    }
 
     #[test]
     fn startup_mode_accepts_only_the_documented_forms() {
