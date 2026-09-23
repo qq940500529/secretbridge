@@ -570,6 +570,7 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
         .expect("TOTP audit events");
     assert_eq!(events.status(), StatusCode::OK);
     let events = response_json(events).await.to_string();
+    assert!(events.contains("\"retention_truncated\":false"));
     assert!(events.contains("enrollment_started"));
     assert!(events.contains("enrollment_succeeded"));
     assert!(events.contains("verification_failed"));

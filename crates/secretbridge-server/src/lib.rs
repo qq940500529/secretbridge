@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 mod approval_notifications;
+mod browser_auth_events_api;
 mod catalog;
 mod command;
 mod conversation_api;
@@ -74,12 +75,12 @@ use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
 use catalog::{
-    ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind,
-    BrowserAuthMode, CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError,
-    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateRunOutcome,
-    CreateSyntheticRun, CreateTarget, CredentialReference, DecideApproval, PolicyEvaluation,
-    PostgresRunResult, SafeEvent, SecretState, SyntheticRun, Target, UpdateActionTemplate,
-    UpdateCredentialReference, UpdateTarget,
+    ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEventKind, BrowserAuthMode,
+    CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError, CreateActionTemplate,
+    CreateApproval, CreateCredentialReference, CreateRunOutcome, CreateSyntheticRun, CreateTarget,
+    CredentialReference, DecideApproval, PolicyEvaluation, PostgresRunResult, SafeEvent,
+    SecretState, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
+    UpdateTarget,
 };
 use credential_service::{CredentialService, CredentialServiceError};
 use postgres::{PostgresCheckOutcome, PostgresExecutor};
@@ -395,11 +396,6 @@ struct BrowserAuthMethodsResponse {
     pin_enabled: bool,
     totp_enabled: bool,
     pairing_link_enabled: bool,
-}
-
-#[derive(Serialize)]
-struct BrowserAuthEventListResponse {
-    items: Vec<BrowserAuthEvent>,
 }
 
 #[derive(Deserialize)]
@@ -745,7 +741,10 @@ fn api_router(state: AppState) -> Router {
             post(totp_auth::confirm_setup),
         )
         .route("/api/v1/session/methods", get(browser_auth_methods))
-        .route("/api/v1/session/auth-events", get(list_browser_auth_events))
+        .route(
+            "/api/v1/session/auth-events",
+            get(browser_auth_events_api::list),
+        )
         .route("/api/v1/session/method", put(set_browser_auth_method))
         .route("/api/v1/session", get(session).delete(revoke_session))
         .route(
@@ -1068,18 +1067,6 @@ async fn browser_auth_methods(
         totp_enabled: mode == BrowserAuthMode::Totp,
         pairing_link_enabled: !pin_ready,
     }))
-}
-
-async fn list_browser_auth_events(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<BrowserAuthEventListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let items = state
-        .catalog
-        .list_browser_auth_events()
-        .map_err(map_catalog_error)?;
-    Ok(Json(BrowserAuthEventListResponse { items }))
 }
 
 async fn authentication_attempt_allowed(state: &AppState) -> bool {

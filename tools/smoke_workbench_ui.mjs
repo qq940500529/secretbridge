@@ -41,6 +41,7 @@ try {
   };
   let notificationChannel = "browser";
   let failTaskSave = true;
+  let outputReads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname,
@@ -202,20 +203,53 @@ try {
         body = { run: body, replayed: false };
         status = 201;
       } else body = { items: runs };
-    } else if (path === "/api/v1/runs/run/output")
+    } else if (path === "/api/v1/runs/run/output") {
+      outputReads++;
       body = {
-        items: [
-          { sequence: 1, stream: "stdout", text: "synthetic-filtered-result" },
-        ],
-        next_cursor: 1,
+        items:
+          outputReads === 1
+            ? []
+            : [
+                {
+                  sequence: 1,
+                  stream: "stdout",
+                  text: "synthetic-filtered-result",
+                },
+              ],
+        next_cursor: outputReads === 1 ? 0 : 1,
         oldest_cursor: 0,
         truncated: false,
         has_more: false,
         exit_code: null,
-        state: "succeeded",
+        state: outputReads === 1 ? "running" : "succeeded",
       };
-    else if (path.endsWith("/events") || path === "/api/v1/safe-events")
-      body = { items: [] };
+    } else if (path === "/api/v1/session/auth-events")
+      body = {
+        items: [
+          {
+            id: 1,
+            kind: "verification_succeeded",
+            channel: "browser",
+            approval_id: null,
+            created_at_unix_ms: now,
+          },
+        ],
+        retention_truncated: false,
+      };
+    else if (path === "/api/v1/safe-events")
+      body = {
+        items: runs.map((run, index) => ({
+          id: index + 1,
+          run_id: run.id,
+          terminal_id: null,
+          sequence: 1,
+          kind: "succeeded",
+          state: "succeeded",
+          message: "command run succeeded",
+          created_at_unix_ms: run.updated_at_unix_ms + 100,
+        })),
+      };
+    else if (path.endsWith("/events")) body = { items: [] };
     else throw new Error(`Unexpected fixture request: ${method} ${path}`);
     await route.fulfill({ status, json: body });
   });
@@ -432,7 +466,25 @@ try {
   );
   await page.getByRole("button", { name: "启动受控运行", exact: true }).click();
   await page.getByText("synthetic-filtered-result", { exact: true }).waitFor();
+  assert.ok(
+    outputReads >= 2,
+    "the run output view retries without a service event",
+  );
   await nav("历史").click();
+  await page.getByRole("button", { name: "安全日志", exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "执行历史", exact: true }).count(),
+    0,
+  );
+  await page.getByRole("heading", { name: "安全日志" }).waitFor();
+  await page.getByRole("heading", { name: "受控运行已完成" }).waitFor();
+  await page.getByLabel("来源").selectOption("approval");
+  await page
+    .getByRole("list", { name: "安全日志时间线" })
+    .getByText("审批: 已批准", { exact: false })
+    .first()
+    .waitFor();
+  await page.getByLabel("来源").selectOption("all");
   await page.getByRole("button", { name: "AI 会话" }).click();
   await page.getByRole("heading", { name: "合成会话摘要" }).waitFor();
   await page.getByText(/任务与审批（\d+）/).waitFor();
@@ -546,7 +598,22 @@ try {
         "规模连接 099",
         "规模连接 099",
       ),
-      history_ms: await searchAndOpen("历史", "规模任务 199", "规模连接 099"),
+      history_ms: await (async () => {
+        const started = performance.now();
+        await nav("历史").click();
+        await page.getByLabel("搜索事件、运行或关联 ID").fill("规模任务 199");
+        await page
+          .getByRole("list", { name: "安全日志时间线" })
+          .getByText("规模连接 099", { exact: false })
+          .first()
+          .waitFor();
+        const duration = performance.now() - started;
+        assert.ok(
+          duration <= 2_000,
+          `history search took ${duration.toFixed(1)} ms`,
+        );
+        return Math.round(duration * 10) / 10;
+      })(),
     };
     console.log(
       `Personal-scale UI passed: 100 connections, 200 tasks and 500 runs (${JSON.stringify(scaleDurations)}).`,

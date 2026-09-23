@@ -241,6 +241,7 @@ export interface BrowserAuthEvent {
 
 export interface BrowserAuthEventListResponse {
   items: BrowserAuthEvent[];
+  retention_truncated: boolean;
 }
 
 export interface TotpSetup {
@@ -870,6 +871,7 @@ export interface SafeEvent {
   state: RunState;
   message: string;
   created_at_unix_ms: number;
+  terminal_id: string | null;
 }
 
 export interface SafeEventListResponse {
