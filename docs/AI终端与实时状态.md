@@ -48,6 +48,8 @@ Shell 可能为 `powershell`、`cmd`、`bash` 或 `zsh`，以能力查询结果�
 
 MCP 的 `tools/list` 公布各工具的输入和输出 JSON Schema。响应均在 MCP `structuredContent` 中；下面列出最容易误读的字段位置，完整字段以当前工具 schema 为准：
 
+首次 MCP 连接的 server instructions 还内置了中英双语的端到端路径和与 schema 一起校验的 JSON 示例。AI 可直接依照这些说明完成会话登记、目录发现、一次性申请、人工审批、运行及脱敏输出读取，无需访问仓库文件。示例中的响应只展示选定字段；实际响应以工具 `outputSchema` 为准。
+
 | 步骤 / Step | 从结构化响应读取 / Read from structured response | 下一步 / Next action |
 |---|---|---|
 | `secretbridge_begin_conversation` | `id`（作为后续申请的 `conversation_id`） | 在同一 AI 对话中复用此 ID；AI 不设置审批策略 |
@@ -58,6 +60,8 @@ MCP 的 `tools/list` 公布各工具的输入和输出 JSON Schema。响应均�
 | `secretbridge_read_run_output` | `items`、`next_cursor`、`truncated`、`state` | 使用下一游标继续读；截断时明确告知保留缺口 |
 
 没有模板时，优先选择能表达目标语义的结构化请求；本机精确程序使用一次性 `request_command`，已登记 SSH 连接使用 `request_ssh`。稳定且重复的操作只有在用户明确希望复用时才保存为模板。错误返回的稳定代码和 `next_actions` 应指导恢复；终端忙、上下文不明或授权失效时，查询当前状态、新建终端或重新申请，不生成绕过代理的辅助脚本。
+
+常见恢复提示由固定代码映射生成，不包含失败输入原文：`terminal_context_unknown` 建议新建终端并重新申请，`approval_not_usable` 建议查询审批状态并在仍有执行意图时重新申请，`ssh_credential_target_mismatch` 建议由人修正连接元数据。字段长度错误另返回安全的字段位置、实际字节数和上限；不要为了绕过界限把秘密或不可信文本写到 Shell 中。
 
 ## 输出游标
 

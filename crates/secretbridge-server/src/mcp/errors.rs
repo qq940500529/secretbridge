@@ -5,6 +5,55 @@ use crate::catalog::CatalogError;
 use rmcp::ErrorData;
 use uuid::Uuid;
 
+pub(super) fn recovery_actions(code: &str) -> Option<&'static [&'static str]> {
+    match code {
+        "approval_consumed"
+        | "approval_not_usable"
+        | "approval_not_pending"
+        | "invalid_approval_transition"
+        | "version_conflict" => Some(&[
+            "get_current_approval_state",
+            "request_new_approval_if_still_intended",
+        ]),
+        "idempotency_conflict" => Some(&["check_existing_run", "use_new_key_for_new_intent"]),
+        "terminal_busy" => Some(&["read_current_run_and_terminal_state", "wait_for_run"]),
+        "terminal_context_unknown" | "terminal_closed" | "secure_terminal_not_running" => Some(&[
+            "create_new_terminal",
+            "request_new_approval_if_still_intended",
+        ]),
+        "terminal_attach_required" | "terminal_input_required" => {
+            Some(&["attach_terminal_and_request_input"])
+        }
+        "ssh_connection_required"
+        | "ssh_connection_address_required"
+        | "ssh_connection_username_required"
+        | "ssh_connection_credential_required"
+        | "ssh_password_credential_required"
+        | "ssh_credential_target_mismatch" => {
+            Some(&["ask_human_to_correct_connection_metadata", "retry_request"])
+        }
+        "telnet_not_explicitly_allowed" => Some(&["ask_human_to_review_insecure_protocol_risk"]),
+        "credential_reference_not_found" => {
+            Some(&["refresh_catalog", "select_valid_credential_reference"])
+        }
+        "verification_failed" => Some(&[
+            "ask_human_to_review_pending_approval",
+            "use_current_code_only_if_voluntarily_supplied",
+        ]),
+        "broker_stopping" | "runtime_control_unavailable" => {
+            Some(&["wait_for_local_broker", "retry_after_health_check"])
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn recoverable_error(code: &str) -> ErrorData {
+    ErrorData::invalid_params(
+        code.to_owned(),
+        recovery_actions(code).map(|actions| serde_json::json!({ "next_actions": actions })),
+    )
+}
+
 pub(super) fn reject_legacy_placeholder(
     argument: &str,
     index: usize,
@@ -59,8 +108,10 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
         | "ssh_connection_credential_required"
         | "ssh_password_credential_required"
         | "ssh_credential_target_mismatch"
+        | "telnet_not_explicitly_allowed"
         | "secure_terminal_not_running"
         | "browser_open_failed"
+        | "approval_not_pending"
         | "broker_stopping" => ErrorData::invalid_params(
             code.to_owned(),
             if matches!(
@@ -73,7 +124,7 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
             ) {
                 data
             } else {
-                None
+                recovery_actions(code).map(|actions| serde_json::json!({ "next_actions": actions }))
             },
         ),
         "runtime_control_unavailable" => ErrorData::internal_error(code.to_owned(), None),
@@ -106,5 +157,5 @@ pub(super) fn catalog_error(error: CatalogError) -> ErrorData {
         }
         CatalogError::VersionConflict => "version_conflict",
     };
-    ErrorData::invalid_params(code, None)
+    recoverable_error(code)
 }

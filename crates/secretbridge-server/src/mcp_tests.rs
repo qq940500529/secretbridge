@@ -101,6 +101,34 @@ fn legacy_credential_placeholder_returns_a_field_level_repair_hint() {
     super::errors::reject_legacy_placeholder("{{.Names}}", 2, &slots).unwrap();
 }
 
+#[test]
+fn bridge_recovery_hints_are_fixed_and_survive_remote_transport() {
+    let response = BridgeResponse::from_error(ErrorData::invalid_params(
+        "terminal_context_unknown",
+        Some(json!({"untrusted_value": SENSITIVE_MARKER})),
+    ));
+    assert_eq!(response.error.as_deref(), Some("terminal_context_unknown"));
+    assert_eq!(
+        response.error_data.as_ref().unwrap()["next_actions"][0],
+        "create_new_terminal"
+    );
+    assert!(
+        !serde_json::to_string(&response)
+            .unwrap()
+            .contains(SENSITIVE_MARKER)
+    );
+    let forwarded = super::errors::remote_error("terminal_context_unknown", response.error_data);
+    assert_eq!(
+        forwarded.data.unwrap()["next_actions"][1],
+        "request_new_approval_if_still_intended"
+    );
+    let local = super::errors::recoverable_error("ssh_credential_target_mismatch");
+    assert_eq!(
+        local.data.unwrap()["next_actions"][0],
+        "ask_human_to_correct_connection_metadata"
+    );
+}
+
 #[tokio::test]
 async fn bridge_validation_failure_records_only_a_safe_diagnostic_code() {
     let (state, _) = AppState::new([]);
@@ -542,6 +570,101 @@ async fn advertises_only_the_bounded_tool_surface() {
         }
     }
 
+    client.cancel().await.expect("stop MCP client");
+    server_handle.await.expect("join MCP server");
+}
+
+#[tokio::test]
+async fn server_guidance_examples_follow_advertised_contracts() {
+    let (state, _) = AppState::new([]);
+    let (client, server_handle) = connect(state).await;
+    let tools = client.list_all_tools().await.expect("list MCP tools");
+    let mut examples = BTreeMap::new();
+    for section in super::SERVER_INSTRUCTIONS.split("### ").skip(1) {
+        let heading = section.lines().next().expect("example heading");
+        let (name, direction) = heading.rsplit_once(' ').expect("example direction");
+        let json = section
+            .split("```json\n")
+            .nth(1)
+            .expect("JSON example")
+            .split("\n```")
+            .next()
+            .expect("JSON end");
+        let value: Value = serde_json::from_str(json).expect("valid example JSON");
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .expect("real tool");
+        let schema = if direction == "input" {
+            tool.input_schema.as_ref()
+        } else {
+            tool.output_schema.as_ref().expect("output schema")
+        };
+        let properties = schema["properties"].as_object().expect("schema properties");
+        for field in value.as_object().expect("example object").keys() {
+            assert!(
+                properties.contains_key(field),
+                "{name} {direction}: unknown {field}"
+            );
+        }
+        if direction == "input" {
+            for field in schema["required"].as_array().into_iter().flatten() {
+                assert!(
+                    value.get(field.as_str().unwrap()).is_some(),
+                    "{name}: missing {field}"
+                );
+            }
+        }
+        assert!(
+            examples
+                .insert((name.to_owned(), direction.to_owned()), value)
+                .is_none()
+        );
+    }
+    for name in [
+        "secretbridge_begin_conversation",
+        "secretbridge_terminal_create",
+        "secretbridge_request_command",
+        "secretbridge_create_run",
+        "secretbridge_read_run_output",
+    ] {
+        assert!(examples.contains_key(&(name.to_owned(), "input".to_owned())));
+        assert!(examples.contains_key(&(name.to_owned(), "output".to_owned())));
+    }
+    let value =
+        |name: &str, direction: &str| examples[&(name.to_owned(), direction.to_owned())].clone();
+    serde_json::from_value::<super::BeginConversationParams>(value(
+        "secretbridge_begin_conversation",
+        "input",
+    ))
+    .expect("conversation request");
+    serde_json::from_value::<crate::terminal::CreateTerminal>(value(
+        "secretbridge_terminal_create",
+        "input",
+    ))
+    .expect("terminal request");
+    serde_json::from_value::<super::RequestCommandParams>(value(
+        "secretbridge_request_command",
+        "input",
+    ))
+    .expect("command request");
+    serde_json::from_value::<super::CreateRunParams>(value("secretbridge_create_run", "input"))
+        .expect("run request");
+    serde_json::from_value::<crate::command::OutputRequest>(value(
+        "secretbridge_read_run_output",
+        "input",
+    ))
+    .expect("output request");
+    assert!(value("secretbridge_terminal_create", "output")["terminal"]["id"].is_string());
+    assert!(value("secretbridge_create_run", "output")["run"]["id"].is_string());
+    assert_eq!(
+        value("secretbridge_begin_conversation", "output")["approval_policy"],
+        "every_task"
+    );
+    assert_eq!(
+        value("secretbridge_request_command", "output")["state"],
+        "pending"
+    );
     client.cancel().await.expect("stop MCP client");
     server_handle.await.expect("join MCP server");
 }
