@@ -14,13 +14,16 @@ authors = ["数链创元（天津）信息技术有限责任公司"]
 repository = "https://github.com/qq940500529/secretbridge"
 
 [workspace.dependencies]
+aes-gcm = "=0.11.1"
 argon2 = "=0.6.0"
 axum = { version = "=0.8.9", features = ["json", "ws"] }
 futures-util = "=0.3.34"
+hkdf = "=0.13.0"
 hex = "=0.4.3"
 http-body-util = "=0.1.5"
 keyring = "=4.2.0"
 portable-pty = "=0.9.0"
+p256 = { version = "=0.14.0", features = ["ecdh"] }
 png = "=0.18.1"
 qrcodegen = "=1.8.0"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider"] }

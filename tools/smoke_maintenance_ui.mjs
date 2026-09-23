@@ -56,9 +56,9 @@ try {
       body = { authenticated: true, expires_in_seconds: 3600 };
     else if (path.endsWith("/session/methods"))
       body = {
-        pin_enabled: false,
+        pin_enabled: true,
         totp_enabled: false,
-        pairing_link_enabled: true,
+        pairing_link_enabled: false,
       };
     else if (path.endsWith("/maintenance/configuration")) body = bundle;
     else if (path.endsWith("/configuration/preview")) {
@@ -93,16 +93,39 @@ try {
         body: Buffer.from("SQLite format 3\0synthetic"),
       });
       return;
+    } else if (path.endsWith("/maintenance/diagnostics/export")) {
+      const selection = request.postDataJSON();
+      assert.equal(selection.pin, "synthetic-export-pin");
+      assert.equal(selection.include_commands, false);
+      body = {
+        format: "secretbridge-encrypted-diagnostics-export",
+        format_version: 1,
+        records: selection.include_commands
+          ? [
+              {
+                category: "command",
+                created_at_unix_ms: 100,
+                data: { program: "synthetic-command" },
+              },
+            ]
+          : [
+              {
+                category: "event",
+                created_at_unix_ms: 100,
+                data: { code: "terminal_busy" },
+              },
+            ],
+      };
     } else if (path.endsWith("/maintenance/diagnostics"))
       body = {
         format: "secretbridge-diagnostics",
-        diagnostic_schema_version: 2,
+        diagnostic_schema_version: 3,
         version: "0.1.0-test",
         platform: "windows",
         bridge_schema_version: 2,
         authentication_mode: "totp",
         generated_at_unix_ms: Date.now(),
-        schema_version: 22,
+        schema_version: 23,
         storage: "sqlite",
         credentials: 1,
         configured_credentials: 1,
@@ -116,6 +139,15 @@ try {
         error_codes: { ssh_connection_failed: 1 },
         terminal_states: { exited: 1 },
         stale_terminal_references: 0,
+        run_failures: [
+          {
+            code: "ssh_connection_failed",
+            stage: "connection",
+            occurrences: 1,
+            first_at_unix_ms: 100,
+            last_at_unix_ms: 200,
+          },
+        ],
         mcp_failures: [
           {
             code: "terminal_busy",
@@ -209,16 +241,26 @@ try {
       fullPage: true,
     });
   await page.getByRole("button", { name: "诊断", exact: true }).click();
+  assert.equal(
+    await page.getByLabel("完整命令配置（可能含敏感参数）").isChecked(),
+    false,
+  );
   await page.getByRole("button", { name: "预览诊断信息" }).click();
   await page.getByText("connection 1", { exact: false }).waitFor();
   await page
     .getByText("terminal_lease / terminal_busy", { exact: false })
     .waitFor();
+  await page
+    .getByRole("region", { name: "数据维护" })
+    .getByLabel("PIN/口令")
+    .fill("synthetic-export-pin");
+  await page.getByRole("button", { name: "解锁并预览所选内容" }).click();
+  await page.getByText("已解锁记录: 1").waitFor();
   download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下载诊断信息", exact: true }).click();
+  await page.getByRole("button", { name: "下载预览内容", exact: true }).click();
   assert.equal(
     (await download).suggestedFilename(),
-    "secretbridge-diagnostics.json",
+    "secretbridge-diagnostics-selected.json",
   );
   await page.getByRole("button", { name: "切换到英文" }).click();
   await page

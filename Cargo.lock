@@ -3305,15 +3305,18 @@ dependencies = [
 name = "secretbridge-server"
 version = "0.2.0-beta.8"
 dependencies = [
+ "aes-gcm",
  "argon2",
  "axum",
  "base64 0.23.1",
  "futures-util",
  "hex",
+ "hkdf",
  "http-body-util",
  "keyring",
  "mysql_async",
  "notify-rust",
+ "p256",
  "png",
  "portable-pty",
  "qrcodegen",

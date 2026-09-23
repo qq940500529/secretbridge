@@ -29,10 +29,14 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod bridge_response;
 mod conversation;
 mod errors;
+mod ready;
+use bridge_response::safe_bridge_error_code;
 use conversation::{BeginConversationParams, resolve_conversation_id};
 use errors::{catalog_error, parse_uuid, remote_error};
+use ready::ensure_bridge_ready;
 
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -41,7 +45,7 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOpti
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::terminal::CreateTerminal;
+use crate::terminal::{CreateTerminal, TerminalRead, TerminalShellCapability, TerminalSummary};
 use crate::terminal_control::{
     AttachParams, OwnedTerminalRequest, ReadParams, ResizeParams, TerminalIdParams,
     TerminalRequest, WriteParams,
@@ -57,13 +61,88 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "SecretBridge / 安全操作: use only these MCP tools; the Web console is for the local human. Start each AI chat with secretbridge_begin_conversation using a short non-secret summary; pass its conversation_id to every approval or one-time request in that chat. Conversation approval policy is controlled only by the human in Web and may allow preauthorized requests; always report their scope and risk. Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. Choose a structured connection operation when available, a one-time request for a changing command, and a saved template only for an explicitly reusable task. Never read a secret or ask for a PIN, passphrase, TOTP setup key, QR code, or credential. Request approval, then show the user the exact approval ID, state, target, command/parameters, opaque credential references, expiry and risk. If pending, offer two choices: approve in the local Web console, or if TOTP is configured, provide the current six-digit code for secretbridge_confirm_approval with that ID and version. / 每段 AI 对话先登记不含秘密的摘要，并在任务请求中传入会话 ID；会话审批策略只由用户在网页设置。 Never retain, repeat, log or reuse a code; never submit it to another approval. Only then create a run and read sanitized output with the returned cursor. The terminal-create response ID is terminal.id, not top-level id. Terminal input and output remain broker-mediated. A timed-out or context-unknown terminal must be replaced; do not retry writes blindly or use a shell to bypass approval.";
+const SERVER_INSTRUCTIONS: &str = r"SecretBridge controlled operations / SecretBridge 安全操作
+Use only these MCP tools. The local Web console is for the human; never inspect or automate it. Start each AI chat with secretbridge_begin_conversation using a short non-secret summary, then pass its conversation_id to every request in that chat. Only the human can set conversation approval policy in Web. A prior policy may preapprove a request; disclose its scope and risk before creating a run.
+Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. The catalog returns credentials and connections as non-secret metadata. Prefer a structured connection operation where supported, a one-time request for a changing command, and a saved template only when the user explicitly wants reuse. With no template, use secretbridge_request_command for a controlled local command or secretbridge_request_ssh for a structured SSH operation; do not create helper scripts to handle credentials.
+Response paths: terminal creation returns terminal.id (not a top-level id); approval requests return id, state, version, next_actions and possibly console_url; run creation returns run.id and run.state; read_run_output returns items and next_cursor. Check advertised output schemas. For a pending approval, show its exact ID, target, program/parameters, opaque credential references, expiry and risk. Invite the human to approve in the local Web console, or accept only a current six-digit TOTP code the human voluntarily provides for that exact ID and version. Never ask for a PIN, passphrase, setup key, QR code or credential; never retain, repeat, log or reuse a TOTP code. Use secretbridge_confirm_approval only for that pending request.
+Create a run only after approval; read sanitized output with the returned cursor. Inspect next_actions and stable error codes for recovery. Terminal input and output remain broker-mediated. Replace a timed-out or context-unknown terminal; do not blindly retry writes or use a shell to bypass approval.
+中文：每段 AI 对话先登记不含秘密的摘要，并把会话 ID 传入后续申请。会话审批策略只由人在本机网页设置；先前策略可能使申请直接获批，执行前应说明范围与风险。先发现终端能力和非秘密目录；有结构化连接器时优先使用，一次性变化命令使用动态申请，只有用户明确要求复用时才保存模板。创建终端的 ID 位于 terminal.id；审批的 id、state、version、next_actions 表明下一步；创建运行后读取 run.id，再用输出的 next_cursor 继续读取。待审批时请用户在本机网页处理，或仅转交用户主动提供给该审批的当前六位 TOTP；不得索要或保存 PIN、凭据或 TOTP 密钥，也不得自动化网页。";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
     backend: McpBackend,
     tool_router: ToolRouter<Self>,
     actor: Uuid,
+}
+
+// These shapes describe the JSON emitted by TerminalControl. Keep them explicit:
+// generic serde_json::Value otherwise advertises an unhelpful unconstrained output.
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalCapabilitiesOutput {
+    platform: String,
+    default_shell: Option<crate::terminal::TerminalShell>,
+    shells: Vec<TerminalShellCapability>,
+    max_sessions: usize,
+    max_environment_variables: usize,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalListOutput {
+    items: Vec<TerminalSummary>,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalCreateOutput {
+    terminal: TerminalSummary,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalAttachOutput {
+    terminal: TerminalSummary,
+    input_granted: bool,
+    oldest_cursor: u64,
+    next_cursor: u64,
+    idle_timeout_seconds: u64,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalWriteOutput {
+    terminal: TerminalSummary,
+    input_written: bool,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalResizeOutput {
+    terminal: TerminalSummary,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalInterruptOutput {
+    terminal: TerminalSummary,
+    interrupt_sent: bool,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalDetachOutput {
+    #[schemars(with = "String")]
+    id: Uuid,
+    detached: bool,
+}
+
+#[allow(dead_code, reason = "schema-only MCP terminal output contracts")]
+#[derive(JsonSchema)]
+struct TerminalCloseOutput {
+    #[schemars(with = "String")]
+    id: Uuid,
+    closed: bool,
 }
 
 impl SecretBridgeMcp {
@@ -673,7 +752,8 @@ async fn open_console_for_human(state: &AppState) {
 impl SecretBridgeMcp {
     #[tool(
         name = "secretbridge_read_run_output",
-        description = "Read retained, bounded, sanitized output for an approved run, including controlled commands sent to a secure terminal. cursor is the last chunk sequence; continue with next_cursor. Use secretbridge_terminal_read for live terminal interaction. Never re-execute a command to recover output."
+        description = "Read retained, bounded, sanitized output for an approved run, including controlled commands sent to a secure terminal. cursor is the last chunk sequence; continue with next_cursor. Use secretbridge_terminal_read for live terminal interaction. Never re-execute a command to recover output.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::command::OutputPage>()
     )]
     async fn read_run_output(
         &self,
@@ -683,7 +763,8 @@ impl SecretBridgeMcp {
     }
     #[tool(
         name = "secretbridge_terminal_capabilities",
-        description = "Discover supported secure continuous shells and terminal limits. Credential values are injected only by an approved SecretBridge command request, never by terminal creation."
+        description = "Discover supported secure continuous shells and terminal limits. Credential values are injected only by an approved SecretBridge command request, never by terminal creation.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalCapabilitiesOutput>()
     )]
     async fn terminal_capabilities(&self) -> Result<McpJson<serde_json::Value>, ErrorData> {
         self.terminal(TerminalRequest::Capabilities).await
@@ -691,7 +772,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_list",
-        description = "List broker-owned terminal sessions, lifecycle status, process IDs and shell exit codes."
+        description = "List broker-owned terminal sessions, lifecycle status, process IDs and shell exit codes.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalListOutput>()
     )]
     async fn terminal_list(&self) -> Result<McpJson<serde_json::Value>, ErrorData> {
         self.terminal(TerminalRequest::List).await
@@ -699,7 +781,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_create",
-        description = "Create one broker-owned secure continuous terminal for ordinary commands and later human-approved credential commands. Environment and paths must contain no secrets. Creation does not grant input; attach next."
+        description = "Create one broker-owned secure continuous terminal for ordinary commands and later human-approved credential commands. The returned ID is terminal.id. Environment and paths must contain no secrets. Creation does not grant input; attach next.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalCreateOutput>()
     )]
     async fn terminal_create(
         &self,
@@ -710,7 +793,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_attach",
-        description = "Attach this MCP session to a terminal. Request input explicitly; input_granted=false means another client owns it. Idle attachments expire after 60 seconds; detach before yielding to the user."
+        description = "Attach this MCP session to a terminal. Request input explicitly; input_granted=false means another client owns it. Idle attachments expire after 60 seconds; detach before yielding to the user.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalAttachOutput>()
     )]
     async fn terminal_attach(
         &self,
@@ -721,7 +805,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_read",
-        description = "Read broker-redacted terminal output after a byte cursor; this is the only AI-readable terminal result path. max_bytes=1..16384; wait_ms=0..5000. Continue with next_cursor; truncated reports a retention gap; bytes provide lossless decoding and text is a UTF-8 preview. Never re-execute a command to recover output."
+        description = "Read broker-redacted terminal output after a byte cursor; this is the only AI-readable terminal result path. max_bytes=1..16384; wait_ms=0..5000. Continue with next_cursor; truncated reports a retention gap; bytes provide lossless decoding and text is a UTF-8 preview. Never re-execute a command to recover output.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalRead>()
     )]
     async fn terminal_read(
         &self,
@@ -732,7 +817,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_write",
-        description = "Write at most 4096 bytes of non-secret input using this MCP session's input lease. Include the shell newline to execute. Failure may mean delivery is uncertain: do not blindly retry."
+        description = "Write at most 4096 bytes of non-secret input using this MCP session's input lease. Include the shell newline to execute. Failure may mean delivery is uncertain: do not blindly retry.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalWriteOutput>()
     )]
     async fn terminal_write(
         &self,
@@ -743,7 +829,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_resize",
-        description = "Resize a terminal using its input lease. Does not restart or re-execute work."
+        description = "Resize a terminal using its input lease. Does not restart or re-execute work.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalResizeOutput>()
     )]
     async fn terminal_resize(
         &self,
@@ -754,7 +841,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_interrupt",
-        description = "Send Ctrl+C using the input lease. This is a best-effort foreground interruption, not guaranteed termination. Read subsequent output to confirm; close if forced termination is required."
+        description = "Send Ctrl+C using the input lease. This is a best-effort foreground interruption, not guaranteed termination. Read subsequent output to confirm; close if forced termination is required.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalInterruptOutput>()
     )]
     async fn terminal_interrupt(
         &self,
@@ -765,7 +853,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_detach",
-        description = "Release this MCP session's terminal attachment and input lease without stopping the shell. Safe to repeat."
+        description = "Release this MCP session's terminal attachment and input lease without stopping the shell. Safe to repeat.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalDetachOutput>()
     )]
     async fn terminal_detach(
         &self,
@@ -776,7 +865,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_terminal_close",
-        description = "Terminate and remove the terminal using this MCP session's input lease. This stops running work; use detach to preserve it."
+        description = "Terminate and remove the terminal using this MCP session's input lease. This stops running work; use detach to preserve it.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TerminalCloseOutput>()
     )]
     async fn terminal_close(
         &self,
@@ -786,7 +876,8 @@ impl SecretBridgeMcp {
     }
     #[tool(
         name = "secretbridge_list_action_templates",
-        description = "List configured controlled-action templates without exposing target addresses, descriptions, credential references, or secrets."
+        description = "List configured controlled-action templates without exposing target addresses, descriptions, credential references, or secrets.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<TemplateList>()
     )]
     async fn list_action_templates(&self) -> Result<McpJson<TemplateList>, ErrorData> {
         Ok(McpJson(self.backend.list_action_templates().await?))
@@ -794,7 +885,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_list_catalog",
-        description = "List non-secret credential and connection metadata for planning commands: opaque IDs, types, addresses, accounts, environments and availability only. Secret values are never returned."
+        description = "List non-secret credential and connection metadata for planning commands: opaque IDs, types, addresses, accounts, environments and availability only. Secret values are never returned.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<CatalogSummary>()
     )]
     async fn list_catalog(&self) -> Result<McpJson<CatalogSummary>, ErrorData> {
         Ok(McpJson(self.backend.list_catalog().await?))
@@ -802,7 +894,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_evaluate_policy",
-        description = "Evaluate the current server policy for one action template before requesting approval. Returns fixed reason codes and requirements only."
+        description = "Evaluate the current server policy for one action template before requesting approval. Returns fixed reason codes and requirements only.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<PolicySummary>()
     )]
     async fn evaluate_policy(
         &self,
@@ -817,7 +910,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_begin_conversation",
-        description = "Create a local AI-conversation ID and short non-secret summary. Call once per AI chat and pass the returned ID to every request tool. This cannot change approval policy; the human controls that in the Web console."
+        description = "Create a local AI-conversation ID and short non-secret summary. Call once per AI chat and pass the returned ID to every request tool. This cannot change approval policy; the human controls that in the Web console.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<AiConversation>()
     )]
     async fn begin_conversation(
         &self,
@@ -828,7 +922,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_approval",
-        description = "Request approval for one enabled action template. The request may already be approved when the human previously enabled a matching conversation policy in the trusted Web console. This tool cannot change that policy or approve its own request."
+        description = "Request approval for one enabled action template. The request may already be approved when the human previously enabled a matching conversation policy in the trusted Web console. This tool cannot change that policy or approve its own request.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn request_approval(
         &self,
@@ -839,7 +934,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_confirm_approval",
-        description = "Confirm exactly one pending approval with a current six-digit TOTP code that the user voluntarily supplied after reviewing that request. Never ask for or accept a setup key, QR code, PIN, passphrase, or credential; never retain, echo, or reuse the code. Codes have a bounded delay allowance and are rejected after one use."
+        description = "Confirm exactly one pending approval with a current six-digit TOTP code that the user voluntarily supplied after reviewing that request. Never ask for or accept a setup key, QR code, PIN, passphrase, or credential; never retain, echo, or reuse the code. Codes have a bounded delay allowance and are rejected after one use.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn confirm_approval(
         &self,
@@ -850,7 +946,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_command",
-        description = "Submit an exact non-shell command and opaque credential placeholders for an existing secure terminal. A user-created template is not required. The request may be approved by a prior human-controlled conversation policy; this tool cannot set that policy, accept secret values, or execute the draft. Read eventual terminal output with secretbridge_terminal_read."
+        description = "Submit an exact non-shell command and opaque credential placeholders for an existing secure terminal. A user-created template is not required. The request may be approved by a prior human-controlled conversation policy; this tool cannot set that policy, accept secret values, or execute the draft. Read eventual terminal output with secretbridge_terminal_read.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn request_command(
         &self,
@@ -861,7 +958,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_ssh",
-        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. A prior human-controlled conversation policy may approve the request; this tool never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before any new human decision."
+        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. A prior human-controlled conversation policy may approve the request; this tool never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before any new human decision.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn request_ssh(
         &self,
@@ -872,7 +970,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_get_approval",
-        description = "Read one approval lifecycle summary by its returned identifier. Reasons, decision notes, target details, credentials, and secrets are omitted."
+        description = "Read one approval lifecycle summary by its returned identifier. Reasons, decision notes, target details, credentials, and secrets are omitted.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn get_approval(
         &self,
@@ -885,7 +984,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_create_run",
-        description = "Create a run from an approved, unexpired authorization. Single-use approvals allow one run; time_window approvals allow repeats of the same frozen parameters. No commands, SQL, addresses or secrets are accepted."
+        description = "Create a run from an approved, unexpired authorization. Single-use approvals allow one run; time_window approvals allow repeats of the same frozen parameters. No commands, SQL, addresses or secrets are accepted.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<CreateRunSummary>()
     )]
     async fn create_run(
         &self,
@@ -896,7 +996,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_get_run",
-        description = "Read one controlled run's bounded lifecycle status. No raw adapter output, database errors, business rows, or credentials are returned."
+        description = "Read one controlled run's bounded lifecycle status. No raw adapter output, database errors, business rows, or credentials are returned.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<RunSummary>()
     )]
     async fn get_run(
         &self,
@@ -909,7 +1010,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_cancel_run",
-        description = "Cancel one queued or running controlled run using its current optimistic version."
+        description = "Cancel one queued or running controlled run using its current optimistic version.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<RunSummary>()
     )]
     async fn cancel_run(
         &self,
@@ -920,7 +1022,8 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_list_run_events",
-        description = "List the fixed safe-event stream for one run. Event messages come from a database-enforced allowlist and contain no adapter output or credentials."
+        description = "List the fixed safe-event stream for one run. Event messages come from a database-enforced allowlist and contain no adapter output or credentials.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<EventList>()
     )]
     async fn list_run_events(
         &self,
@@ -1538,6 +1641,10 @@ async fn process_bridge_request(
         Err(error) => {
             let code = safe_bridge_error_code(error.message.as_ref());
             let _ = state.catalog.record_diagnostic_failure(&code);
+            let _ = state.catalog.record_encrypted_diagnostic(
+                "event",
+                serde_json::json!({ "source": "mcp", "code": code }),
+            );
             BridgeResponse::from_error(error)
         }
     }
@@ -1553,13 +1660,7 @@ async fn dispatch_bridge_request(
             crate::runtime::handle(&state, parse_bridge_payload(payload)?).await?,
         );
     }
-    if state
-        .runtime_control
-        .as_ref()
-        .is_some_and(|control| control.stopping.is_cancelled())
-    {
-        return Err(ErrorData::internal_error("broker_stopping", None));
-    }
+    ensure_bridge_ready(&state, operation)?;
     let backend = McpBackend::Local(state);
     match operation {
         OP_HEALTH => {
@@ -1655,113 +1756,6 @@ fn parse_bridge_payload<T: DeserializeOwned>(payload: serde_json::Value) -> Resu
 fn serialize_bridge_payload<T: Serialize>(payload: T) -> Result<serde_json::Value, ErrorData> {
     serde_json::to_value(payload)
         .map_err(|_| ErrorData::internal_error("secretbridge_operation_failed", None))
-}
-
-fn safe_bridge_error_code(code: &str) -> String {
-    match code {
-        "not_found"
-        | "approval_consumed"
-        | "approval_not_usable"
-        | "approval_not_pending"
-        | "capacity_exceeded"
-        | "credential_reference_not_found"
-        | "invalid_request"
-        | "invalid_approval_transition"
-        | "invalid_run_transition"
-        | "idempotency_conflict"
-        | "policy_denied"
-        | "resource_in_use"
-        | "version_conflict"
-        | "verification_failed"
-        | "terminal_attach_required"
-        | "terminal_input_required"
-        | "terminal_busy"
-        | "terminal_context_unknown"
-        | "secure_terminal_not_usable"
-        | "secure_terminal_not_running"
-        | "ssh_connection_required"
-        | "ssh_connection_address_required"
-        | "ssh_connection_username_required"
-        | "ssh_connection_credential_required"
-        | "ssh_password_credential_required"
-        | "ssh_credential_target_mismatch"
-        | "terminal_closed"
-        | "terminal_spawn_failed"
-        | "terminal_unsupported_shell"
-        | "runtime_control_unavailable"
-        | "browser_open_failed"
-        | "broker_stopping"
-        | "command_arguments_too_large"
-        | "command_argument_too_large"
-        | "unknown_credential_placeholder" => code.to_owned(),
-        _ => "secretbridge_operation_failed".to_owned(),
-    }
-}
-
-impl BridgeResponse {
-    fn success(payload: serde_json::Value) -> Self {
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: true,
-            payload: Some(payload),
-            error: None,
-            error_data: None,
-        }
-    }
-
-    fn error(code: &str) -> Self {
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: false,
-            payload: None,
-            error: Some(code.to_owned()),
-            error_data: None,
-        }
-    }
-
-    fn from_error(error: ErrorData) -> Self {
-        let code = safe_bridge_error_code(error.message.as_ref());
-        let error_data = if matches!(
-            code.as_str(),
-            "command_arguments_too_large"
-                | "command_argument_too_large"
-                | "unknown_credential_placeholder"
-        ) {
-            error.data.and_then(|value| {
-                let field = value.get("field")?.as_str()?;
-                if field != "arguments"
-                    && !(field.starts_with("arguments[")
-                        && field.ends_with(']')
-                        && field.len() <= 32
-                        && field[10..field.len() - 1].bytes().all(|byte| byte.is_ascii_digit()))
-                {
-                    return None;
-                }
-                Some(if code == "unknown_credential_placeholder" {
-                    serde_json::json!({
-                        "field": field,
-                        "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
-                    })
-                } else {
-                    serde_json::json!({
-                        "field": field,
-                        "actual_bytes": value.get("actual_bytes")?.as_u64()?,
-                        "limit_bytes": value.get("limit_bytes")?.as_u64()?,
-                        "next_actions": ["split_the_operation", "use_a_structured_connector"]
-                    })
-                })
-            })
-        } else {
-            None
-        };
-        Self {
-            schema_version: BRIDGE_CONNECTION_SCHEMA,
-            ok: false,
-            payload: None,
-            error: Some(code),
-            error_data,
-        }
-    }
 }
 
 async fn read_frame<S>(stream: &mut S, maximum: usize) -> io::Result<Zeroizing<Vec<u8>>>

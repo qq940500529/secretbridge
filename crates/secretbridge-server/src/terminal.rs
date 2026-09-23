@@ -105,7 +105,7 @@ pub enum TerminalEvent {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalStatus {
     Running,
@@ -153,7 +153,7 @@ pub struct CreateTerminal {
     pub environment: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct TerminalCapabilities {
     pub platform: &'static str,
     pub default_shell: Option<TerminalShell>,
@@ -162,14 +162,15 @@ pub struct TerminalCapabilities {
     pub max_environment_variables: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct TerminalShellCapability {
     pub shell: TerminalShell,
     pub display_name: &'static str,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct TerminalSummary {
+    #[schemars(with = "String")]
     pub id: Uuid,
     pub name: String,
     pub shell: TerminalShell,
@@ -703,7 +704,7 @@ pub struct TerminalConnection {
     connection_id: Uuid,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct TerminalRead {
     pub terminal: TerminalSummary,
     pub cursor: u64,

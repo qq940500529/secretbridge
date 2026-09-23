@@ -584,7 +584,27 @@ export function App() {
                 />
               </div>
             )}
-            {activePage === "settings" ? (
+            {sessionToken && authMethodStatus === "ready" && !pinEnabled ? (
+              <div className="max-w-3xl">
+                <h1 className="text-2xl font-bold text-slate-950">
+                  {language === "zh-CN"
+                    ? "完成首次初始化"
+                    : "Finish first-time setup"}
+                </h1>
+                <BrowserAuthenticationSettings
+                  language={language}
+                  sessionToken={sessionToken}
+                  pinEnabled={pinEnabled}
+                  totpEnabled={totpEnabled}
+                  authMethodStatus={authMethodStatus}
+                  onRetry={() => void refreshBrowserAuthMethods()}
+                  onChanged={() => {
+                    setActivePage("settings");
+                    void refreshBrowserAuthMethods();
+                  }}
+                />
+              </div>
+            ) : activePage === "settings" ? (
               <>
                 <SettingsView
                   text={text}
@@ -843,6 +863,7 @@ function PairingRequired({
   onTotp: (code: string) => Promise<void>;
 }) {
   const [pin, setPin] = useState("");
+  const [loginMethod, setLoginMethod] = useState<"pin" | "totp">("pin");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const zh = language === "zh-CN";
@@ -886,7 +907,7 @@ function PairingRequired({
               setBusy(true);
               setFailed(false);
               try {
-                if (totpEnabled) await onTotp(pin);
+                if (loginMethod === "totp") await onTotp(pin);
                 else await onPin(pin);
                 setPin("");
               } catch {
@@ -896,11 +917,37 @@ function PairingRequired({
               }
             }}
           >
+            {pinEnabled && totpEnabled && (
+              <div className="flex gap-3 text-sm">
+                <button
+                  type="button"
+                  className="workbench-button"
+                  aria-pressed={loginMethod === "pin"}
+                  onClick={() => {
+                    setLoginMethod("pin");
+                    setPin("");
+                  }}
+                >
+                  {zh ? "PIN/口令" : "PIN/passphrase"}
+                </button>
+                <button
+                  type="button"
+                  className="workbench-button"
+                  aria-pressed={loginMethod === "totp"}
+                  onClick={() => {
+                    setLoginMethod("totp");
+                    setPin("");
+                  }}
+                >
+                  {zh ? "验证码" : "Authenticator code"}
+                </button>
+              </div>
+            )}
             <label
               htmlFor="browser-pin"
               className="block text-sm font-semibold text-slate-700"
             >
-              {totpEnabled
+              {loginMethod === "totp"
                 ? zh
                   ? "身份验证器验证码"
                   : "Authenticator code"
@@ -910,13 +957,15 @@ function PairingRequired({
             </label>
             <input
               id="browser-pin"
-              type={totpEnabled ? "text" : "password"}
+              type={loginMethod === "totp" ? "text" : "password"}
               minLength={6}
-              maxLength={totpEnabled ? 6 : 64}
-              inputMode={totpEnabled ? "numeric" : undefined}
-              pattern={totpEnabled ? "[0-9]{6}" : undefined}
+              maxLength={loginMethod === "totp" ? 6 : 64}
+              inputMode={loginMethod === "totp" ? "numeric" : undefined}
+              pattern={loginMethod === "totp" ? "[0-9]{6}" : undefined}
               required
-              autoComplete={totpEnabled ? "one-time-code" : "current-password"}
+              autoComplete={
+                loginMethod === "totp" ? "one-time-code" : "current-password"
+              }
               value={pin}
               onChange={(event) => setPin(event.target.value)}
               className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5"

@@ -44,7 +44,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
     extract::{
@@ -71,7 +70,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use catalog::{
     ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind,
@@ -91,7 +90,6 @@ use terminal::{
 
 const BEARER_PREFIX: &str = "Bearer ";
 const SESSION_TTL: Duration = Duration::from_mins(30);
-const BROWSER_PIN_CREDENTIAL_ID: Uuid = Uuid::from_u128(0x5e63_7265_7462_7269_6467_6570_696e_0001);
 const BROWSER_TOTP_CREDENTIAL_ID: Uuid = Uuid::from_u128(0x5e63_7265_7462_7269_6467_6574_6f74_7001);
 const WEBSOCKET_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -430,11 +428,12 @@ impl Drop for TotpSetupResponse {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 enum BrowserAuthMethod {
     PairingLink,
     Pin,
+    DisableTotp,
 }
 
 #[derive(Deserialize)]
@@ -445,8 +444,6 @@ struct SetBrowserAuthMethodRequest {
     pin: Option<String>,
     #[serde(default)]
     current_pin: Option<String>,
-    #[serde(default)]
-    current_totp_code: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -454,8 +451,6 @@ struct SetBrowserAuthMethodRequest {
 struct CurrentBrowserAuthProof {
     #[serde(default)]
     current_pin: Option<String>,
-    #[serde(default)]
-    current_totp_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -592,6 +587,7 @@ enum ApiError {
     InvalidApprovalTransition,
     InvalidRunTransition,
     IdempotencyConflict,
+    InitializationRequired,
     InvalidOrigin,
     NotFound,
     PolicyDenied,
@@ -651,6 +647,11 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT,
                 "idempotency_conflict",
                 "The idempotency key belongs to another request.",
+            ),
+            Self::InitializationRequired => (
+                StatusCode::CONFLICT,
+                "initialization_required",
+                "Set a PIN in the local management page before using the broker.",
             ),
             Self::InvalidOrigin => (
                 StatusCode::FORBIDDEN,
@@ -815,7 +816,32 @@ fn api_router(state: AppState) -> Router {
             state.clone(),
             notify_mutations,
         ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_initialization,
+        ))
         .with_state(state)
+}
+
+async fn require_initialization(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let path = request.uri().path();
+    if state.runtime_control.is_some()
+        && path.starts_with("/api/v1/")
+        && !path.starts_with("/api/v1/session")
+        && path != "/api/v1/status"
+        && path != "/api/v1/runtime/stop"
+        && !state
+            .catalog
+            .diagnostic_vault_ready()
+            .map_err(map_catalog_error)?
+    {
+        return Err(ApiError::InitializationRequired);
+    }
+    Ok(next.run(request).await)
 }
 
 #[derive(Deserialize)]
@@ -1032,10 +1058,14 @@ async fn browser_auth_methods(
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?;
+    let pin_ready = state
+        .catalog
+        .diagnostic_vault_ready()
+        .map_err(map_catalog_error)?;
     Ok(Json(BrowserAuthMethodsResponse {
-        pin_enabled: mode == BrowserAuthMode::Pin,
+        pin_enabled: pin_ready,
         totp_enabled: mode == BrowserAuthMode::Totp,
-        pairing_link_enabled: true,
+        pairing_link_enabled: !pin_ready,
     }))
 }
 
@@ -1077,22 +1107,7 @@ async fn reset_authentication_attempts(state: &AppState) {
 
 fn valid_browser_pin(pin: &str) -> bool {
     let length = pin.chars().count();
-    (6..=64).contains(&length) && !pin.chars().any(char::is_control)
-}
-
-fn hash_browser_pin(pin: &str) -> Option<String> {
-    Argon2::default()
-        .hash_password(pin.as_bytes())
-        .ok()
-        .map(|hash| hash.to_string())
-}
-
-fn verify_browser_pin(pin: &str, encoded: &str) -> bool {
-    PasswordHash::new(encoded).is_ok_and(|hash| {
-        Argon2::default()
-            .verify_password(pin.as_bytes(), &hash)
-            .is_ok()
-    })
+    (12..=64).contains(&length) && !pin.chars().any(char::is_control)
 }
 
 async fn pair_with_pin(
@@ -1105,7 +1120,7 @@ async fn pair_with_pin(
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?
-        != BrowserAuthMode::Pin
+        == BrowserAuthMode::PairingLink
         || !valid_browser_pin(&request.pin)
     {
         return Err(ApiError::Unauthorized);
@@ -1113,16 +1128,12 @@ async fn pair_with_pin(
     if !authentication_attempt_allowed(&state).await {
         return Err(ApiError::Unauthorized);
     }
-    let store = state.secret_store.clone();
-    let pin = request.pin;
-    let matches = task::spawn_blocking(move || {
-        store
-            .get(BROWSER_PIN_CREDENTIAL_ID)
-            .map(|expected| verify_browser_pin(&pin, expected.as_str()))
-    })
-    .await
-    .map_err(|_| ApiError::Internal)?
-    .map_err(map_secret_store_error)?;
+    let pin = Zeroizing::new(request.pin);
+    let catalog = state.catalog.clone();
+    let matches = task::spawn_blocking(move || catalog.verify_diagnostic_pin(&pin))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
     if !matches {
         record_authentication_failure(&state).await;
         return Err(ApiError::Unauthorized);
@@ -1139,65 +1150,77 @@ async fn pair_with_pin(
 async fn set_browser_auth_method(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<SetBrowserAuthMethodRequest>,
+    Json(mut request): Json<SetBrowserAuthMethodRequest>,
 ) -> Result<StatusCode, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
-    let store = state.secret_store.clone();
     let previous_mode = state
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?;
-    verify_current_browser_auth(
-        &state,
-        previous_mode,
-        CurrentBrowserAuthProof {
-            current_pin: request.current_pin,
-            current_totp_code: request.current_totp_code,
-        },
-    )
-    .await?;
     match request.method {
         BrowserAuthMethod::Pin => {
-            let pin = request
-                .pin
-                .filter(|value| valid_browser_pin(value))
-                .ok_or(ApiError::BadRequest)?;
+            if previous_mode != BrowserAuthMode::PairingLink {
+                verify_pin_proof(&state, request.current_pin.as_deref()).await?;
+            }
+            let pin = Zeroizing::new(
+                request
+                    .pin
+                    .filter(|value| valid_browser_pin(value))
+                    .ok_or(ApiError::BadRequest)?,
+            );
+            let catalog = state.catalog.clone();
+            let old_pin = request.current_pin.take().map(Zeroizing::new);
             task::spawn_blocking(move || {
-                let encoded = hash_browser_pin(&pin).ok_or(SecretStoreError::Unavailable)?;
-                store.set(BROWSER_PIN_CREDENTIAL_ID, &encoded)
+                if catalog.diagnostic_vault_ready()? {
+                    catalog.rotate_diagnostic_vault_pin(
+                        old_pin.as_deref().ok_or(CatalogError::Invalid)?,
+                        &pin,
+                    )
+                } else {
+                    catalog.initialize_diagnostic_vault(&pin)
+                }
+            })
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .map_err(map_catalog_error)?;
+            if previous_mode == BrowserAuthMode::PairingLink {
+                state
+                    .catalog
+                    .set_browser_auth_mode(BrowserAuthMode::Pin)
+                    .map_err(map_catalog_error)?;
+            }
+        }
+        BrowserAuthMethod::PairingLink => {
+            return Err(ApiError::BadRequest);
+        }
+        BrowserAuthMethod::DisableTotp => {
+            if previous_mode != BrowserAuthMode::Totp {
+                return Err(ApiError::BadRequest);
+            }
+            verify_pin_proof(&state, request.current_pin.as_deref()).await?;
+            let store = state.secret_store.clone();
+            let previous_secret = task::spawn_blocking(move || {
+                let previous = store.get(BROWSER_TOTP_CREDENTIAL_ID)?;
+                store.delete(BROWSER_TOTP_CREDENTIAL_ID)?;
+                Ok::<_, SecretStoreError>(previous)
             })
             .await
             .map_err(|_| ApiError::Internal)?
             .map_err(map_secret_store_error)?;
-            state
-                .catalog
-                .set_browser_auth_mode(BrowserAuthMode::Pin)
-                .map_err(map_catalog_error)?;
-            let store = state.secret_store.clone();
-            let _ = task::spawn_blocking(move || store.delete(BROWSER_TOTP_CREDENTIAL_ID)).await;
-            state
-                .catalog
-                .reset_totp_replay_guard()
-                .map_err(map_catalog_error)?;
-        }
-        BrowserAuthMethod::PairingLink => {
-            state
-                .catalog
-                .set_browser_auth_mode(BrowserAuthMode::PairingLink)
-                .map_err(map_catalog_error)?;
-            let _ = task::spawn_blocking(move || store.delete(BROWSER_PIN_CREDENTIAL_ID)).await;
-            let store = state.secret_store.clone();
-            let _ = task::spawn_blocking(move || store.delete(BROWSER_TOTP_CREDENTIAL_ID)).await;
-            state
-                .catalog
-                .reset_totp_replay_guard()
-                .map_err(map_catalog_error)?;
+            if let Err(error) = state.catalog.deactivate_totp() {
+                let store = state.secret_store.clone();
+                let _ = task::spawn_blocking(move || {
+                    store.set(BROWSER_TOTP_CREDENTIAL_ID, previous_secret.as_str())
+                })
+                .await;
+                return Err(map_catalog_error(error));
+            }
         }
     }
     reset_authentication_attempts(&state).await;
     state.pin_attempts.lock().await.pending_totp_setup = None;
-    if previous_mode != BrowserAuthMode::PairingLink {
+    if matches!(request.method, BrowserAuthMethod::DisableTotp) {
         state
             .catalog
             .record_browser_auth_event(
@@ -1217,41 +1240,33 @@ async fn verify_current_browser_auth(
 ) -> Result<(), ApiError> {
     match mode {
         BrowserAuthMode::PairingLink => Ok(()),
-        BrowserAuthMode::Totp => {
-            state
-                .verify_and_consume_totp(
-                    proof.current_totp_code.ok_or(ApiError::Unauthorized)?,
-                    BrowserAuthChannel::Settings,
-                    None,
-                )
-                .await
-        }
-        BrowserAuthMode::Pin => {
-            if !authentication_attempt_allowed(state).await {
-                return Err(ApiError::Unauthorized);
-            }
-            let pin = proof.current_pin.ok_or(ApiError::Unauthorized)?;
-            if !valid_browser_pin(&pin) {
-                record_authentication_failure(state).await;
-                return Err(ApiError::Unauthorized);
-            }
-            let store = state.secret_store.clone();
-            let matches = task::spawn_blocking(move || {
-                store
-                    .get(BROWSER_PIN_CREDENTIAL_ID)
-                    .map(|expected| verify_browser_pin(&pin, expected.as_str()))
-            })
-            .await
-            .map_err(|_| ApiError::Internal)?
-            .map_err(map_secret_store_error)?;
-            if !matches {
-                record_authentication_failure(state).await;
-                return Err(ApiError::Unauthorized);
-            }
-            reset_authentication_attempts(state).await;
-            Ok(())
+        BrowserAuthMode::Totp | BrowserAuthMode::Pin => {
+            verify_pin_proof(state, proof.current_pin.as_deref()).await
         }
     }
+}
+
+async fn verify_pin_proof(state: &AppState, pin: Option<&str>) -> Result<(), ApiError> {
+    if !authentication_attempt_allowed(state).await {
+        return Err(ApiError::Unauthorized);
+    }
+    let pin = pin.ok_or(ApiError::Unauthorized)?;
+    if !valid_browser_pin(pin) {
+        record_authentication_failure(state).await;
+        return Err(ApiError::Unauthorized);
+    }
+    let catalog = state.catalog.clone();
+    let pin = Zeroizing::new(pin.to_owned());
+    let matches = task::spawn_blocking(move || catalog.verify_diagnostic_pin(&pin))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    if !matches {
+        record_authentication_failure(state).await;
+        return Err(ApiError::Unauthorized);
+    }
+    reset_authentication_attempts(state).await;
+    Ok(())
 }
 
 async fn session(
@@ -1731,6 +1746,24 @@ async fn create_run_for_state(
         .await
         .map_err(|_| CatalogError::Storage)??;
     if !outcome.replayed {
+        if let Ok(template) = state
+            .catalog
+            .get_action_template(outcome.run.action_template_id)
+            && let Some(command) = template.command
+        {
+            let snapshot = serde_json::json!({
+                "run_id": outcome.run.id,
+                "template_id": template.id,
+                "command": command,
+            });
+            if state
+                .catalog
+                .record_encrypted_diagnostic("command", snapshot)
+                .is_err()
+            {
+                tracing::error!("encrypted diagnostic command capture failed");
+            }
+        }
         let run_id = outcome.run.id;
         let approval_id = outcome.run.approval_id;
         let cancellation = CancellationToken::new();
@@ -1741,6 +1774,21 @@ async fn create_run_for_state(
         let drive_state = state.clone();
         tokio::spawn(async move {
             drive_run(drive_state.clone(), run_id, cancellation).await;
+            if let Ok(run) = drive_state.catalog.get_synthetic_run(run_id) {
+                let event = serde_json::json!({
+                    "run_id": run.id,
+                    "state": run.state,
+                    "result_status": run.result_status,
+                    "finished_at_unix_ms": run.finished_at_unix_ms,
+                });
+                if drive_state
+                    .catalog
+                    .record_encrypted_diagnostic("event", event)
+                    .is_err()
+                {
+                    tracing::error!("encrypted diagnostic run capture failed");
+                }
+            }
             drive_state.run_cancellations.remove(run_id).await;
             let _ = drive_state.changes.send(());
         });

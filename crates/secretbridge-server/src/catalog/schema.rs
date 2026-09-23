@@ -480,6 +480,26 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              COMMIT;",
         )?;
     }
+    if version < 23 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             CREATE TABLE diagnostic_vault (
+                singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                public_key BLOB NOT NULL,
+                salt BLOB NOT NULL CHECK (length(salt) = 16),
+                wrap_nonce BLOB NOT NULL CHECK (length(wrap_nonce) = 12),
+                wrapped_private_key BLOB NOT NULL
+             );
+             CREATE TABLE diagnostic_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ephemeral_public_key BLOB NOT NULL,
+                nonce BLOB NOT NULL CHECK (length(nonce) = 12),
+                ciphertext BLOB NOT NULL
+             );
+             PRAGMA user_version = 23;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 

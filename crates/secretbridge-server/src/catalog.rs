@@ -20,6 +20,7 @@ mod ai_conversations;
 mod approval_rows;
 mod browser_auth;
 mod browser_session;
+pub(crate) mod diagnostic_vault;
 mod diagnostics;
 pub(crate) mod maintenance;
 mod notification_settings;

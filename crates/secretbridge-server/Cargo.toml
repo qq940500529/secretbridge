@@ -10,10 +10,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+aes-gcm.workspace = true
 argon2.workspace = true
 axum.workspace = true
 hex.workspace = true
 keyring.workspace = true
+p256.workspace = true
+rand.workspace = true
 portable-pty.workspace = true
 png.workspace = true
 qrcodegen.workspace = true
@@ -24,6 +27,7 @@ base64.workspace = true
 mysql_async.workspace = true
 notify-rust = "=4.18.0"
 futures-util.workspace = true
+hkdf.workspace = true
 rmcp.workspace = true
 rusqlite.workspace = true
 schemars.workspace = true
@@ -45,7 +49,6 @@ webbrowser.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-rand.workspace = true
 http-body-util.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 tokio-tungstenite.workspace = true

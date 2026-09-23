@@ -19,19 +19,19 @@ describe("browser authentication settings", () => {
         onChanged={() => {}}
       />,
     );
-    expect(html).toContain("绑定身份验证器");
-    expect(html).toContain("当前使用一次性配对链接");
+    expect(html).toContain("初始化待完成：请先设置 PIN");
+    expect(html).toContain("设置完成后可选择绑定身份验证器验证码");
     expect(html).toContain("请勿向 AI 提供 PIN、二维码或手动密钥");
-    expect(html).toContain("当前六位验证码");
+    expect(html).toContain("诊断记录");
     expect(html).not.toContain("synthetic-session-token");
   });
 
-  it("offers replacement and pairing-link recovery when TOTP is active", () => {
+  it("keeps the PIN active when TOTP is configured", () => {
     const html = renderToStaticMarkup(
       <BrowserAuthenticationSettings
         language="en"
         sessionToken="token"
-        pinEnabled={false}
+        pinEnabled
         totpEnabled
         authMethodStatus="ready"
         onRetry={() => {}}
@@ -39,8 +39,8 @@ describe("browser authentication settings", () => {
       />,
     );
     expect(html).toContain("Replace authenticator");
-    expect(html).toContain("Authenticator configured");
-    expect(html).toContain("Use pairing links");
+    expect(html).toContain("PIN set; authenticator configured");
+    expect(html).toContain("Remove authenticator");
   });
 
   it("does not present an unknown method as unconfigured", () => {
@@ -57,6 +57,6 @@ describe("browser authentication settings", () => {
     );
     expect(html).toContain("无法读取身份验证配置");
     expect(html).toContain("重试");
-    expect(html).not.toContain("绑定身份验证器");
+    expect(html).not.toContain(">绑定身份验证器</button>");
   });
 });

@@ -1901,6 +1901,95 @@ fn diagnostic_failures_only_keep_fixed_codes_and_time_bounds() {
     );
 }
 
+#[test]
+fn diagnostic_vault_encrypts_selective_records_and_rewraps_on_pin_change() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).unwrap();
+    let first_pin = "synthetic-first-passphrase";
+    let second_pin = "synthetic-second-passphrase";
+    catalog.initialize_diagnostic_vault(first_pin).unwrap();
+    let marker = "synthetic-command-marker";
+    catalog
+        .record_encrypted_diagnostic("command", serde_json::json!({ "program": marker }))
+        .unwrap();
+    catalog
+        .record_encrypted_diagnostic("event", serde_json::json!({ "code": "test_event" }))
+        .unwrap();
+    let ciphertext: Vec<u8> = catalog
+        .lock()
+        .query_row(
+            "SELECT ciphertext FROM diagnostic_records ORDER BY id LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        !ciphertext
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    );
+    assert_eq!(
+        catalog
+            .unlock_diagnostic_records(first_pin, false, true)
+            .unwrap()
+            .len(),
+        1
+    );
+    let command = catalog
+        .unlock_diagnostic_records(first_pin, true, false)
+        .unwrap();
+    assert_eq!(command.len(), 1);
+    assert_eq!(command[0].data["program"], marker);
+    let backup = catalog.backup_bytes().unwrap();
+    assert!(
+        !backup
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes())
+    );
+    assert!(
+        !backup
+            .windows(first_pin.len())
+            .any(|window| window == first_pin.as_bytes())
+    );
+    assert!(
+        !catalog
+            .verify_diagnostic_pin("wrong-synthetic-passphrase")
+            .unwrap()
+    );
+    catalog
+        .rotate_diagnostic_vault_pin(first_pin, second_pin)
+        .unwrap();
+    assert!(!catalog.verify_diagnostic_pin(first_pin).unwrap());
+    assert_eq!(
+        catalog
+            .unlock_diagnostic_records(second_pin, true, true)
+            .unwrap()
+            .len(),
+        2
+    );
+    drop(catalog);
+    let reopened = Catalog::open(&database.path).unwrap();
+    assert_eq!(
+        reopened
+            .unlock_diagnostic_records(second_pin, true, true)
+            .unwrap()
+            .len(),
+        2
+    );
+    reopened
+        .lock()
+        .execute(
+            "UPDATE diagnostic_records SET ciphertext = X'00' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+    assert!(
+        reopened
+            .unlock_diagnostic_records(second_pin, true, true)
+            .is_err()
+    );
+}
+
 fn create_approval(catalog: &Catalog, action_template_id: Uuid) -> super::Approval {
     catalog
         .create_approval(&CreateApproval {

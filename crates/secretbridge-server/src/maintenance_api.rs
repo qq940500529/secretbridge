@@ -27,6 +27,10 @@ pub(super) fn routes(state: AppState) -> Router<AppState> {
             post(preview_backup).layer(DefaultBodyLimit::max(MAX_BACKUP_BYTES)),
         )
         .route("/api/v1/maintenance/diagnostics", get(diagnostics))
+        .route(
+            "/api/v1/maintenance/diagnostics/export",
+            post(export_diagnostics),
+        )
         .route_layer(middleware::from_fn_with_state(state, authenticate))
 }
 
@@ -122,9 +126,72 @@ struct Diagnostics {
     error_codes: std::collections::BTreeMap<&'static str, usize>,
     run_states: std::collections::BTreeMap<&'static str, usize>,
     failure_stages: std::collections::BTreeMap<&'static str, usize>,
+    run_failures: Vec<RunFailureWindow>,
     mcp_failures: Vec<catalog::DiagnosticFailure>,
     terminal_states: std::collections::BTreeMap<&'static str, usize>,
     stale_terminal_references: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnosticExportRequest {
+    pin: String,
+    #[serde(default)]
+    include_commands: bool,
+    #[serde(default)]
+    include_events: bool,
+}
+
+#[derive(Serialize)]
+struct DiagnosticExport {
+    format: &'static str,
+    format_version: u8,
+    records: Vec<catalog::diagnostic_vault::UnlockedDiagnosticRecord>,
+}
+
+async fn export_diagnostics(
+    State(state): State<AppState>,
+    Json(request): Json<DiagnosticExportRequest>,
+) -> Result<Json<DiagnosticExport>, ApiError> {
+    if !super::authentication_attempt_allowed(&state).await {
+        return Err(ApiError::Unauthorized);
+    }
+    if !super::valid_browser_pin(&request.pin) {
+        super::record_authentication_failure(&state).await;
+        return Err(ApiError::Unauthorized);
+    }
+    let catalog = state.catalog.clone();
+    let pin = zeroize::Zeroizing::new(request.pin);
+    let result = task::spawn_blocking(move || {
+        if !catalog.verify_diagnostic_pin(&pin)? {
+            return Ok(None);
+        }
+        catalog
+            .unlock_diagnostic_records(&pin, request.include_commands, request.include_events)
+            .map(Some)
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
+    let Some(records) = result else {
+        super::record_authentication_failure(&state).await;
+        return Err(ApiError::Unauthorized);
+    };
+    super::reset_authentication_attempts(&state).await;
+    Ok(Json(DiagnosticExport {
+        format: "secretbridge-encrypted-diagnostics-export",
+        format_version: 1,
+        records,
+    }))
+}
+
+#[derive(Serialize)]
+struct RunFailureWindow {
+    code: &'static str,
+    stage: &'static str,
+    occurrences: usize,
+    first_at_unix_ms: u64,
+    last_at_unix_ms: u64,
 }
 #[allow(
     clippy::too_many_lines,
@@ -143,6 +210,7 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
         let mut error_codes = std::collections::BTreeMap::new();
         let mut run_states = std::collections::BTreeMap::new();
         let mut failure_stages = std::collections::BTreeMap::new();
+        let mut run_failures = std::collections::BTreeMap::<&'static str, RunFailureWindow>::new();
         for run in &runs {
             let state = match run.state {
                 catalog::RunState::Queued => "queued",
@@ -161,7 +229,9 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 "credential_unavailable",
                 "timed_out",
                 "service_restarted",
+                "authorization_revoked",
                 "command_failed",
+                "command_cleanup_failed",
                 "postgres_connection_failed",
                 "postgres_configuration_invalid",
                 "database_connection_failed",
@@ -177,6 +247,8 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             *error_codes.entry(code).or_insert(0) += 1;
             let failure_stage = match code {
                 "credential_unavailable" => "credential_resolution",
+                "authorization_revoked" => "authorization",
+                "command_cleanup_failed" => "cleanup",
                 "postgres_configuration_invalid" => "configuration",
                 "postgres_connection_failed"
                 | "database_connection_failed"
@@ -190,6 +262,16 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 _ => "other",
             };
             *failure_stages.entry(failure_stage).or_insert(0) += 1;
+            let entry = run_failures.entry(code).or_insert(RunFailureWindow {
+                code,
+                stage: failure_stage,
+                occurrences: 0,
+                first_at_unix_ms: run.updated_at_unix_ms,
+                last_at_unix_ms: run.updated_at_unix_ms,
+            });
+            entry.occurrences += 1;
+            entry.first_at_unix_ms = entry.first_at_unix_ms.min(run.updated_at_unix_ms);
+            entry.last_at_unix_ms = entry.last_at_unix_ms.max(run.updated_at_unix_ms);
         }
         let terminals = state.terminals.list();
         let mut terminal_states = std::collections::BTreeMap::new();
@@ -221,7 +303,7 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
         };
         Ok(Json(Diagnostics {
             format: "secretbridge-diagnostics",
-            diagnostic_schema_version: 2,
+            diagnostic_schema_version: 3,
             version: env!("CARGO_PKG_VERSION"),
             platform: std::env::consts::OS,
             bridge_schema_version: crate::mcp::BRIDGE_CONNECTION_SCHEMA,
@@ -264,6 +346,7 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             error_codes,
             run_states,
             failure_stages,
+            run_failures: run_failures.into_values().collect(),
             mcp_failures: state
                 .catalog
                 .list_diagnostic_failures()
