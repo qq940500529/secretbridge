@@ -72,7 +72,7 @@ fn credential_placeholder(name: &str) -> String {
 }
 
 fn is_credential_placeholder(argument: &str, name: &str) -> bool {
-    argument == credential_placeholder(name) || argument == format!("{{{{{name}}}}}")
+    argument == credential_placeholder(name)
 }
 
 impl CommandConfig {

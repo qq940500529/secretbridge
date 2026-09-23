@@ -45,7 +45,7 @@ pub(crate) fn fixture(mode: &str, id: Uuid) -> CommandConfig {
         )
     };
     if matches!(mode, "argument" | "file" | "file_sleep") {
-        arguments.push("{{password}}".into());
+        arguments.push("{{secret:password}}".into());
     }
     CommandConfig {
         terminal_id: None,
@@ -563,6 +563,9 @@ fn template_storage_failure_rolls_back_definition_and_credential_links() {
 
 #[test]
 fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
+    let mut legacy = fixture("argument", Uuid::new_v4());
+    *legacy.arguments.last_mut().unwrap() = "{{password}}".into();
+    assert!(legacy.validate().is_err());
     let mut config = fixture("argument", Uuid::new_v4());
     config.arguments.push("prefix{{secret:password}}".into());
     assert!(config.validate().is_err());
