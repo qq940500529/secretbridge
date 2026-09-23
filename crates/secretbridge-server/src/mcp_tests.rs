@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     BridgeClient, BridgeResponse, LocalMcpBridge, OwnedTerminalRequest, SecretBridgeMcp,
-    TerminalRequest,
+    TerminalRequest, write_private_file,
 };
 use crate::{
     AppState,
@@ -658,6 +658,8 @@ async fn native_mcp_reads_redacted_command_output_and_idempotent_runs() {
         &Uuid::new_v4().simple().to_string()[..8]
     ));
     fs::create_dir(&directory).expect("create test directory");
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let (state, _) = AppState::new([]);
@@ -764,6 +766,8 @@ async fn native_mcp_executes_http_without_exposing_authentication() {
         &Uuid::new_v4().simple().to_string()[..8]
     ));
     fs::create_dir(&directory).unwrap();
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let (state, _) = AppState::new([]);
@@ -848,6 +852,8 @@ async fn native_mcp_executes_ssh_and_reads_filtered_remote_output() {
         &Uuid::new_v4().simple().to_string()[..8]
     ));
     fs::create_dir(&directory).unwrap();
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let (state, _) = AppState::new([]);
@@ -944,6 +950,8 @@ async fn native_mcp_executes_sftp_and_git_through_the_shared_broker() {
             &Uuid::new_v4().simple().to_string()[..8]
         ));
         fs::create_dir(&directory).unwrap();
+        #[cfg(windows)]
+        secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
         #[cfg(unix)]
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
         let (state, _) = AppState::new([]);
@@ -1030,6 +1038,8 @@ async fn native_mcp_executes_real_databases_without_exposing_authentication() {
             &Uuid::new_v4().simple().to_string()[..8]
         ));
         fs::create_dir(&directory).unwrap();
+        #[cfg(windows)]
+        secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
         #[cfg(unix)]
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
         let (state, _) = AppState::new([]);
@@ -1113,6 +1123,8 @@ async fn native_mcp_controls_real_terminal_without_reexecuting_on_reconnect() {
     let identifier = Uuid::new_v4().simple().to_string();
     let directory = std::env::temp_dir().join(format!("sb-t-{}", &identifier[..8]));
     fs::create_dir(&directory).expect("create test directory");
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).expect("private directory");
     let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
@@ -1334,6 +1346,8 @@ async fn detached_stdio_bridge_authenticates_reloads_and_does_not_own_broker_lif
     let identifier = Uuid::new_v4().simple().to_string();
     let directory = std::env::temp_dir().join(format!("sb-m-{}", &identifier[..8]));
     fs::create_dir(&directory).expect("create bridge test directory");
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1471,6 +1485,8 @@ async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
     let identifier = Uuid::new_v4().simple().to_string();
     let directory = std::env::temp_dir().join(format!("sb-s-{}", &identifier[..8]));
     fs::create_dir(&directory).expect("create stale bridge test directory");
+    #[cfg(windows)]
+    secretbridge_windows_pipe_acl::protect_directory(&directory).unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1492,9 +1508,9 @@ async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
         drop(listener);
         json!({"kind": "unix_socket", "path": socket_path})
     };
-    fs::write(
+    write_private_file(
         &connection_file,
-        serde_json::to_vec(&json!({
+        &serde_json::to_vec(&json!({
             "schema_version": 2,
             "instance_id": Uuid::nil(),
             "endpoint": endpoint,
@@ -1503,14 +1519,6 @@ async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
         .expect("serialize stale connection document"),
     )
     .expect("write stale connection document");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs::set_permissions(&connection_file, fs::Permissions::from_mode(0o600))
-            .expect("restrict stale connection document");
-    }
-
     let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
     let bridge = LocalMcpBridge::bind(&directory, state).expect("replace stale bridge");
     drop(bridge);
