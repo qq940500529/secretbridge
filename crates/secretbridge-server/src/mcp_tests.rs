@@ -55,6 +55,32 @@ fn bridge_argument_errors_preserve_field_bounds_without_echoing_values() {
     );
 }
 
+#[test]
+fn legacy_credential_placeholder_returns_a_field_level_repair_hint() {
+    let slots = vec![super::DynamicCredentialSlot {
+        name: "password".to_owned(),
+        credential_id: Uuid::new_v4().to_string(),
+        injection: super::DynamicInjection::Argument,
+        environment_variable: None,
+    }];
+    let error = super::errors::reject_legacy_placeholder("{{password}}", 2, &slots)
+        .expect_err("legacy syntax is rejected");
+    let response = BridgeResponse::from_error(error);
+    assert_eq!(
+        response.error.as_deref(),
+        Some("legacy_credential_placeholder")
+    );
+    assert_eq!(
+        response.error_data.as_ref().unwrap()["field"],
+        "arguments[2]"
+    );
+    assert_eq!(
+        response.error_data.as_ref().unwrap()["next_actions"][0],
+        "use_explicit_secret_placeholder"
+    );
+    super::errors::reject_legacy_placeholder("{{.Names}}", 2, &slots).unwrap();
+}
+
 #[tokio::test]
 async fn bridge_validation_failure_records_only_a_safe_diagnostic_code() {
     let (state, _) = AppState::new([]);
@@ -159,7 +185,7 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
                     "terminal_id": terminal.id,
                     "program": executable.clone(),
                     "working_directory": directory.clone(),
-                    "arguments": ["{{password}}"],
+                    "arguments": ["{{secret:password}}"],
                     "credential_slots": [{
                         "name": "password",
                         "credential_id": credential.id,

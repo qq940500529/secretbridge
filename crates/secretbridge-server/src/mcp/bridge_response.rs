@@ -42,6 +42,7 @@ pub(super) fn safe_bridge_error_code(code: &str) -> String {
         | "broker_stopping"
         | "command_arguments_too_large"
         | "command_argument_too_large"
+        | "legacy_credential_placeholder"
         | "unknown_credential_placeholder" => code.to_owned(),
         _ => "secretbridge_operation_failed".to_owned(),
     }
@@ -74,6 +75,7 @@ impl BridgeResponse {
             code.as_str(),
             "command_arguments_too_large"
                 | "command_argument_too_large"
+                | "legacy_credential_placeholder"
                 | "unknown_credential_placeholder"
         ) {
             error.data.and_then(|value| {
@@ -86,7 +88,12 @@ impl BridgeResponse {
                 {
                     return None;
                 }
-                Some(if code == "unknown_credential_placeholder" {
+                Some(if code == "legacy_credential_placeholder" {
+                    serde_json::json!({
+                        "field": field,
+                        "next_actions": ["use_explicit_secret_placeholder"]
+                    })
+                } else if code == "unknown_credential_placeholder" {
                     serde_json::json!({
                         "field": field,
                         "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]

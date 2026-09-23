@@ -116,7 +116,7 @@ describe("configuration API client", () => {
       command: {
         program: "/usr/bin/tool",
         working_directory: "/tmp",
-        arguments: ["{{password}}"],
+        arguments: ["{{secret:password}}"],
         slots: [
           {
             name: "password",

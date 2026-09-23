@@ -5,6 +5,26 @@ use crate::catalog::CatalogError;
 use rmcp::ErrorData;
 use uuid::Uuid;
 
+pub(super) fn reject_legacy_placeholder(
+    argument: &str,
+    index: usize,
+    slots: &[super::DynamicCredentialSlot],
+) -> Result<(), ErrorData> {
+    if slots
+        .iter()
+        .any(|slot| argument == format!("{{{{{}}}}}", slot.name))
+    {
+        return Err(ErrorData::invalid_params(
+            "legacy_credential_placeholder",
+            Some(serde_json::json!({
+                "field": format!("arguments[{index}]"),
+                "next_actions": ["use_explicit_secret_placeholder"]
+            })),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> ErrorData {
     match code {
         "not_found" => ErrorData::resource_not_found("not_found", None),
@@ -21,6 +41,7 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
         | "version_conflict"
         | "command_arguments_too_large"
         | "command_argument_too_large"
+        | "legacy_credential_placeholder"
         | "unknown_credential_placeholder"
         | "verification_failed"
         | "terminal_attach_required"
@@ -45,6 +66,7 @@ pub(super) fn remote_error(code: &str, data: Option<serde_json::Value>) -> Error
                 code,
                 "command_arguments_too_large"
                     | "command_argument_too_large"
+                    | "legacy_credential_placeholder"
                     | "unknown_credential_placeholder"
             ) {
                 data

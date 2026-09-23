@@ -196,8 +196,8 @@ export function CommandEditor({
       {selector}
       <p className="text-sm leading-6 text-slate-600">
         {zh
-          ? "只配置你信任的程序。按参数顺序逐行填写，空行是空参数；参数或文件插槽使用完整的 {{插槽名}}。标准输入发送原文后关闭，不自动加换行。"
-          : "Use only programs you trust. One argument per line, in order; blank lines represent empty arguments. Argument/file slots use an entire {{slot_name}}. Stdin sends exact bytes then closes, without adding a newline."}
+          ? "只配置你信任的程序。按参数顺序逐行填写，空行是空参数；参数或文件插槽使用完整的 {{secret:插槽名}}。其他双花括号文本按字面量传递。标准输入发送原文后关闭，不自动加换行。"
+          : "Use only programs you trust. One argument per line, in order; blank lines represent empty arguments. Argument/file slots use an entire {{secret:slot_name}}. Other double-brace text is literal. Stdin sends exact bytes then closes, without adding a newline."}
       </p>
       <div className="grid gap-4 md:grid-cols-2">
         <label className="text-sm font-semibold">
