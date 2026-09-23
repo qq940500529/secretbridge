@@ -10,7 +10,7 @@ This file records public release behavior rather than preserving a development d
 - Keep MCP one-time drafts out of reusable template lists and configuration exports; provide explicit saving, structured SSH requests, bilingual approval guidance and field-level command argument errors.
 - Restore browser PIN/TOTP settings after session recovery and require the current method before changing or disabling it. Add filtered event export, diagnostic previews and broader approval review layout.
 - Advance SQLite to schema 20 for one-time draft lifecycle metadata. Published Beta 7/8 schemas migrate in place; keep an independent backup before upgrade.
-- Run native package lifecycle acceptance and Rust tests/lint on separate CI runners in parallel, and cache the pinned vulnerability scanner without removing any checks.
+- Run native package lifecycle acceptance and Rust tests/lint on separate CI runners in parallel, avoid incremental/debug-symbol overhead for one-shot CI builds, and cache the pinned vulnerability scanner without removing any checks.
 
 ## 0.2.0-beta.8 — 2026-09-20
 

@@ -71,6 +71,10 @@ jobs:
         run: bash tools/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -135,6 +139,10 @@ jobs:
           retention-days: 14
   package-delivery:
     name: package-delivery (${{ matrix.os }})
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       fail-fast: false
       matrix:
