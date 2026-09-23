@@ -78,7 +78,7 @@ export function ActionTemplatesView({
           deleteConfirm: "确定删除这个未被审批引用的模板吗？",
           active: "可申请",
           terminalUnavailable:
-            "绑定的终端已关闭或处于未验证的交互上下文。请新建安全终端并编辑模板引用；原模板暂不可申请。",
+            "此旧模板绑定了临时终端，暂不可申请。点击编辑，检查命令和凭据槽位，启用后保存以移除终端绑定；再次使用仍需新授权。",
           inactive: "已停用",
           version: "版本",
           seconds: "秒",
@@ -131,7 +131,7 @@ export function ActionTemplatesView({
             "Delete this template if it is not referenced by an approval?",
           active: "Available",
           terminalUnavailable:
-            "The bound terminal is closed or its interactive context is unverified. Create a new secure terminal and edit this template before requesting approval.",
+            "This older template is bound to a temporary terminal and cannot be requested. Edit it, review the command and credential slots, enable it, then save to remove the binding. New authorization is still required.",
           inactive: "Disabled",
           version: "Version",
           seconds: "seconds",
@@ -228,7 +228,9 @@ export function ActionTemplatesView({
   function edit(item: ActionTemplate, trigger: HTMLElement) {
     editorReturnFocus.current = trigger;
     setEditorOpen(true);
-    setCommand(item.command ?? emptyCommand);
+    setCommand(
+      item.command ? { ...item.command, terminal_id: undefined } : emptyCommand,
+    );
     setEditing(item);
     setName(item.name);
     setTargetId(item.target_id);
@@ -531,7 +533,7 @@ export function ActionTemplatesView({
                         {item.description}
                       </p>
                     )}
-                    {item.terminal_available === false && (
+                    {item.command?.terminal_id && (
                       <p
                         role="status"
                         className="mb-0 mt-2 text-sm text-amber-800"

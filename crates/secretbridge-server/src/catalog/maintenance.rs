@@ -191,16 +191,25 @@ impl Catalog {
             templates: snapshot
                 .list_action_templates()?
                 .into_iter()
-                .map(|item| PortableTemplate {
-                    id: item.id,
-                    target_id: item.target_id,
-                    name: item.name,
-                    operation: item.operation,
-                    result_scope: item.result_scope,
-                    description: item.description,
-                    timeout_seconds: item.timeout_seconds,
-                    enabled: item.enabled,
-                    command: item.command,
+                .map(|item| {
+                    let mut command = item.command;
+                    let bound_to_terminal = command
+                        .as_ref()
+                        .is_some_and(|command| command.terminal_id.is_some());
+                    if let Some(command) = &mut command {
+                        command.terminal_id = None;
+                    }
+                    PortableTemplate {
+                        id: item.id,
+                        target_id: item.target_id,
+                        name: item.name,
+                        operation: item.operation,
+                        result_scope: item.result_scope,
+                        description: item.description,
+                        timeout_seconds: item.timeout_seconds,
+                        enabled: item.enabled && !bound_to_terminal,
+                        command,
+                    }
                 })
                 .collect(),
         };

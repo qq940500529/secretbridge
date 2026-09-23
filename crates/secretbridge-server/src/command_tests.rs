@@ -106,7 +106,11 @@ fn configure_in_terminal(
     let mut command = fixture(mode, credential.id);
     command.terminal_id = terminal_id;
     let template:CreateActionTemplate=serde_json::from_value(serde_json::json!({"name":"Credential echo fixture","target_id":target.id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":timeout,"command":command})).unwrap();
-    let template = state.catalog.create_action_template(&template).unwrap();
+    let template = if terminal_id.is_some() {
+        state.catalog.create_one_time_draft(&template).unwrap()
+    } else {
+        state.catalog.create_action_template(&template).unwrap()
+    };
     let request: CreateApproval = serde_json::from_value(
         serde_json::json!({"action_template_id":template.id,"expires_in_seconds":60}),
     )

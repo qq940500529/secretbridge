@@ -1665,6 +1665,117 @@ fn one_time_drafts_remain_reviewable_without_becoming_saved_templates() {
 #[test]
 #[allow(
     clippy::too_many_lines,
+    reason = "creation, startup repair, export and explicit re-save share one legacy terminal fixture"
+)]
+fn temporary_terminal_binding_cannot_be_saved_or_exported_as_reusable() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).unwrap();
+    let credential = create_credential(&catalog);
+    let target = create_target(&catalog, credential.id);
+    let executable = std::env::current_exe().unwrap();
+    let mut command = crate::command::CommandConfig {
+        terminal_id: Some(Uuid::new_v4()),
+        database: None,
+        http: None,
+        ssh: None,
+        telnet: None,
+        git: None,
+        parameters: Vec::new(),
+        program: executable.to_string_lossy().into_owned(),
+        working_directory: executable.parent().unwrap().to_string_lossy().into_owned(),
+        arguments: Vec::new(),
+        slots: Vec::new(),
+    };
+    let request = CreateActionTemplate {
+        command: Some(command.clone()),
+        target_id: target.id,
+        name: "Synthetic terminal-bound command".to_owned(),
+        operation: ApprovalOperation::CommandExecution,
+        result_scope: ApprovalResultScope::SanitizedOutput,
+        description: None,
+        timeout_seconds: 15,
+    };
+    assert!(matches!(
+        catalog.create_action_template(&request),
+        Err(CatalogError::Invalid)
+    ));
+    assert!(catalog.create_one_time_draft(&request).unwrap().one_time);
+    command.terminal_id = None;
+    let saved = catalog
+        .create_action_template(&CreateActionTemplate {
+            command: Some(command.clone()),
+            ..request
+        })
+        .unwrap();
+    let mut old_command = command.clone();
+    old_command.terminal_id = Some(Uuid::new_v4());
+    catalog
+        .lock()
+        .execute(
+            "UPDATE action_templates SET command_json = ?1 WHERE id = ?2",
+            rusqlite::params![
+                serde_json::to_string(&old_command).unwrap(),
+                saved.id.to_string()
+            ],
+        )
+        .unwrap();
+    drop(catalog);
+
+    let reopened = Catalog::open(&database.path).unwrap();
+    let legacy = reopened.get_action_template(saved.id).unwrap();
+    assert!(!legacy.enabled);
+    assert!(legacy.command.as_ref().unwrap().terminal_id.is_some());
+    let exported = reopened.export_configuration().unwrap();
+    assert_eq!(exported.templates.len(), 1);
+    assert!(!exported.templates[0].enabled);
+    assert!(
+        exported.templates[0]
+            .command
+            .as_ref()
+            .unwrap()
+            .terminal_id
+            .is_none()
+    );
+    assert!(matches!(
+        reopened.update_action_template(
+            legacy.id,
+            &UpdateActionTemplate {
+                command: legacy.command.clone(),
+                target_id: legacy.target_id,
+                name: legacy.name.clone(),
+                operation: legacy.operation,
+                result_scope: legacy.result_scope,
+                description: legacy.description.clone(),
+                timeout_seconds: legacy.timeout_seconds,
+                enabled: true,
+                expected_version: legacy.version,
+            }
+        ),
+        Err(CatalogError::Invalid)
+    ));
+    let repaired = reopened
+        .update_action_template(
+            legacy.id,
+            &UpdateActionTemplate {
+                command: Some(command),
+                target_id: legacy.target_id,
+                name: legacy.name,
+                operation: legacy.operation,
+                result_scope: legacy.result_scope,
+                description: legacy.description,
+                timeout_seconds: legacy.timeout_seconds,
+                enabled: true,
+                expected_version: legacy.version,
+            },
+        )
+        .unwrap();
+    assert!(repaired.enabled);
+    assert!(repaired.command.unwrap().terminal_id.is_none());
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
     reason = "denial, expiry, success and cancellation share one one-time lifecycle fixture"
 )]
 fn one_time_drafts_retire_after_denial_expiry_and_completed_run() {
