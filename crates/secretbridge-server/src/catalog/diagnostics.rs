@@ -52,8 +52,11 @@ impl Catalog {
                     (code, occurrences, first_at_unix_ms, last_at_unix_ms)
                  VALUES (?1, 1, ?2, ?2)
                  ON CONFLICT(code) DO UPDATE SET
-                    occurrences = MIN(occurrences + 1, 9223372036854775807),
-                    last_at_unix_ms = excluded.last_at_unix_ms",
+                    occurrences = CASE
+                        WHEN occurrences < 9223372036854775807 THEN occurrences + 1
+                        ELSE occurrences
+                    END,
+                    last_at_unix_ms = MAX(last_at_unix_ms, excluded.last_at_unix_ms)",
                 params![code, now],
             )
             .map_err(|_| CatalogError::Storage)?;
