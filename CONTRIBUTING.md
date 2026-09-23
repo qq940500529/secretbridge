@@ -19,6 +19,8 @@ Thank you for helping build SecretBridge. Contributions to documentation, access
 
 Start with an [issue](https://github.com/qq940500529/secretbridge/issues) for substantial work. Small corrections can go directly to a PR.
 
+Real desktop, native credential-store and cross-platform checks that still need community evidence are listed in the [community verification backlog](docs/社区验证待办.md). They can be contributed independently after an implementation issue is closed.
+
 ## Prepare a change
 
 1. Read the [development guide](docs/开发者入门.md) and relevant design specification.

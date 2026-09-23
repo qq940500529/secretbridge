@@ -28,7 +28,10 @@ try {
           await route.fulfill({ status: attempts === 1 ? 503 : 202 });
           return;
         }
-        if (path === "/api/v1/status")
+        if (path === "/api/v1/ai-conversations") body = { items: [] };
+        else if (path === "/api/v1/notification-settings")
+          body = { channel: "browser" };
+        else if (path === "/api/v1/status")
           body = {
             product: "SecretBridge",
             api_version: "v1",

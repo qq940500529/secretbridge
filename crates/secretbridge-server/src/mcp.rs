@@ -29,6 +29,11 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod conversation;
+mod errors;
+use conversation::{BeginConversationParams, resolve_conversation_id};
+use errors::{catalog_error, parse_uuid, remote_error};
+
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(windows)]
@@ -44,15 +49,15 @@ use crate::terminal_control::{
 use crate::{
     AppState, cancel_run_for_state,
     catalog::{
-        ActionTemplate, Approval, ApprovalOperation, ApprovalResultScope, ApprovalState,
-        BrowserAuthChannel, CancelSyntheticRun, CatalogError, CreateApproval, CreateSyntheticRun,
-        DecideApproval, PolicyDecision, PolicyEvaluation, PolicyReasonCode, PolicyRequirement,
-        RunState, SafeEvent, SafeEventKind, SyntheticRun,
+        ActionTemplate, AiConversation, Approval, ApprovalOperation, ApprovalResultScope,
+        ApprovalState, BrowserAuthChannel, CancelSyntheticRun, CatalogError, CreateApproval,
+        CreateSyntheticRun, DecideApproval, PolicyDecision, PolicyEvaluation, PolicyReasonCode,
+        PolicyRequirement, RunState, SafeEvent, SafeEventKind, SyntheticRun,
     },
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "SecretBridge / 安全操作: use only these MCP tools; the Web console is for the local human. Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. Choose a structured connection operation when available, a one-time request for a changing command, and a saved template only for an explicitly reusable task. Never read a secret or ask for a PIN, passphrase, TOTP setup key, QR code, or credential. Request approval, then show the user the exact pending approval ID, target, command/parameters, opaque credential references, expiry and risk before offering two choices: approve in the local Web console, or if TOTP is configured, provide the current six-digit code for secretbridge_confirm_approval with that ID and version. / 先展示审批对象、目标、命令与参数、凭据引用、到期时间和风险，再让用户选择网页批准或提交当前六位验证码。 Never retain, repeat, log or reuse a code; never submit it to another approval. Only then create a run and read sanitized output with the returned cursor. The terminal-create response ID is terminal.id, not top-level id. Terminal input and output remain broker-mediated. A timed-out or context-unknown terminal must be replaced; do not retry writes blindly or use a shell to bypass approval.";
+const SERVER_INSTRUCTIONS: &str = "SecretBridge / 安全操作: use only these MCP tools; the Web console is for the local human. Start each AI chat with secretbridge_begin_conversation using a short non-secret summary; pass its conversation_id to every approval or one-time request in that chat. Conversation approval policy is controlled only by the human in Web and may allow preauthorized requests; always report their scope and risk. Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. Choose a structured connection operation when available, a one-time request for a changing command, and a saved template only for an explicitly reusable task. Never read a secret or ask for a PIN, passphrase, TOTP setup key, QR code, or credential. Request approval, then show the user the exact approval ID, state, target, command/parameters, opaque credential references, expiry and risk. If pending, offer two choices: approve in the local Web console, or if TOTP is configured, provide the current six-digit code for secretbridge_confirm_approval with that ID and version. / 每段 AI 对话先登记不含秘密的摘要，并在任务请求中传入会话 ID；会话审批策略只由用户在网页设置。 Never retain, repeat, log or reuse a code; never submit it to another approval. Only then create a run and read sanitized output with the returned cursor. The terminal-create response ID is terminal.id, not top-level id. Terminal input and output remain broker-mediated. A timed-out or context-unknown terminal must be replaced; do not retry writes blindly or use a shell to bypass approval.";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -101,6 +106,19 @@ enum McpBackend {
 }
 
 impl McpBackend {
+    async fn begin_conversation(
+        &self,
+        params: BeginConversationParams,
+    ) -> Result<AiConversation, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                let catalog = state.catalog.clone();
+                catalog_task(move || catalog.create_ai_conversation(&params.summary)).await
+            }
+            Self::Remote(client) => client.call(OP_BEGIN_CONVERSATION, &params).await,
+        }
+    }
+
     async fn terminal_request(
         &self,
         request: OwnedTerminalRequest,
@@ -171,10 +189,14 @@ impl McpBackend {
         match self {
             Self::Local(state) => {
                 let catalog = state.catalog.clone();
+                let conversation_id =
+                    resolve_conversation_id(catalog.clone(), params.conversation_id.as_deref())
+                        .await?;
                 let request = CreateApproval {
                     parameters: params.parameters,
                     authorization_mode: params.authorization_mode,
                     action_template_id: parse_uuid(&params.action_template_id)?,
+                    conversation_id: Some(conversation_id),
                     reason: Some(
                         params
                             .reason
@@ -183,8 +205,11 @@ impl McpBackend {
                     expires_in_seconds: params.expires_in_seconds,
                 };
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
+                crate::approval_notifications::notify_pending_approval(state, &approval);
                 let _ = state.changes.send(());
-                open_console_for_human(state).await;
+                if approval.state == ApprovalState::Pending {
+                    open_console_for_human(state).await;
+                }
                 Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
@@ -329,6 +354,10 @@ impl McpBackend {
                     parameters: std::collections::BTreeMap::default(),
                     authorization_mode: params.authorization_mode,
                     action_template_id: created.id,
+                    conversation_id: Some(
+                        resolve_conversation_id(catalog.clone(), params.conversation_id.as_deref())
+                            .await?,
+                    ),
                     reason: Some(
                         params
                             .reason
@@ -349,8 +378,11 @@ impl McpBackend {
                         return Err(error);
                     }
                 };
+                crate::approval_notifications::notify_pending_approval(state, &approval);
                 let _ = state.changes.send(());
-                open_console_for_human(state).await;
+                if approval.state == ApprovalState::Pending {
+                    open_console_for_human(state).await;
+                }
                 Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_REQUEST_COMMAND, &params).await,
@@ -459,6 +491,10 @@ impl McpBackend {
                     parameters: std::collections::BTreeMap::default(),
                     authorization_mode: crate::parameters::AuthorizationMode::EveryRun,
                     action_template_id: created.id,
+                    conversation_id: Some(
+                        resolve_conversation_id(catalog.clone(), params.conversation_id.as_deref())
+                            .await?,
+                    ),
                     reason: Some(
                         params
                             .reason
@@ -479,8 +515,11 @@ impl McpBackend {
                         return Err(error);
                     }
                 };
+                crate::approval_notifications::notify_pending_approval(state, &approval);
                 let _ = state.changes.send(());
-                open_console_for_human(state).await;
+                if approval.state == ApprovalState::Pending {
+                    open_console_for_human(state).await;
+                }
                 Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_REQUEST_SSH, &params).await,
@@ -777,8 +816,19 @@ impl SecretBridgeMcp {
     }
 
     #[tool(
+        name = "secretbridge_begin_conversation",
+        description = "Create a local AI-conversation ID and short non-secret summary. Call once per AI chat and pass the returned ID to every request tool. This cannot change approval policy; the human controls that in the Web console."
+    )]
+    async fn begin_conversation(
+        &self,
+        Parameters(params): Parameters<BeginConversationParams>,
+    ) -> Result<McpJson<AiConversation>, ErrorData> {
+        Ok(McpJson(self.backend.begin_conversation(params).await?))
+    }
+
+    #[tool(
         name = "secretbridge_request_approval",
-        description = "Create a pending approval request for one enabled action template. This cannot approve the request; the user must decide in the trusted Web console."
+        description = "Request approval for one enabled action template. The request may already be approved when the human previously enabled a matching conversation policy in the trusted Web console. This tool cannot change that policy or approve its own request."
     )]
     async fn request_approval(
         &self,
@@ -800,7 +850,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_command",
-        description = "Submit an exact non-shell command and opaque credential placeholders for execution in an existing secure terminal after human approval. A user-created template is not required. This never accepts secret values and cannot approve or execute the draft; read the eventual result only with secretbridge_terminal_read."
+        description = "Submit an exact non-shell command and opaque credential placeholders for an existing secure terminal. A user-created template is not required. The request may be approved by a prior human-controlled conversation policy; this tool cannot set that policy, accept secret values, or execute the draft. Read eventual terminal output with secretbridge_terminal_read."
     )]
     async fn request_command(
         &self,
@@ -811,7 +861,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_ssh",
-        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. Returns a pending approval, never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before asking the human to approve in Web or provide a current TOTP code."
+        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. A prior human-controlled conversation policy may approve the request; this tool never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before any new human decision."
     )]
     async fn request_ssh(
         &self,
@@ -925,7 +975,7 @@ pub async fn serve_stdio_bridge(
 }
 
 const BRIDGE_CONNECTION_FILE: &str = "mcp-bridge.json";
-const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
+pub(crate) const BRIDGE_CONNECTION_SCHEMA: u8 = 2;
 const BRIDGE_PROTOCOL: &str = "secretbridge-native-ipc-v1";
 const MAX_BRIDGE_REQUEST_BYTES: usize = 16 * 1024;
 #[cfg(windows)]
@@ -938,6 +988,7 @@ const MAX_BRIDGE_PIPE_INSTANCES: usize = MAX_BRIDGE_CONNECTIONS + 1;
 const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 const OP_HEALTH: &str = "health";
+const OP_BEGIN_CONVERSATION: &str = "begin_conversation";
 const OP_LIST_TEMPLATES: &str = "list_action_templates";
 const OP_LIST_CATALOG: &str = "list_catalog";
 const OP_EVALUATE_POLICY: &str = "evaluate_policy";
@@ -1484,7 +1535,11 @@ async fn process_bridge_request(
     }
     match dispatch_bridge_request(state.clone(), &request.operation, request.payload).await {
         Ok(payload) => BridgeResponse::success(payload),
-        Err(error) => BridgeResponse::from_error(error),
+        Err(error) => {
+            let code = safe_bridge_error_code(error.message.as_ref());
+            let _ = state.catalog.record_diagnostic_failure(&code);
+            BridgeResponse::from_error(error)
+        }
     }
 }
 
@@ -1514,6 +1569,11 @@ async fn dispatch_bridge_request(
                 protocol: BRIDGE_PROTOCOL.to_owned(),
             })
         }
+        OP_BEGIN_CONVERSATION => serialize_bridge_payload(
+            backend
+                .begin_conversation(parse_bridge_payload(payload)?)
+                .await?,
+        ),
         OP_LIST_TEMPLATES => {
             parse_bridge_payload::<BridgeEmpty>(payload)?;
             serialize_bridge_payload(backend.list_action_templates().await?)
@@ -1900,61 +1960,6 @@ fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, _connection_file: &Path) -> 
     identifier.len() == 32 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn remote_error(code: &str, data: Option<serde_json::Value>) -> ErrorData {
-    match code {
-        "not_found" => ErrorData::resource_not_found("not_found", None),
-        "approval_consumed"
-        | "approval_not_usable"
-        | "capacity_exceeded"
-        | "credential_reference_not_found"
-        | "invalid_request"
-        | "invalid_approval_transition"
-        | "invalid_run_transition"
-        | "idempotency_conflict"
-        | "policy_denied"
-        | "resource_in_use"
-        | "version_conflict"
-        | "command_arguments_too_large"
-        | "command_argument_too_large"
-        | "unknown_credential_placeholder"
-        | "verification_failed"
-        | "terminal_attach_required"
-        | "terminal_input_required"
-        | "terminal_busy"
-        | "terminal_context_unknown"
-        | "terminal_closed"
-        | "terminal_spawn_failed"
-        | "terminal_unsupported_shell"
-        | "secure_terminal_not_usable"
-        | "ssh_connection_required"
-        | "ssh_connection_address_required"
-        | "ssh_connection_username_required"
-        | "ssh_connection_credential_required"
-        | "ssh_password_credential_required"
-        | "ssh_credential_target_mismatch"
-        | "secure_terminal_not_running"
-        | "browser_open_failed"
-        | "broker_stopping" => ErrorData::invalid_params(
-            code.to_owned(),
-            if matches!(
-                code,
-                "command_arguments_too_large"
-                    | "command_argument_too_large"
-                    | "unknown_credential_placeholder"
-            ) {
-                data
-            } else {
-                None
-            },
-        ),
-        "runtime_control_unavailable" => ErrorData::internal_error(code.to_owned(), None),
-        "bridge_unauthorized" => {
-            ErrorData::internal_error("secretbridge_bridge_authentication_failed", None)
-        }
-        _ => ErrorData::internal_error("secretbridge_bridge_unavailable", None),
-    }
-}
-
 async fn catalog_task<T, F>(operation: F) -> Result<T, ErrorData>
 where
     T: Send + 'static,
@@ -1964,31 +1969,6 @@ where
         .await
         .map_err(|_| ErrorData::internal_error("secretbridge_operation_failed", None))?
         .map_err(catalog_error)
-}
-
-fn parse_uuid(value: &str) -> Result<Uuid, ErrorData> {
-    Uuid::parse_str(value).map_err(|_| ErrorData::invalid_params("invalid_identifier", None))
-}
-
-fn catalog_error(error: CatalogError) -> ErrorData {
-    let code = match error {
-        CatalogError::ApprovalConsumed => "approval_consumed",
-        CatalogError::ApprovalNotUsable => "approval_not_usable",
-        CatalogError::Capacity => "capacity_exceeded",
-        CatalogError::CredentialReferenceNotFound => "credential_reference_not_found",
-        CatalogError::Invalid => "invalid_request",
-        CatalogError::InvalidApprovalTransition => "invalid_approval_transition",
-        CatalogError::InvalidRunTransition => "invalid_run_transition",
-        CatalogError::IdempotencyConflict => "idempotency_conflict",
-        CatalogError::NotFound => return ErrorData::resource_not_found("not_found", None),
-        CatalogError::PolicyDenied => "policy_denied",
-        CatalogError::ResourceInUse => "resource_in_use",
-        CatalogError::Storage => {
-            return ErrorData::internal_error("secretbridge_operation_failed", None);
-        }
-        CatalogError::VersionConflict => "version_conflict",
-    };
-    ErrorData::invalid_params(code, None)
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -2013,6 +1993,11 @@ struct RequestApprovalParams {
     authorization_mode: crate::parameters::AuthorizationMode,
     #[schemars(description = "Action-template UUID")]
     action_template_id: String,
+    #[serde(default)]
+    #[schemars(
+        description = "AI conversation UUID from secretbridge_begin_conversation; reuse it for every task in the same chat"
+    )]
+    conversation_id: Option<String>,
     #[schemars(description = "Approval lifetime in seconds, from 60 through 3600")]
     expires_in_seconds: u64,
     #[serde(default)]
@@ -2063,6 +2048,9 @@ struct RequestCommandParams {
     name: String,
     #[schemars(description = "Connection UUID returned by secretbridge_list_catalog")]
     connection_id: String,
+    #[serde(default)]
+    #[schemars(description = "AI conversation UUID from secretbridge_begin_conversation")]
+    conversation_id: Option<String>,
     #[schemars(
         description = "Running secure-terminal UUID returned by secretbridge_terminal_list"
     )]
@@ -2098,6 +2086,9 @@ struct RequestCommandParams {
 struct RequestSshParams {
     #[schemars(description = "Saved SSH connection UUID from secretbridge_list_catalog")]
     connection_id: String,
+    #[serde(default)]
+    #[schemars(description = "AI conversation UUID from secretbridge_begin_conversation")]
+    conversation_id: Option<String>,
     #[schemars(description = "Short human-readable label for this one-time operation")]
     name: String,
     #[schemars(
@@ -2370,6 +2361,8 @@ struct ApprovalSummary {
     parameters: crate::parameters::ParameterValues,
     authorization_mode: crate::parameters::AuthorizationMode,
     id: String,
+    conversation_id: Option<String>,
+    preauthorized: bool,
     action_template_id: Option<String>,
     action_template_version: Option<u64>,
     target_id: String,
@@ -2389,6 +2382,8 @@ impl From<Approval> for ApprovalSummary {
             parameters: approval.parameters,
             authorization_mode: approval.authorization_mode,
             id: approval.id.to_string(),
+            conversation_id: approval.conversation_id.map(|id| id.to_string()),
+            preauthorized: approval.preauthorized,
             action_template_id: approval.action_template_id.map(|id| id.to_string()),
             action_template_version: approval.action_template_version,
             target_id: approval.target_id.to_string(),
@@ -2416,6 +2411,11 @@ impl ApprovalSummary {
                 "user_approves_in_local_web_console".to_owned(),
                 "or_if_totp_configured_submit_current_code_with_secretbridge_confirm_approval"
                     .to_owned(),
+            ];
+        } else if self.preauthorized {
+            self.next_actions = vec![
+                "disclose_conversation_preapproval_and_risk_to_user".to_owned(),
+                "create_run_if_still_intended".to_owned(),
             ];
         }
         self

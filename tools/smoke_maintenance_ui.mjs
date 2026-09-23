@@ -34,7 +34,10 @@ try {
       path = new URL(request.url()).pathname;
     let status = 200,
       body = {};
-    if (path.endsWith("/status"))
+    if (path === "/api/v1/ai-conversations") body = { items: [] };
+    else if (path === "/api/v1/notification-settings")
+      body = { channel: "browser" };
+    else if (path.endsWith("/status"))
       body = {
         product: "SecretBridge",
         api_version: "v1",
@@ -93,10 +96,13 @@ try {
     } else if (path.endsWith("/maintenance/diagnostics"))
       body = {
         format: "secretbridge-diagnostics",
+        diagnostic_schema_version: 2,
         version: "0.1.0-test",
         platform: "windows",
+        bridge_schema_version: 2,
+        authentication_mode: "totp",
         generated_at_unix_ms: Date.now(),
-        schema_version: 20,
+        schema_version: 22,
         storage: "sqlite",
         credentials: 1,
         configured_credentials: 1,
@@ -108,6 +114,17 @@ try {
         run_states: { failed: 1 },
         failure_stages: { connection: 1 },
         error_codes: { ssh_connection_failed: 1 },
+        terminal_states: { exited: 1 },
+        stale_terminal_references: 0,
+        mcp_failures: [
+          {
+            code: "terminal_busy",
+            stage: "terminal_lease",
+            occurrences: 2,
+            first_at_unix_ms: 100,
+            last_at_unix_ms: 200,
+          },
+        ],
       };
     else body = { items: [], storage: "sqlite" };
     await route.fulfill({
@@ -194,6 +211,9 @@ try {
   await page.getByRole("button", { name: "诊断", exact: true }).click();
   await page.getByRole("button", { name: "预览诊断信息" }).click();
   await page.getByText("connection 1", { exact: false }).waitFor();
+  await page
+    .getByText("terminal_lease / terminal_busy", { exact: false })
+    .waitFor();
   download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载诊断信息", exact: true }).click();
   assert.equal(

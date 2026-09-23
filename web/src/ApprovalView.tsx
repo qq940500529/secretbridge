@@ -265,10 +265,22 @@ export function ApprovalView({
     () => new Map(targets.map((target) => [target.id, target.name])),
     [targets],
   );
-  const templateNames = useMemo(
-    () => new Map(templates.map((template) => [template.id, template.name])),
-    [templates],
-  );
+  const reviewTarget = (item: Approval) =>
+    targets.find(
+      (target) =>
+        target.id === item.target_id && target.version === item.target_version,
+    );
+  const reviewTemplate = (item: Approval) =>
+    templates.find(
+      (template) =>
+        template.id === item.action_template_id &&
+        template.version === item.action_template_version &&
+        template.target_id === item.target_id,
+    );
+  const canApprove = (item: Approval) =>
+    !!reviewTarget(item) &&
+    !!reviewTemplate(item)?.enabled &&
+    reviewTemplate(item)?.terminal_available !== false;
   const enabledTemplates = useMemo(
     () =>
       templates.filter(
@@ -711,10 +723,9 @@ export function ApprovalView({
             items={items.map((item) => ({
               id: item.id,
               name:
-                (item.action_template_id &&
-                  templateNames.get(item.action_template_id)) ||
+                reviewTemplate(item)?.name ||
                 operationLabels[language][item.operation],
-              detail: `${targetNames.get(item.target_id) ?? item.target_id} · ${text.states[item.state]}`,
+              detail: `${reviewTarget(item)?.name ?? item.target_id} · ${text.states[item.state]}`,
             }))}
           >
             {items.map((item) => (
@@ -734,12 +745,12 @@ export function ApprovalView({
                     </div>
                     <h3 className="mb-0 mt-3 text-base font-semibold text-slate-950">
                       {item.action_template_id
-                        ? (templateNames.get(item.action_template_id) ??
+                        ? (reviewTemplate(item)?.name ??
                           item.action_template_id)
                         : operationLabels[language][item.operation]}
                     </h3>
                     <p className="mb-0 mt-2 text-sm text-slate-500">
-                      {targetNames.get(item.target_id) ?? item.target_id}
+                      {reviewTarget(item)?.name ?? item.target_id}
                       {item.action_template_version
                         ? ` · ${text.version} ${item.action_template_version}/${item.target_version}`
                         : ""}
@@ -783,14 +794,19 @@ export function ApprovalView({
                 {(item.state === "pending" || item.state === "approved") && (
                   <div className="mt-4 border-t border-slate-100 pt-4">
                     <CommandReview
-                      template={templates.find(
-                        (template) => template.id === item.action_template_id,
-                      )}
+                      template={reviewTemplate(item)}
                       expectedVersion={item.action_template_version}
                       language={language}
                       parameters={item.parameters}
                       expanded={item.state === "pending"}
                     />
+                    {!canApprove(item) && item.state === "pending" && (
+                      <p role="alert" className="text-sm text-amber-800">
+                        {language === "zh-CN"
+                          ? "操作或目标快照不可用、已变化或已停用，不能批准；请拒绝后重新申请。"
+                          : "The operation or target snapshot is unavailable, changed or disabled. Deny and request again."}
+                      </p>
+                    )}
                     {templates.find(
                       (template) => template.id === item.action_template_id,
                     )?.terminal_available === false && (
@@ -845,17 +861,7 @@ export function ApprovalView({
                       {item.state === "pending" ? (
                         <>
                           <ActionButton
-                            disabled={
-                              busyId !== null ||
-                              !templates.find(
-                                (template) =>
-                                  template.id === item.action_template_id,
-                              ) ||
-                              templates.find(
-                                (template) =>
-                                  template.id === item.action_template_id,
-                              )?.terminal_available === false
-                            }
+                            disabled={busyId !== null || !canApprove(item)}
                             onClick={() => void decide(item, "approve")}
                             icon={Check}
                             label={text.approve}

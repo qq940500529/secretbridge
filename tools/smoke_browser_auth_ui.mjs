@@ -46,7 +46,8 @@ async function openCase({ savedSession, failedMethodReads = 0 }) {
       return;
     }
     let body = { items: [] };
-    if (path === "/api/v1/status")
+    if (path === "/api/v1/notification-settings") body = { channel: "browser" };
+    else if (path === "/api/v1/status")
       body = {
         product: "SecretBridge",
         api_version: "v1",

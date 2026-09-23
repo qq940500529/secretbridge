@@ -2,7 +2,7 @@
 
 # SecretBridge · 密桥
 
-**Keep credentials local. Let explicit approval decide each operation.**
+**Keep credentials local. Let a human set the approval policy.**
 
 [简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.8) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
 
@@ -33,7 +33,7 @@ flowchart LR
 ## What it provides
 
 - **Write-only credential handling:** passwords, tokens and private keys live in the OS credential store; SQLite keeps references and public state.
-- **Explicit approval:** review the target, parameters, grant mode, lifetime and output scope before execution.
+- **Human-controlled approval:** review each request by default, or set a one-hour per-conversation reuse policy in the local Web console. Allowing every operation in one AI conversation requires an explicit high-risk confirmation and shows a persistent warning while active.
 - **Authenticator confirmation:** bind a standard TOTP authenticator by QR code or manual key, then confirm one reviewed approval from an AI conversation with a single-use six-digit code.
 - **Controlled connectors:** fixed programs, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL.
 - **Secure continuous terminals:** ordinary commands and human-approved credential commands can share one broker-owned shell; output is redacted before Web replay or MCP reads.
@@ -55,7 +55,8 @@ Deploy SecretBridge from https://github.com/qq940500529/secretbridge on this mac
 3. Preserve existing files and ask before administrator access or changes outside the working directory. Never request or expose real credentials.
 4. Start or reuse SecretBridge, confirm healthy `status` and a loopback-only listener, and obtain the current absolute `binary` path from `status` or `install`.
 5. Connect it to the MCP-capable AI client I use. Show and back up the exact configuration before requesting approval to change it; use `binary` as `command` and `["--mcp-stdio"]` as `args`; keep a custom data directory consistent and never store credentials or pairing tokens in MCP configuration. Reload the client, confirm the tools are visible, and call the read-only `secretbridge_terminal_capabilities` tool. If configuration cannot be changed safely, provide paste-ready configuration and exact reload steps instead of guessing its path.
-6. Report whether an existing installation was reused or a new one was installed, the version or commit, installation location, MCP verification result and uninstall command.
+6. In an interactive desktop session, use the official `open` command to open the local management page after installation or when pairing, license acceptance or authenticator setup is still needed. Guide me through those human steps without requesting my PIN, TOTP setup key or credentials. If there is no desktop session or opening the browser fails, show the local access method and exact next step; do not change the loopback listener or firewall. Avoid interrupting an already initialized installation.
+7. Check final service health after initialization. Report whether an existing installation was reused or a new one was installed, the version or commit, installation location, MCP verification result, management-page outcome and uninstall command.
 ```
 
 The [AI-assisted deployment guide](docs/AI辅助部署.md) explains permissions and safety boundaries and links to the AI-readable runbook. Review commands before allowing them to run. Maintainers who need full source and package acceptance should use the validation flow in that guide instead.
@@ -86,6 +87,8 @@ Other versions and architectures are experimental until separately validated. Be
 ## Help test the Beta
 
 Broader real-machine validation is now community-led. After installing the latest Beta, use synthetic data to check installation, browser pairing, credential-store write/overwrite/delete, approval and rejection, redaction, restart or login recovery, upgrade/rollback and uninstall on your own environment. Do not weaken TLS, SSH host verification, the credential store or other system protections to make a test pass.
+
+The [community verification backlog](docs/社区验证待办.md) lists outstanding real-desktop and platform scenarios. These checks are tracked separately from completed implementation issues.
 
 Report a reproducible ordinary defect through the [Beta bug form](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md). Include the package version, platform, install method, sanitized steps and cleanup result—never a real credential, private endpoint, user path or business record. Use the [private security advisory form](https://github.com/qq940500529/secretbridge/security/advisories/new) for a possible vulnerability.
 

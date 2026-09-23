@@ -36,6 +36,98 @@ fn delayed_postgres_test_app() -> (axum::Router, String) {
     (router(state), bootstrap)
 }
 
+#[tokio::test]
+async fn conversation_and_notification_settings_require_the_human_web_session() {
+    let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    let conversation = state
+        .catalog
+        .create_ai_conversation("Synthetic chat")
+        .unwrap();
+    let app = router(state);
+    let token = pair_test_session(&app, &bootstrap).await;
+    let list = app
+        .clone()
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/ai-conversations",
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(list).await["items"][0]["id"],
+        conversation.id.to_string()
+    );
+
+    let path = format!("/api/v1/ai-conversations/{}/policy", conversation.id);
+    let grant = serde_json::json!({
+        "expected_version": conversation.version,
+        "approval_policy": "conversation_once",
+        "risk_acknowledgement": "allow_all_operations_in_this_ai_conversation",
+    })
+    .to_string();
+    let no_origin = app
+        .clone()
+        .oneshot(authenticated_request_with_body(
+            "PUT", &path, &token, None, &grant,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(no_origin.status(), StatusCode::FORBIDDEN);
+    let no_session = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&path)
+                .header("origin", ORIGIN)
+                .header("content-type", "application/json")
+                .body(Body::from(grant.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
+    let granted = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT", &path, &token, ORIGIN, &grant,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(granted.status(), StatusCode::OK);
+    assert_eq!(
+        response_json(granted).await["approval_policy"],
+        "conversation_once"
+    );
+
+    let settings = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/notification-settings",
+            &token,
+            ORIGIN,
+            r#"{"channel":"system"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(settings.status(), StatusCode::OK);
+    assert_eq!(response_json(settings).await["channel"], "system");
+    let read = app
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/notification-settings",
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response_json(read).await["channel"], "system");
+}
+
 #[test]
 fn persistent_state_reports_sqlite_storage() {
     let path = std::env::temp_dir().join(format!(

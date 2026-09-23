@@ -6,6 +6,12 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+- Advance SQLite to schema 22. Group AI requests and runs by conversation ID and summary; let the human choose per-task, identical-task or one-hour conversation-wide approval in Web. Conversation-wide authorization requires a high-risk acknowledgement, displays a persistent warning and can be revoked. Keep the in-page approval dialog visible regardless of notification setting; offer separate browser and native OS notification channels with generic, non-sensitive messages. Track real-desktop and cross-platform verification in a community backlog without treating it as an implementation-issue closure gate.
+- Advance SQLite to schema 21 and diagnostic format 2. Record only fixed MCP failure classes with counts and first/last times, and summarize terminal state, stale terminal references, browser authentication mode and bridge protocol version. Complete the README deployment handoff through opening the local management page and a final health check.
+- Correlate safe authentication and run events by approval ID in the history view, and export the selected timeline as versioned JSON, JSONL or CSV.
+- Retire one-time drafts after denial, expiry or run completion, reject a second approval for the same draft and remove orphan drafts after restart while retaining referenced audit snapshots.
+- Check expanded approval review at 4K and laptop widths with 200% browser zoom in synthetic browser acceptance; add a fixed failed-run error-code filter to the safe event view.
+- Show pending approvals in a chronological in-page dialog with a live queue count, automatic next-item review and a defer option; keep the full authorization record. Move task templates, authorization and execution to direct sidebar subnavigation.
 - Fail closed when a controlled command tries to reuse a terminal after interactive input, and terminate its terminal on command timeout or cancellation. Preserve bounded sanitized terminal-run output with timestamps for later reading, structured download, and deletion after completion.
 - Keep MCP one-time drafts out of reusable template lists and configuration exports; provide explicit saving, structured SSH requests, bilingual approval guidance and field-level command argument errors.
 - Restore browser PIN/TOTP settings after session recovery and require the current method before changing or disabling it. Add filtered event export, diagnostic previews and broader approval review layout.

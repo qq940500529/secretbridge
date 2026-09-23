@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export type Language = "zh-CN" | "en";
+export type ApprovalNotificationChannel = "browser" | "system";
 
 export const LEGAL_CONSENT_VERSION = "2026-09-beta-1";
 
 const LANGUAGE_KEY = "secretbridge.language.v1";
 const LEGAL_CONSENT_KEY = "secretbridge.legal-consent.v1";
+const APPROVAL_NOTIFICATION_KEY = "secretbridge.approval-notification.v1";
 
 type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
@@ -43,6 +45,29 @@ export function storeLanguage(
     storage?.setItem(LANGUAGE_KEY, language);
   } catch {
     // A language switch must still work for this page when storage is disabled.
+  }
+}
+
+export function initialApprovalNotificationChannel(
+  storage: PreferenceStorage | undefined = availableStorage(),
+): ApprovalNotificationChannel {
+  try {
+    return storage?.getItem(APPROVAL_NOTIFICATION_KEY) === "system"
+      ? "system"
+      : "browser";
+  } catch {
+    return "browser";
+  }
+}
+
+export function storeApprovalNotificationChannel(
+  channel: ApprovalNotificationChannel,
+  storage: PreferenceStorage | undefined = availableStorage(),
+): void {
+  try {
+    storage?.setItem(APPROVAL_NOTIFICATION_KEY, channel);
+  } catch {
+    // The selected channel remains active in this page when storage is disabled.
   }
 }
 

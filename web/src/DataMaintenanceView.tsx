@@ -281,8 +281,8 @@ export function DataMaintenanceView({
           <>
             <p className="text-sm text-slate-600">
               {zh
-                ? "精简诊断仅包含软件版本、平台、数据库版本和状态计数，不包含主机地址、路径、凭据名称、参数或输出。"
-                : "A concise diagnostic report contains software/platform/schema versions and status counts, without host addresses, paths, credential names, arguments or output."}
+                ? "精简诊断包含版本、状态计数、固定 MCP 错误类别及首次/最近时间，不包含主机地址、路径、凭据名称、参数或输出。导出前请预览；发生时间和操作规律仍可能属于个人信息。"
+                : "Diagnostics include versions, state counts, fixed MCP error classes and first/last times, without host addresses, paths, credential names, arguments or output. Preview before export; activity times can still be personal information."}
             </p>
             <button
               className="workbench-button"
@@ -306,7 +306,15 @@ export function DataMaintenanceView({
                 </p>
                 <p>
                   {zh ? "软件版本" : "Version"}: {diagnostics.version} ·{" "}
-                  {zh ? "数据库版本" : "Schema"}: {diagnostics.schema_version}
+                  {zh ? "数据库版本" : "Schema"}: {diagnostics.schema_version} ·{" "}
+                  {zh ? "诊断格式" : "Diagnostic format"}:{" "}
+                  {diagnostics.diagnostic_schema_version}
+                </p>
+                <p>
+                  {zh ? "浏览器认证" : "Browser authentication"}:{" "}
+                  {diagnostics.authentication_mode} ·{" "}
+                  {zh ? "桥接协议" : "Bridge protocol"}:{" "}
+                  {diagnostics.bridge_schema_version}
                 </p>
                 <p>
                   {zh ? "凭据引用" : "Credentials"}: {diagnostics.credentials} ·{" "}
@@ -331,6 +339,28 @@ export function DataMaintenanceView({
                     .map(([name, count]) => `${name} ${count}`)
                     .join(" · ") || "—"}
                 </p>
+                <p>
+                  {zh ? "终端状态" : "Terminal states"}:{" "}
+                  {Object.entries(diagnostics.terminal_states)
+                    .map(([name, count]) => `${name} ${count}`)
+                    .join(" · ") || "—"}{" "}
+                  · {zh ? "失效终端引用" : "Stale terminal references"}{" "}
+                  {diagnostics.stale_terminal_references}
+                </p>
+                <ul aria-label={zh ? "MCP 失败摘要" : "MCP failure summary"}>
+                  {diagnostics.mcp_failures.map((failure) => (
+                    <li key={failure.code}>
+                      {failure.stage} / {failure.code}: {failure.occurrences} ·{" "}
+                      {new Intl.DateTimeFormat(language).format(
+                        failure.first_at_unix_ms,
+                      )}{" "}
+                      →{" "}
+                      {new Intl.DateTimeFormat(language).format(
+                        failure.last_at_unix_ms,
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
             <button

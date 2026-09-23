@@ -23,12 +23,14 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 
 import {
   getBrowserAuthMethods,
+  getApprovalNotificationSettings,
   getSession,
   getStatus,
   pair,
   pairWithPin,
   pairWithTotp,
   revokePageSession,
+  setApprovalNotificationSettings,
   type BrowserAuthMethods,
   type ServiceStatus,
 } from "./api";
@@ -42,11 +44,16 @@ import { ISSUE_URL, LegalConsent } from "./LegalConsent";
 import {
   hasCurrentLegalConsent,
   initialLanguage,
+  initialApprovalNotificationChannel,
+  storeApprovalNotificationChannel,
   storeLanguage,
   storeLegalConsent,
   type Language,
+  type ApprovalNotificationChannel,
 } from "./preferences";
 import { SettingsView } from "./SettingsView";
+import { ApprovalQueueDialog } from "./ApprovalQueueDialog";
+import { ActiveConversationRisk } from "./AiConversationsView";
 
 const TerminalView = lazy(() =>
   import("./TerminalView").then((module) => ({ default: module.TerminalView })),
@@ -79,11 +86,15 @@ type Connection = "checking" | "online" | "offline";
 type Authentication = "unpaired" | "pairing" | "paired" | "error";
 type Page =
   "credentials" | "targets" | "operations" | "terminal" | "audit" | "settings";
+type TaskSection = "templates" | "approvals" | "runs";
 
 interface Copy {
   credentials: string;
   targets: string;
   operations: string;
+  taskTemplates: string;
+  taskApprovals: string;
+  taskRuns: string;
   terminal: string;
   audit: string;
   settings: string;
@@ -126,6 +137,9 @@ const copy: Record<Language, Copy> = {
     credentials: "凭据",
     targets: "连接",
     operations: "任务",
+    taskTemplates: "任务模板",
+    taskApprovals: "授权与确认",
+    taskRuns: "执行与结果",
     terminal: "终端",
     audit: "历史",
     settings: "设置",
@@ -167,6 +181,9 @@ const copy: Record<Language, Copy> = {
     credentials: "Credentials",
     targets: "Connections",
     operations: "Tasks",
+    taskTemplates: "Templates",
+    taskApprovals: "Authorization",
+    taskRuns: "Execution & results",
     terminal: "Terminal",
     audit: "History",
     settings: "Settings",
@@ -224,6 +241,8 @@ function stateLabel(value: Connection | Authentication, text: Copy): string {
 
 export function App() {
   const [language, setLanguage] = useState<Language>(initialLanguage);
+  const [notificationChannel, setNotificationChannel] =
+    useState<ApprovalNotificationChannel>(initialApprovalNotificationChannel);
   const [legalAccepted, setLegalAccepted] = useState(hasCurrentLegalConsent);
   const [legalOpen, setLegalOpen] = useState(() => !hasCurrentLegalConsent());
   const [connection, setConnection] = useState<Connection>("checking");
@@ -238,6 +257,7 @@ export function App() {
   const [authMethodStatus, setAuthMethodStatus] =
     useState<AuthMethodStatus>("loading");
   const [activePage, setActivePage] = useState<Page>("operations");
+  const [taskSection, setTaskSection] = useState<TaskSection>("templates");
   const [taskContext, setTaskContext] = useState<{
     targetId?: string;
     templateId?: string;
@@ -264,6 +284,44 @@ export function App() {
     setLanguage(nextLanguage);
     storeLanguage(nextLanguage);
   }
+
+  async function changeNotificationChannel(
+    next: ApprovalNotificationChannel,
+  ): Promise<boolean> {
+    if (!sessionToken) return false;
+    if (next === "browser") {
+      if (!("Notification" in window)) return false;
+      const permission =
+        Notification.permission === "granted"
+          ? "granted"
+          : await Notification.requestPermission();
+      if (permission !== "granted") return false;
+    }
+    try {
+      await setApprovalNotificationSettings(sessionToken, next);
+    } catch {
+      return false;
+    }
+    setNotificationChannel(next);
+    storeApprovalNotificationChannel(next);
+    return true;
+  }
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    let active = true;
+    void getApprovalNotificationSettings(sessionToken)
+      .then(({ channel }) => {
+        if (active) {
+          setNotificationChannel(channel);
+          storeApprovalNotificationChannel(channel);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [sessionToken]);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -362,26 +420,67 @@ export function App() {
             {navItems.map(({ id, icon: Icon }) => {
               const selected = activePage === id;
               return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setActivePage(id);
-                    if (id === "operations") setTaskContext({});
-                  }}
-                  className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition ${
-                    selected
-                      ? "bg-cyan-400/15 text-cyan-300 ring-1 ring-inset ring-cyan-400/20"
-                      : "text-slate-400 hover:bg-white/5 hover:text-white"
-                  }`}
-                  aria-current={selected ? "page" : undefined}
-                  aria-label={text[id]}
-                >
-                  <Icon className="size-5 shrink-0" aria-hidden="true" />
-                  {!collapsed && (
-                    <span className="hidden md:inline">{text[id]}</span>
+                <div key={id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePage(id);
+                      if (id === "operations") {
+                        setTaskContext({});
+                        setTaskSection("templates");
+                      }
+                    }}
+                    className={`flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition ${
+                      selected
+                        ? "bg-cyan-400/15 text-cyan-300 ring-1 ring-inset ring-cyan-400/20"
+                        : "text-slate-400 hover:bg-white/5 hover:text-white"
+                    }`}
+                    aria-current={selected ? "page" : undefined}
+                    aria-label={text[id]}
+                  >
+                    <Icon className="size-5 shrink-0" aria-hidden="true" />
+                    {!collapsed && (
+                      <span className="hidden md:inline">{text[id]}</span>
+                    )}
+                  </button>
+                  {id === "operations" && selected && (
+                    <div
+                      role="group"
+                      aria-label={text.operations}
+                      className="mt-1 space-y-1 pl-2"
+                    >
+                      {(
+                        [
+                          ["templates", text.taskTemplates, FileClock],
+                          ["approvals", text.taskApprovals, ShieldCheck],
+                          ["runs", text.taskRuns, PlayCircle],
+                        ] as const
+                      ).map(([section, label, SectionIcon]) => (
+                        <button
+                          key={section}
+                          type="button"
+                          aria-label={label}
+                          aria-current={
+                            taskSection === section ? "page" : undefined
+                          }
+                          onClick={() => {
+                            setTaskContext({});
+                            setTaskSection(section);
+                          }}
+                          className={`flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-xs font-medium ${taskSection === section ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-white/5 hover:text-white"}`}
+                        >
+                          <SectionIcon
+                            className="size-4 shrink-0"
+                            aria-hidden="true"
+                          />
+                          {!collapsed && (
+                            <span className="hidden md:inline">{label}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   )}
-                </button>
+                </div>
               );
             })}
           </nav>
@@ -427,6 +526,14 @@ export function App() {
               />
             </div>
             <div className="flex items-center gap-2">
+              {sessionToken && legalAccepted && (
+                <ApprovalQueueDialog
+                  language={language}
+                  sessionToken={sessionToken}
+                  enabled={!legalOpen}
+                  notificationChannel={notificationChannel}
+                />
+              )}
               <a
                 href={ISSUE_URL}
                 target="_blank"
@@ -469,6 +576,14 @@ export function App() {
             tabIndex={-1}
             className="mx-auto max-w-[104rem] px-4 py-8 sm:px-8 sm:py-10"
           >
+            {sessionToken && (
+              <div className="mb-5">
+                <ActiveConversationRisk
+                  sessionToken={sessionToken}
+                  language={language}
+                />
+              </div>
+            )}
             {activePage === "settings" ? (
               <>
                 <SettingsView
@@ -476,6 +591,8 @@ export function App() {
                   status={serviceStatus}
                   language={language}
                   onLanguageChange={changeLanguage}
+                  notificationChannel={notificationChannel}
+                  onNotificationChannelChange={changeNotificationChannel}
                   onReviewLegal={() => setLegalOpen(true)}
                 />
                 {sessionToken && serviceStatus?.background_control_enabled && (
@@ -576,6 +693,7 @@ export function App() {
                   sessionToken={sessionToken}
                   onTask={(targetId, templateId) => {
                     setTaskContext({ targetId, templateId });
+                    setTaskSection(templateId ? "approvals" : "templates");
                     setActivePage("operations");
                   }}
                 />
@@ -586,6 +704,11 @@ export function App() {
                   key={`${taskContext.targetId ?? ""}:${taskContext.templateId ?? ""}`}
                   language={language}
                   sessionToken={sessionToken}
+                  section={taskSection}
+                  onRequestTemplate={(id) => {
+                    setTaskContext({ templateId: id });
+                    setTaskSection("approvals");
+                  }}
                   {...taskContext}
                 />
               </Suspense>

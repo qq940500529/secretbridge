@@ -18,7 +18,7 @@ use super::{
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
-const TABLES: [&str; 12] = [
+const TABLES: [&str; 14] = [
     "credential_references",
     "targets",
     "action_templates",
@@ -31,6 +31,8 @@ const TABLES: [&str; 12] = [
     "browser_auth_settings",
     "browser_auth_events",
     "browser_sessions",
+    "diagnostic_failures",
+    "ai_conversations",
 ];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -397,6 +399,7 @@ pub(crate) fn inspect_backup(bytes: &[u8]) -> Result<(BackupReport, Catalog), Ca
     let runs = catalog.list_synthetic_runs()?.len();
     catalog.list_approvals()?;
     catalog.list_safe_events(None)?;
+    catalog.list_diagnostic_failures()?;
     if credentials > 128 || connections > 128 || templates > 256 || runs > 1024 {
         return Err(CatalogError::Invalid);
     }

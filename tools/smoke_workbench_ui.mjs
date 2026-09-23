@@ -32,6 +32,14 @@ try {
     created_at_unix_ms: now,
     updated_at_unix_ms: now,
   };
+  const conversation = {
+    ...metadata,
+    id: "11111111-1111-4111-8111-111111111111",
+    summary: "合成会话摘要",
+    approval_policy: "every_task",
+    grant_expires_at_unix_ms: null,
+  };
+  let notificationChannel = "browser";
   let failTaskSave = true;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
@@ -42,7 +50,22 @@ try {
       : {};
     let body = {},
       status = 200;
-    if (path === "/api/v1/status")
+    if (path === "/api/v1/ai-conversations") body = { items: [conversation] };
+    else if (path === `/api/v1/ai-conversations/${conversation.id}/policy`) {
+      if (input.approval_policy === "conversation_once")
+        assert.equal(
+          input.risk_acknowledgement,
+          "allow_all_operations_in_this_ai_conversation",
+        );
+      conversation.approval_policy = input.approval_policy;
+      conversation.grant_expires_at_unix_ms =
+        input.approval_policy === "conversation_once" ? now + 3600000 : null;
+      conversation.version++;
+      body = conversation;
+    } else if (path === "/api/v1/notification-settings") {
+      if (method === "PUT") notificationChannel = input.channel;
+      body = { channel: notificationChannel };
+    } else if (path === "/api/v1/status")
       body = {
         product: "SecretBridge",
         api_version: "v1",
@@ -105,6 +128,10 @@ try {
         tasks.push(body);
         status = 201;
       } else body = { items: tasks };
+    } else if (path === "/api/v1/action-templates/task") body = tasks[0];
+    else if (path === "/api/v1/action-templates/another-task") {
+      status = 404;
+      body = { code: "not_found" };
     } else if (path === "/api/v1/action-templates/task/policy-evaluation")
       body = {
         decision: "eligible_for_approval",
@@ -126,9 +153,15 @@ try {
           result_scope: "sanitized_output",
           parameters: input.parameters ?? {},
           state: "pending",
+          conversation_id: conversation.id,
+          preauthorized: false,
           expires_at_unix_ms: now + 3600000,
         };
-        approvals.push(body);
+        approvals.push(body, {
+          ...body,
+          id: "approval-2",
+          created_at_unix_ms: now + 1,
+        });
         status = 201;
       } else body = { items: approvals };
     } else if (path === "/api/v1/approvals/approval/approve") {
@@ -142,6 +175,13 @@ try {
           action_template_id: "another-task",
         },
       );
+    } else if (path === "/api/v1/approvals/approval-2/deny") {
+      body = { ...approvals[1], state: "denied", version: 2 };
+      approvals[1] = body;
+    } else if (path === "/api/v1/approvals/stale-approval/deny") {
+      const index = approvals.findIndex((item) => item.id === "stale-approval");
+      body = { ...approvals[index], state: "denied", version: 2 };
+      approvals[index] = body;
     } else if (path === "/api/v1/runs") {
       if (method === "POST") {
         body = {
@@ -202,7 +242,7 @@ try {
       .getByRole("navigation", { name: "主导航" })
       .getByRole("button")
       .count(),
-    6,
+    9,
   );
   const nav = (name) =>
     page
@@ -231,14 +271,14 @@ try {
     await page.keyboard.press(index % 2 ? "Shift+Tab" : "Tab");
     assert.equal(
       await page
-        .locator("dialog")
+        .locator("dialog[data-presentation='side-drawer']")
         .evaluate((dialog) => dialog.contains(document.activeElement)),
       true,
     );
   }
   assert.equal(
     await page
-      .locator("dialog")
+      .locator("dialog[data-presentation='side-drawer']")
       .evaluate((dialog) => dialog.contains(document.activeElement)),
     true,
   );
@@ -325,6 +365,14 @@ try {
     "工作台测试任务",
   );
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
+  await nav("设置").click();
+  await page.getByRole("button", { name: "系统级通知" }).click();
+  await page
+    .getByRole("button", { name: "系统级通知", pressed: true })
+    .waitFor();
+  assert.equal(notificationChannel, "system");
+  await nav("任务").click();
+  await nav("任务模板").click();
   await page.getByRole("button", { name: "申请授权", exact: true }).click();
   await page.waitForFunction(
     () => document.querySelector("#approval-template")?.value === "task",
@@ -334,8 +382,45 @@ try {
     "task",
   );
   await page.getByRole("button", { name: "提交审批", exact: true }).click();
-  await page.getByRole("button", { name: "批准", exact: true }).click();
-  await page.getByRole("button", { name: "执行与结果", exact: true }).click();
+  const queue = page.getByRole("dialog", { name: "待审批请求" });
+  await queue.waitFor();
+  await queue.getByText("共 2 项，正在处理第 1 项；按申请时间排序").waitFor();
+  for (const width of [3840, 1440]) {
+    await page.setViewportSize({ width, height: 2160 });
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "200%";
+    });
+    const review = queue.getByText("查看 HTTP 请求与插槽", { exact: true });
+    await review.waitFor();
+    assert.equal(
+      await review.evaluate((element) => element.parentElement?.open),
+      true,
+    );
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+      true,
+      `approval review overflow at ${width}px and 200% zoom`,
+    );
+    if (process.env.SECRETBRIDGE_UI_SCREENSHOT && width === 3840)
+      await page.screenshot({
+        path: process.env.SECRETBRIDGE_UI_SCREENSHOT.replace(
+          /\.png$/,
+          "-approval-4k.png",
+        ),
+        fullPage: true,
+      });
+  }
+  await page.evaluate(() => {
+    document.documentElement.style.zoom = "";
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await queue.getByRole("button", { name: "批准当前项" }).click();
+  await queue.getByText("共 1 项，正在处理第 1 项；按申请时间排序").waitFor();
+  await queue.getByRole("button", { name: "拒绝当前项" }).click();
+  await queue.waitFor({ state: "hidden" });
+  await nav("执行与结果").click();
   await page.getByRole("button", { name: "新建运行请求", exact: true }).click();
   assert.equal(
     await page
@@ -343,10 +428,23 @@ try {
       .getByLabel("已批准的授权")
       .locator("option")
       .count(),
-    2,
+    3,
   );
   await page.getByRole("button", { name: "启动受控运行", exact: true }).click();
   await page.getByText("synthetic-filtered-result", { exact: true }).waitFor();
+  await nav("历史").click();
+  await page.getByRole("button", { name: "AI 会话" }).click();
+  await page.getByRole("heading", { name: "合成会话摘要" }).waitFor();
+  await page.getByText(/任务与审批（\d+）/).waitFor();
+  await page.getByLabel("我理解此会话内所有操作可自动获批").check();
+  await page.getByRole("button", { name: "启用 1 小时全操作授权" }).click();
+  await page.getByText(/高风险：1 个 AI 会话已允许所有操作/).waitFor();
+  await page
+    .getByRole("button", { name: "逐个任务审批 \/ 撤销预授权" })
+    .click();
+  await page
+    .getByText(/高风险：1 个 AI 会话已允许所有操作/)
+    .waitFor({ state: "hidden" });
   assert.equal(runs.length, 1);
   assert.equal(tasks.length, 1);
   assert.equal(tasks[0].command.slots[0].credential_id, "credential");
@@ -509,6 +607,41 @@ try {
       path: process.env.SECRETBRIDGE_UI_SCREENSHOT,
       fullPage: true,
     });
+  targets[0].version = 2;
+  approvals.push({
+    ...approvals[0],
+    id: "stale-approval",
+    state: "pending",
+    version: 1,
+    target_version: 1,
+    created_at_unix_ms: now + 2,
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
+  await staleQueue.waitFor();
+  await staleQueue
+    .getByText("操作快照不可用或已变化", { exact: true })
+    .waitFor();
+  assert.equal(
+    await staleQueue.getByRole("button", { name: "批准当前项" }).isDisabled(),
+    true,
+  );
+  await staleQueue.getByRole("button", { name: "稍后处理" }).click();
+  await nav("任务").click();
+  await nav("授权与确认").click();
+  await page
+    .getByRole("complementary", { name: "记录列表" })
+    .getByRole("button", { name: /connection · 待审批/ })
+    .click();
+  await page.getByText("操作或目标快照不可用、已变化或已停用").waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "批准", exact: true }).isDisabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "待审批 1" }).click();
+  await staleQueue.getByRole("button", { name: "拒绝当前项" }).click();
+  await staleQueue.waitFor({ state: "hidden" });
   await nav("设置").click();
   await page
     .getByRole("button", { name: "解除当前页面配对", exact: true })
