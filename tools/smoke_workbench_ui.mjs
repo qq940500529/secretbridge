@@ -129,6 +129,10 @@ try {
         status = 201;
       } else body = { items: tasks };
     } else if (path === "/api/v1/action-templates/task") body = tasks[0];
+    else if (path === "/api/v1/action-templates/another-task") {
+      status = 404;
+      body = { code: "not_found" };
+    }
     else if (path === "/api/v1/action-templates/task/policy-evaluation")
       body = {
         decision: "eligible_for_approval",
@@ -175,6 +179,10 @@ try {
     } else if (path === "/api/v1/approvals/approval-2/deny") {
       body = { ...approvals[1], state: "denied", version: 2 };
       approvals[1] = body;
+    } else if (path === "/api/v1/approvals/stale-approval/deny") {
+      const index = approvals.findIndex((item) => item.id === "stale-approval");
+      body = { ...approvals[index], state: "denied", version: 2 };
+      approvals[index] = body;
     } else if (path === "/api/v1/runs") {
       if (method === "POST") {
         body = {
@@ -600,6 +608,39 @@ try {
       path: process.env.SECRETBRIDGE_UI_SCREENSHOT,
       fullPage: true,
     });
+  targets[0].version = 2;
+  approvals.push({
+    ...approvals[0],
+    id: "stale-approval",
+    state: "pending",
+    version: 1,
+    target_version: 1,
+    created_at_unix_ms: now + 2,
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
+  await staleQueue.waitFor();
+  await staleQueue.getByText("操作快照不可用或已变化", { exact: true }).waitFor();
+  assert.equal(
+    await staleQueue.getByRole("button", { name: "批准当前项" }).isDisabled(),
+    true,
+  );
+  await staleQueue.getByRole("button", { name: "稍后处理" }).click();
+  await nav("任务").click();
+  await nav("授权与确认").click();
+  await page
+    .getByRole("complementary", { name: "记录列表" })
+    .getByRole("button", { name: /connection · 待审批/ })
+    .click();
+  await page.getByText("操作或目标快照不可用、已变化或已停用").waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "批准", exact: true }).isDisabled(),
+    true,
+  );
+  await page.getByRole("button", { name: "待审批 1" }).click();
+  await staleQueue.getByRole("button", { name: "拒绝当前项" }).click();
+  await staleQueue.waitFor({ state: "hidden" });
   await nav("设置").click();
   await page
     .getByRole("button", { name: "解除当前页面配对", exact: true })

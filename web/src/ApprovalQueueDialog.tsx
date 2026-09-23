@@ -186,14 +186,15 @@ export function ApprovalQueueDialog({
     }
   }
 
+  const target = targets.find((item) => item.id === current?.target_id);
   const canApprove =
     !templateLoading &&
     template?.id === current?.action_template_id &&
     template?.version === current?.action_template_version &&
     template?.target_id === current?.target_id &&
+    target?.version === current?.target_version &&
     template?.enabled === true &&
     template?.terminal_available !== false;
-  const target = targets.find((item) => item.id === current?.target_id);
 
   return (
     <>
@@ -248,13 +249,22 @@ export function ApprovalQueueDialog({
             </header>
             <section className="min-w-0 space-y-4 px-5 py-5 text-sm">
               <p className="m-0 font-semibold text-slate-950">
-                {template?.name ??
-                  (zh ? "读取操作快照中…" : "Loading operation snapshot…")}
+                {canApprove
+                  ? template?.name
+                  : templateLoading
+                    ? zh
+                      ? "读取操作快照中…"
+                      : "Loading operation snapshot…"
+                    : zh
+                      ? "操作快照不可用或已变化"
+                      : "Operation snapshot unavailable or changed"}
               </p>
               <dl className="grid min-w-0 gap-2 sm:grid-cols-[8rem_1fr]">
                 <dt>{zh ? "目标" : "Target"}</dt>
                 <dd className="m-0 break-words">
-                  {target?.name ?? current.target_id}
+                  {target?.version === current.target_version
+                    ? target.name
+                    : current.target_id}
                 </dd>
                 <dt>{zh ? "申请时间" : "Requested"}</dt>
                 <dd className="m-0">
@@ -283,7 +293,7 @@ export function ApprovalQueueDialog({
                   {current.reason || (zh ? "未填写" : "Not supplied")}
                 </dd>
               </dl>
-              {template && (
+              {canApprove && template && (
                 <CommandReview
                   key={current.id}
                   template={template}
