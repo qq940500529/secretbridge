@@ -279,6 +279,10 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
 }
 
 #[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one MCP scenario verifies request, approval, execution, host-key rejection and denial"
+)]
 async fn dynamic_ssh_uses_only_catalog_metadata_and_keeps_host_key_pinned() {
     use std::sync::atomic::Ordering;
 
@@ -802,6 +806,7 @@ async fn server_guidance_examples_follow_advertised_contracts() {
         "secretbridge_begin_conversation",
         "secretbridge_terminal_create",
         "secretbridge_request_command",
+        "secretbridge_request_ssh",
         "secretbridge_create_run",
         "secretbridge_read_run_output",
     ] {
@@ -825,6 +830,13 @@ async fn server_guidance_examples_follow_advertised_contracts() {
         "input",
     ))
     .expect("command request");
+    serde_json::from_value::<super::RequestSshParams>(value("secretbridge_request_ssh", "input"))
+        .expect("SSH request");
+    value("secretbridge_request_ssh", "input")["host_key_sha256"]
+        .as_str()
+        .unwrap()
+        .parse::<russh::keys::ssh_key::Fingerprint>()
+        .expect("valid example fingerprint");
     serde_json::from_value::<super::CreateRunParams>(value("secretbridge_create_run", "input"))
         .expect("run request");
     serde_json::from_value::<crate::command::OutputRequest>(value(

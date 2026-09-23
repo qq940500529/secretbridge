@@ -539,6 +539,7 @@ export interface SshConfig {
     | { kind: "password"; slot: string }
     | { kind: "private_key"; slot: string; passphrase_slot: string | null };
   remote_program: string;
+  working_directory?: string | null;
   arguments: Array<
     { kind: "literal"; value: string } | { kind: "parameter"; name: string }
   >;

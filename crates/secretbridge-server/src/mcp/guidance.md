@@ -5,7 +5,7 @@ Follow the user's language. Use only SecretBridge MCP tools for brokered operati
 ## Choose a path / 选择路径
 
 1. Start each AI chat with `secretbridge_begin_conversation` and a short non-secret summary. Pass its returned `id` as `conversation_id` to each request in that chat. Only the human sets conversation approval policy in Web. A policy may preapprove a request; disclose its scope and risk before running it.
-2. Call `secretbridge_terminal_capabilities`, `secretbridge_list_catalog`, and, if useful, `secretbridge_list_action_templates`. The catalog exposes only non-secret connection and credential metadata. Prefer a structured connector for a saved connection; `secretbridge_request_ssh` handles a one-time SSH command without a helper script. Require a SHA-256 host fingerprint that the human verified through a trusted channel. Never turn off host-key checks or automatically trust an unknown/changed key.
+2. Call `secretbridge_terminal_capabilities`, `secretbridge_list_catalog`, and, if useful, `secretbridge_list_action_templates`. The catalog exposes only non-secret connection and credential metadata. Prefer a structured connector for a saved connection; `secretbridge_request_ssh` handles a one-time SSH command without a helper script, with an optional absolute remote working directory. Require a SHA-256 host fingerprint that the human verified through a trusted channel. Never turn off host-key checks or automatically trust an unknown/changed key.
 3. For a changing local command, create a secure terminal and use `secretbridge_request_command` with an absolute executable and individual argv items. A template is **not** a prerequisite. Save a template only if the user explicitly wants a stable operation reused; use `secretbridge_request_approval` for an existing enabled template. Ordinary non-secret terminal input uses `secretbridge_terminal_attach` and `secretbridge_terminal_write`; never write a secret or bypass approval with a shell.
 4. A credential argument or file slot must occupy one whole argv item as `{{secret:slot_name}}`. Other double braces, such as `{{.Names}}`, remain literal. Bind only opaque credential IDs from the catalog, never values.
 5. A `pending` approval requires the human's decision in the local Web console, or a voluntarily supplied current TOTP code for `secretbridge_confirm_approval`. Show the exact approval ID, target, program/parameters, opaque credential references, expiry, and risk. Use its `console_url` if provided. For an `approved` preauthorized request, explain the standing grant and risk. Create a run only after approval, using one stable idempotency key per intended run.
@@ -45,6 +45,16 @@ The JSON below is the exact input object or a **selected-fields excerpt** of MCP
 ### secretbridge_request_command output
 ```json
 {"id":"00000000-0000-4000-8000-000000000004","state":"pending","version":1,"preauthorized":false,"console_url":"http://127.0.0.1:8787","next_actions":["show_pending_approval_details_to_user","user_approves_in_local_web_console","or_if_totp_configured_submit_current_code_with_secretbridge_confirm_approval"]}
+```
+
+### secretbridge_request_ssh input
+```json
+{"connection_id":"00000000-0000-4000-8000-000000000003","conversation_id":"00000000-0000-4000-8000-000000000001","name":"Read synthetic SSH status","host_key_sha256":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","port":22,"remote_program":"/usr/bin/id","working_directory":"/tmp","arguments":[],"expires_in_seconds":300,"timeout_seconds":30,"reason":"Read synthetic SSH status","language":"en"}
+```
+
+### secretbridge_request_ssh output
+```json
+{"id":"00000000-0000-4000-8000-000000000006","state":"pending","version":1,"preauthorized":false,"next_actions":["show_pending_approval_details_to_user","user_approves_in_local_web_console","or_if_totp_configured_submit_current_code_with_secretbridge_confirm_approval"]}
 ```
 
 ### secretbridge_create_run input

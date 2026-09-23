@@ -114,6 +114,14 @@ export function CommandReview({
           <dd className="break-all font-mono">{config.ssh.host_key_sha256}</dd>
           <dt>{zh ? "认证方式" : "Authentication"}</dt>
           <dd>{config.ssh.authentication.kind}</dd>
+          {config.ssh.working_directory && !config.ssh.transfer && (
+            <>
+              <dt>{zh ? "远程工作目录" : "Remote working directory"}</dt>
+              <dd className="break-all font-mono">
+                {config.ssh.working_directory}
+              </dd>
+            </>
+          )}
           <dt>
             {config.ssh.transfer
               ? zh

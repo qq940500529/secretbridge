@@ -16,6 +16,7 @@ export const emptySsh: SshConfig = {
   host_key_sha256: "",
   authentication: { kind: "password", slot: "password" },
   remote_program: "",
+  working_directory: null,
   arguments: [],
 };
 const input =
@@ -26,7 +27,7 @@ export function sshCommandPreview(
   parameters: Record<string, ParameterValue>,
 ): string {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  return [
+  const command = [
     ssh.remote_program,
     ...ssh.arguments.map((arg) =>
       arg.kind === "literal"
@@ -38,6 +39,9 @@ export function sshCommandPreview(
   ]
     .map(quote)
     .join(" ");
+  return ssh.working_directory
+    ? `cd ${quote(ssh.working_directory)} && exec ${command}`
+    : command;
 }
 
 export function SshEditor({
@@ -238,6 +242,20 @@ export function SshEditor({
               value={ssh.remote_program}
               onChange={(e) => update({ remote_program: e.target.value })}
               placeholder="/usr/bin/printf"
+            />
+          </label>
+          <label className="block text-sm font-semibold">
+            {zh
+              ? "远程工作目录（可选绝对路径）"
+              : "Remote working directory (optional absolute path)"}
+            <input
+              maxLength={1024}
+              className={`${input} font-mono`}
+              value={ssh.working_directory ?? ""}
+              onChange={(e) =>
+                update({ working_directory: e.target.value || null })
+              }
+              placeholder="/srv/app"
             />
           </label>
           <p className="text-xs leading-5 text-slate-600">
