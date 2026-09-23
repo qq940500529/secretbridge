@@ -30,9 +30,11 @@ jobs:
           corepack enable
           pnpm install --frozen-lockfile
           version="$(python tools/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
-          if ! cargo audit --version 2>/dev/null | grep -Fxq "cargo-audit $version"; then
-            cargo install cargo-audit --version "$version" --locked --force
-          fi
+          installed="$(cargo audit --version 2>/dev/null || true)"
+          case "$installed" in
+            "cargo-audit $version"|"cargo-audit-audit $version") ;;
+            *) cargo install cargo-audit --version "$version" --locked --force ;;
+          esac
       - name: Check Rust and production Web dependencies
         run: python tools/check_dependency_vulnerabilities.py
   package:
