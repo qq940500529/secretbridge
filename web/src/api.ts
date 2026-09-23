@@ -100,6 +100,13 @@ export interface Diagnostics {
   error_codes: Record<string, number>;
   run_states: Record<string, number>;
   failure_stages: Record<string, number>;
+  run_failures: {
+    code: string;
+    stage: string;
+    occurrences: number;
+    first_at_unix_ms: number;
+    last_at_unix_ms: number;
+  }[];
   mcp_failures: {
     code: string;
     stage: string;

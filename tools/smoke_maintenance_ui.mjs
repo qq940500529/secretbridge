@@ -96,7 +96,7 @@ try {
     } else if (path.endsWith("/maintenance/diagnostics"))
       body = {
         format: "secretbridge-diagnostics",
-        diagnostic_schema_version: 2,
+        diagnostic_schema_version: 3,
         version: "0.1.0-test",
         platform: "windows",
         bridge_schema_version: 2,
@@ -116,6 +116,15 @@ try {
         error_codes: { ssh_connection_failed: 1 },
         terminal_states: { exited: 1 },
         stale_terminal_references: 0,
+        run_failures: [
+          {
+            code: "ssh_connection_failed",
+            stage: "connection",
+            occurrences: 1,
+            first_at_unix_ms: 100,
+            last_at_unix_ms: 200,
+          },
+        ],
         mcp_failures: [
           {
             code: "terminal_busy",

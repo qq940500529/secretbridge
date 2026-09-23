@@ -404,6 +404,98 @@ async fn advertises_only_the_bounded_tool_surface() {
         );
     }
 
+    // The terminal response contract is intentionally explicit even though the
+    // transport is shared with Web and internally represented as JSON values.
+    let terminal_outputs = BTreeMap::from([
+        (
+            "secretbridge_terminal_capabilities",
+            vec![
+                "platform",
+                "default_shell",
+                "shells",
+                "max_sessions",
+                "max_environment_variables",
+            ],
+        ),
+        ("secretbridge_terminal_list", vec!["items"]),
+        ("secretbridge_terminal_create", vec!["terminal"]),
+        (
+            "secretbridge_terminal_attach",
+            vec![
+                "terminal",
+                "input_granted",
+                "oldest_cursor",
+                "next_cursor",
+                "idle_timeout_seconds",
+            ],
+        ),
+        (
+            "secretbridge_terminal_read",
+            vec![
+                "terminal",
+                "cursor",
+                "next_cursor",
+                "oldest_cursor",
+                "available_cursor",
+                "truncated",
+                "has_more",
+                "text",
+                "bytes",
+            ],
+        ),
+        (
+            "secretbridge_terminal_write",
+            vec!["terminal", "input_written"],
+        ),
+        ("secretbridge_terminal_resize", vec!["terminal"]),
+        (
+            "secretbridge_terminal_interrupt",
+            vec!["terminal", "interrupt_sent"],
+        ),
+        ("secretbridge_terminal_detach", vec!["id", "detached"]),
+        ("secretbridge_terminal_close", vec!["id", "closed"]),
+    ]);
+    for (name, expected) in terminal_outputs {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let schema = tool.output_schema.as_ref().expect("terminal output schema");
+        let properties = schema["properties"].as_object().expect("output properties");
+        for field in expected {
+            assert!(properties.contains_key(field), "{name} lacks {field}");
+        }
+    }
+    for tool in &tools {
+        assert!(
+            tool.output_schema.is_some(),
+            "{} lacks output schema",
+            tool.name
+        );
+    }
+    for (name, fields) in [
+        (
+            "secretbridge_begin_conversation",
+            &["id", "summary", "approval_policy", "version"][..],
+        ),
+        (
+            "secretbridge_request_command",
+            &["id", "state", "version", "next_actions", "preauthorized"][..],
+        ),
+        (
+            "secretbridge_create_run",
+            &["run", "replayed", "execution_mode"][..],
+        ),
+        (
+            "secretbridge_read_run_output",
+            &["items", "next_cursor", "truncated", "state"][..],
+        ),
+    ] {
+        let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+        let schema = tool.output_schema.as_ref().unwrap();
+        let properties = schema["properties"].as_object().unwrap();
+        for field in fields {
+            assert!(properties.contains_key(*field), "{name} lacks {field}");
+        }
+    }
+
     client.cancel().await.expect("stop MCP client");
     server_handle.await.expect("join MCP server");
 }

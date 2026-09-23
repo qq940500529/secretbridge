@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 use crate::{
     AppState,
-    catalog::{Catalog, RunState},
+    catalog::{Catalog, CreateSyntheticRun, RunState},
     command::tests::configure,
     router,
 };
@@ -154,10 +154,11 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
     );
     assert!(diagnostic["run_states"].is_object());
     assert!(diagnostic["failure_stages"].is_object());
-    assert_eq!(diagnostic["diagnostic_schema_version"], 2);
+    assert_eq!(diagnostic["diagnostic_schema_version"], 3);
     assert_eq!(diagnostic["bridge_schema_version"], 2);
     assert_eq!(diagnostic["authentication_mode"], "pairing_link");
     assert!(diagnostic["mcp_failures"].is_array());
+    assert!(diagnostic["run_failures"].is_array());
     assert!(diagnostic["terminal_states"].is_object());
     assert_eq!(diagnostic["stale_terminal_references"], 0);
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
@@ -392,4 +393,48 @@ async fn maintenance_body_limits_and_origin_checks_apply_before_import() {
     no_origin.headers_mut().remove("origin");
     let rejected = app.oneshot(no_origin).await.unwrap();
     assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn diagnostics_group_non_mcp_failures_without_command_or_credential_data() {
+    let (state, _) = AppState::new([ORIGIN.to_owned()]);
+    let (approval, _) = configure(&state, "environment", 10);
+    let run = state
+        .catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    state.catalog.start_run(run.id).unwrap();
+    state
+        .catalog
+        .complete_command_run(run.id, "command_failed", Some(1))
+        .unwrap();
+    let (token, _) = state.issue_session().await.unwrap();
+    let diagnostic = json_body(
+        router(state)
+            .oneshot(request(
+                "GET",
+                "/api/v1/maintenance/diagnostics",
+                &token,
+                Body::empty(),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(diagnostic["diagnostic_schema_version"], 3);
+    assert_eq!(diagnostic["run_failures"][0]["code"], "command_failed");
+    assert_eq!(diagnostic["run_failures"][0]["stage"], "execution");
+    assert_eq!(diagnostic["run_failures"][0]["occurrences"], 1);
+    assert!(
+        diagnostic["run_failures"][0]["first_at_unix_ms"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(!diagnostic.to_string().contains("Synthetic-SB-command_A&z"));
+    assert!(!diagnostic.to_string().contains("Credential echo fixture"));
 }

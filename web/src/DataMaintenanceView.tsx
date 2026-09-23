@@ -281,8 +281,8 @@ export function DataMaintenanceView({
           <>
             <p className="text-sm text-slate-600">
               {zh
-                ? "精简诊断包含版本、状态计数、固定 MCP 错误类别及首次/最近时间，不包含主机地址、路径、凭据名称、参数或输出。导出前请预览；发生时间和操作规律仍可能属于个人信息。"
-                : "Diagnostics include versions, state counts, fixed MCP error classes and first/last times, without host addresses, paths, credential names, arguments or output. Preview before export; activity times can still be personal information."}
+                ? "精简诊断包含版本、状态计数、固定 MCP 与运行错误类别及首次/最近时间，不包含主机地址、路径、凭据名称、参数或输出。导出前请预览；发生时间和操作规律仍可能属于个人信息。"
+                : "Diagnostics include versions, state counts, fixed MCP and run error classes with first/last times, without host addresses, paths, credential names, arguments or output. Preview before export; activity times can still be personal information."}
             </p>
             <button
               className="workbench-button"
@@ -349,6 +349,20 @@ export function DataMaintenanceView({
                 </p>
                 <ul aria-label={zh ? "MCP 失败摘要" : "MCP failure summary"}>
                   {diagnostics.mcp_failures.map((failure) => (
+                    <li key={failure.code}>
+                      {failure.stage} / {failure.code}: {failure.occurrences} ·{" "}
+                      {new Intl.DateTimeFormat(language).format(
+                        failure.first_at_unix_ms,
+                      )}{" "}
+                      →{" "}
+                      {new Intl.DateTimeFormat(language).format(
+                        failure.last_at_unix_ms,
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                <ul aria-label={zh ? "运行失败摘要" : "Run failure summary"}>
+                  {diagnostics.run_failures.map((failure) => (
                     <li key={failure.code}>
                       {failure.stage} / {failure.code}: {failure.occurrences} ·{" "}
                       {new Intl.DateTimeFormat(language).format(
