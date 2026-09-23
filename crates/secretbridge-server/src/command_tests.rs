@@ -175,8 +175,16 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
         terminal_output.text
     );
     assert!(
-        page.items.is_empty(),
-        "terminal-backed output stays in the PTY"
+        page.items
+            .iter()
+            .any(|item| item.text.contains("stdout-marker")),
+        "terminal-backed output is retained for run history"
+    );
+    assert!(page.items.iter().all(|item| item.created_at_unix_ms > 0));
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("Synthetic-SB-command_A&z")
     );
 
     let read = terminal_output;
@@ -200,6 +208,10 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
     })
     .await
     .expect("ordinary follow-up completes in the same terminal");
+    assert!(matches!(
+        state.terminals.begin_broker(terminal.id),
+        Err(crate::terminal::TerminalError::ContextUnknown)
+    ));
     state
         .terminals
         .remove(terminal.id)
@@ -400,6 +412,47 @@ async fn command_timeout_and_explicit_cancellation_stop_real_processes() {
 }
 
 #[tokio::test]
+async fn timed_out_terminal_command_closes_the_unverified_shell() {
+    let (state, _) = AppState::new([]);
+    let terminal = state
+        .terminals
+        .create(&crate::terminal::CreateTerminal {
+            rows: 24,
+            cols: 100,
+            shell: None,
+            name: Some("Timeout fixture".to_owned()),
+            working_directory: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
+            environment: std::collections::BTreeMap::new(),
+        })
+        .expect("create terminal");
+    let (approval, _) = configure_in_terminal(&state, "sleep", 1, Some(terminal.id));
+    let created = crate::create_run_for_state(
+        &state,
+        CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+    .expect("start command");
+    let page = wait(&state, created.run.id).await;
+    assert_eq!(page.state, RunState::Failed);
+    assert_eq!(
+        state
+            .catalog
+            .get_synthetic_run(created.run.id)
+            .unwrap()
+            .result_status
+            .as_deref(),
+        Some("timed_out")
+    );
+    assert_ne!(
+        state.terminals.list()[0].status,
+        crate::terminal::TerminalStatus::Running
+    );
+}
+
+#[tokio::test]
 async fn credential_file_storage_failure_is_atomic_and_releases_capacity() {
     let blocker = std::env::temp_dir().join(format!(
         "secretbridge-command-storage-failure-{}",
@@ -507,8 +560,11 @@ fn template_storage_failure_rolls_back_definition_and_credential_links() {
 #[test]
 fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
     let mut config = fixture("argument", Uuid::new_v4());
-    config.arguments.push("prefix{{password}}".into());
+    config.arguments.push("prefix{{secret:password}}".into());
     assert!(config.validate().is_err());
+    let mut literal = fixture("argument", Uuid::new_v4());
+    literal.arguments.push("{{.Names}}".into());
+    assert!(literal.validate().is_ok());
     let mut config = fixture("stdin", Uuid::new_v4());
     let mut second = config.slots[0].clone();
     second.name = "second".into();
@@ -623,7 +679,7 @@ fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
             idempotency_key: Uuid::new_v4().to_string(),
         })
         .unwrap();
-    for _ in 0..70 {
+    for _ in 0..2110 {
         state
             .catalog
             .append_output(outcome.run.id, "stdout", "中\n")
@@ -631,9 +687,14 @@ fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
     }
     let page = state.catalog.output(outcome.run.id, 0).unwrap();
     assert!(page.truncated && page.has_more);
-    assert_eq!(page.oldest_cursor, 7);
+    assert_eq!(page.oldest_cursor, 63);
     assert_eq!(page.items.len(), 16);
-    assert!(state.catalog.output(outcome.run.id, 71).is_err());
+    assert!(page.items.iter().all(|item| item.created_at_unix_ms > 0));
+    assert!(matches!(
+        state.catalog.clear_output(outcome.run.id),
+        Err(CatalogError::ResourceInUse)
+    ));
+    assert!(state.catalog.output(outcome.run.id, 2111).is_err());
     assert!(
         !state
             .catalog
@@ -789,8 +850,10 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
         .run;
     state
         .catalog
-        .append_output(run.id, "stdout", "[REDACTED]")
+        .append_output(run.id, "stdout", "[REDACTED]\u{001b}safe")
         .unwrap();
+    let stored = state.catalog.output(run.id, 0).unwrap();
+    assert_eq!(stored.items[0].text, "[REDACTED]safe");
     let (token, _) = state.issue_session().await.expect("issue session");
     let mut changes = state.changes.subscribe();
     for (provided_origin, provided_token, body, expected) in [
@@ -840,6 +903,73 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn output_deletion_requires_session_origin_and_finished_run() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let origin = "http://127.0.0.1:8787";
+    let (state, _) = AppState::new([origin.to_owned()]);
+    let (approval, _) = configure(&state, "stdin", 10);
+    let run = state
+        .catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    state
+        .catalog
+        .append_output(run.id, "stdout", "[REDACTED]")
+        .unwrap();
+    let (token, _) = state.issue_session().await.expect("issue session");
+    for (provided_origin, provided_token, expected) in [
+        (origin, "invalid", StatusCode::UNAUTHORIZED),
+        (
+            "http://untrusted.invalid",
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (origin, token.as_str(), StatusCode::CONFLICT),
+    ] {
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/runs/{}/output", run.id))
+                    .header("origin", provided_origin)
+                    .header("authorization", format!("Bearer {provided_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    state.catalog.start_run(run.id).unwrap();
+    state
+        .catalog
+        .complete_command_run(run.id, "command_ok", Some(0))
+        .unwrap();
+    let response = crate::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/runs/{}/output", run.id))
+                .header("origin", origin)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(state.catalog.output(run.id, 0).unwrap().items.is_empty());
 }
 
 #[test]

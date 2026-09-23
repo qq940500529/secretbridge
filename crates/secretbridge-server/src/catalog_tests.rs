@@ -1491,6 +1491,33 @@ fn create_action_template(catalog: &Catalog, target_id: Uuid) -> super::ActionTe
         .expect("synthetic action template")
 }
 
+#[test]
+fn one_time_drafts_remain_reviewable_without_becoming_saved_templates() {
+    let catalog = Catalog::in_memory().expect("catalog");
+    let credential = create_credential(&catalog);
+    let target = create_target(&catalog, credential.id);
+    let request = CreateActionTemplate {
+        command: None,
+        target_id: target.id,
+        name: "One-time metadata review".to_owned(),
+        operation: ApprovalOperation::InspectMetadata,
+        result_scope: ApprovalResultScope::MetadataSummary,
+        description: None,
+        timeout_seconds: 15,
+    };
+    let draft = catalog.create_one_time_draft(&request).expect("draft");
+    assert!(draft.one_time);
+    assert!(catalog.list_action_templates().unwrap().is_empty());
+    assert!(catalog.get_action_template(draft.id).unwrap().one_time);
+    let approval = create_approval(&catalog, draft.id);
+    let saved = catalog
+        .create_action_template(&request)
+        .expect("explicit save");
+    assert!(!saved.one_time);
+    assert_eq!(catalog.list_action_templates().unwrap().len(), 1);
+    assert_eq!(approval.action_template_id, Some(draft.id));
+}
+
 fn create_approval(catalog: &Catalog, action_template_id: Uuid) -> super::Approval {
     catalog
         .create_approval(&CreateApproval {

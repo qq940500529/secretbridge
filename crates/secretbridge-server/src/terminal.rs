@@ -69,6 +69,7 @@ struct TerminalSession {
     output: Arc<Mutex<OutputBuffer>>,
     redactor: Arc<Mutex<Redactor>>,
     broker_active: AtomicBool,
+    interactive_unverified: AtomicBool,
     input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
     changes: broadcast::Sender<()>,
@@ -178,11 +179,13 @@ pub struct TerminalSummary {
     pub created_at_unix_ms: u64,
     pub status: TerminalStatus,
     pub exit_code: Option<u32>,
+    pub interactive_unverified: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalError {
     Busy,
+    ContextUnknown,
     Capacity,
     Closed,
     InputLeaseRequired,
@@ -338,10 +341,18 @@ impl TerminalManager {
             .cloned()
             .ok_or(TerminalError::NotFound)?;
         session.ensure_running()?;
+        let lease = session
+            .input_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if session.interactive_unverified.load(Ordering::Acquire) {
+            return Err(TerminalError::ContextUnknown);
+        }
         session
             .broker_active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| TerminalError::Busy)?;
+        drop(lease);
         Ok(TerminalBroker { session })
     }
 
@@ -358,7 +369,7 @@ impl TerminalManager {
             .cloned()
             .ok_or(TerminalError::NotFound)?;
         let connection_id = Uuid::new_v4();
-        let input_granted = session.acquire_input(client_id, connection_id, request_input);
+        let input_granted = session.acquire_input(client_id, connection_id, request_input)?;
         let output = session
             .output
             .lock()
@@ -462,6 +473,7 @@ fn spawn_terminal(
         output: Arc::clone(&output),
         redactor: Arc::clone(&redactor),
         broker_active: AtomicBool::new(false),
+        interactive_unverified: AtomicBool::new(false),
         input_lease: Mutex::new(None),
         events: events.clone(),
         changes: changes.clone(),
@@ -674,6 +686,10 @@ impl TerminalBroker {
         writer.write_all(data).map_err(|_| TerminalError::Closed)?;
         writer.flush().map_err(|_| TerminalError::Closed)
     }
+
+    pub(crate) fn terminate(&self) -> Result<(), TerminalError> {
+        self.session.terminate()
+    }
 }
 
 impl Drop for TerminalBroker {
@@ -745,7 +761,17 @@ impl TerminalConnection {
         if input.len() > 4096 {
             return Err(TerminalError::InvalidInput);
         }
-        self.ensure_input_lease()?;
+        let lease = self
+            .session
+            .input_lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if lease
+            .as_ref()
+            .is_none_or(|current| current.connection_id != self.connection_id)
+        {
+            return Err(TerminalError::InputLeaseRequired);
+        }
         self.session.ensure_running()?;
         if self.session.broker_active.load(Ordering::Acquire) {
             return Err(TerminalError::Busy);
@@ -758,7 +784,11 @@ impl TerminalConnection {
         writer
             .write_all(input)
             .and_then(|()| writer.flush())
-            .map_err(|_| TerminalError::Closed)
+            .map_err(|_| TerminalError::Closed)?;
+        self.session
+            .interactive_unverified
+            .store(true, Ordering::Release);
+        Ok(())
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<(), TerminalError> {
@@ -779,6 +809,9 @@ impl TerminalConnection {
     }
 
     pub fn terminate(&self) -> Result<(), TerminalError> {
+        if self.session.status.load(Ordering::Acquire) != STATUS_RUNNING {
+            return Ok(());
+        }
         self.ensure_input_lease()?;
         self.session.terminate()
     }
@@ -812,6 +845,7 @@ impl TerminalSession {
                 .exit_code
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+            interactive_unverified: self.interactive_unverified.load(Ordering::Acquire),
         }
     }
 
@@ -821,30 +855,41 @@ impl TerminalSession {
             .ok_or(TerminalError::Closed)
     }
 
-    fn acquire_input(&self, client_id: Uuid, connection_id: Uuid, requested: bool) -> bool {
+    fn acquire_input(
+        &self,
+        client_id: Uuid,
+        connection_id: Uuid,
+        requested: bool,
+    ) -> Result<bool, TerminalError> {
         if !requested {
-            return false;
+            return Ok(false);
         }
         let mut lease = self
             .input_lease
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.status.load(Ordering::Acquire) != STATUS_RUNNING {
+            return Ok(false);
+        }
+        if self.broker_active.load(Ordering::Acquire) {
+            return Err(TerminalError::Busy);
+        }
         match lease.as_ref() {
             None => {
                 *lease = Some(InputLease {
                     client_id,
                     connection_id,
                 });
-                true
+                Ok(true)
             }
             Some(existing) if existing.client_id == client_id => {
                 *lease = Some(InputLease {
                     client_id,
                     connection_id,
                 });
-                true
+                Ok(true)
             }
-            Some(_) => false,
+            Some(_) => Ok(false),
         }
     }
 

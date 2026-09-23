@@ -270,7 +270,8 @@ fn terminal_error(error: TerminalError) -> ErrorData {
     let code = match error {
         TerminalError::NotFound => "not_found",
         TerminalError::InputLeaseRequired => "terminal_input_required",
-        TerminalError::Busy => "approved_command_running",
+        TerminalError::Busy => "terminal_busy",
+        TerminalError::ContextUnknown => "terminal_context_unknown",
         TerminalError::Closed => "terminal_closed",
         TerminalError::Capacity => "capacity_exceeded",
         TerminalError::SpawnFailed => "terminal_spawn_failed",

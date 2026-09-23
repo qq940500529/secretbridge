@@ -3,6 +3,7 @@
 
 import { FileClock, Filter, LockKeyhole, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { saveDownload } from "./DataMaintenanceView";
 
 import {
   type ActionTemplate,
@@ -28,6 +29,7 @@ export function AuditView({
   language: Language;
   sessionToken: string;
 }) {
+  const zh = language === "zh-CN";
   const text =
     language === "zh-CN"
       ? {
@@ -57,6 +59,19 @@ export function AuditView({
           target: "目标",
           template: "模板",
           sequence: "序号",
+          search: "搜索事件、运行或关联 ID",
+          source: "来源",
+          authSource: "身份验证",
+          runSource: "运行",
+          download: "下载已筛选安全日志",
+          result: "运行结果",
+          timeout: "超时",
+          period: "时间范围",
+          lastDay: "最近 24 小时",
+          lastWeek: "最近 7 天",
+          privacy:
+            "导出前请检查关联标识；文件不含凭据，但可能反映你的操作时间与关系。",
+          technical: "技术标识",
           kinds: {
             authorization_revoked: "授权或策略失效后安全停止",
             requested: "请求已接受",
@@ -99,6 +114,19 @@ export function AuditView({
           target: "Target",
           template: "Template",
           sequence: "Sequence",
+          search: "Search event, run or related ID",
+          source: "Source",
+          authSource: "Authentication",
+          runSource: "Runs",
+          download: "Download filtered safe log",
+          result: "Run result",
+          timeout: "Timed out",
+          period: "Time range",
+          lastDay: "Last 24 hours",
+          lastWeek: "Last 7 days",
+          privacy:
+            "Review related identifiers before sharing. The file contains no credentials, but may reveal activity times and relationships.",
+          technical: "Technical identifiers",
           kinds: {
             authorization_revoked:
               "Stopped after authorization or policy became inactive",
@@ -116,8 +144,27 @@ export function AuditView({
   const [templates, setTemplates] = useState<ActionTemplate[]>([]);
   const [targets, setTargets] = useState<Target[]>([]);
   const [filter, setFilter] = useState<SafeEventKind | "all">("all");
+  const [source, setSource] = useState<"all" | "auth" | "run">("all");
+  const [query, setQuery] = useState("");
+  const [period, setPeriod] = useState<"all" | "day" | "week">("all");
+  const [result, setResult] = useState<
+    "all" | "succeeded" | "failed" | "cancelled" | "timed_out"
+  >("all");
+  const [targetFilter, setTargetFilter] = useState("all");
+  const [templateFilter, setTemplateFilter] = useState("all");
+  const [visibleCount, setVisibleCount] = useState(100);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const formatEventTime = (value: number) =>
+    new Intl.DateTimeFormat(language, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(value);
   const runMap = useMemo(
     () => new Map(runs.map((run) => [run.id, run])),
     [runs],
@@ -130,8 +177,49 @@ export function AuditView({
     () => new Map(targets.map((item) => [item.id, item.name])),
     [targets],
   );
-  const visibleEvents =
-    filter === "all" ? events : events.filter((event) => event.kind === filter);
+  const needle = query.trim().toLocaleLowerCase();
+  const since =
+    period === "all"
+      ? 0
+      : Date.now() - (period === "day" ? 1 : 7) * 24 * 60 * 60 * 1000;
+  const visibleEvents = events.filter(
+    (event) =>
+      event.created_at_unix_ms >= since &&
+      (filter === "all" || event.kind === filter) &&
+      (targetFilter === "all" ||
+        runMap.get(event.run_id)?.target_id === targetFilter) &&
+      (templateFilter === "all" ||
+        (templateFilter === "one_time"
+          ? !!runMap.get(event.run_id) &&
+            !templateMap.has(runMap.get(event.run_id)!.action_template_id)
+          : runMap.get(event.run_id)?.action_template_id === templateFilter)) &&
+      (result === "all" ||
+        (result === "timed_out"
+          ? runMap.get(event.run_id)?.result_status === "timed_out"
+          : runMap.get(event.run_id)?.state === result)) &&
+      (!needle ||
+        [
+          event.kind,
+          event.run_id,
+          String(event.sequence),
+          runMap.get(event.run_id)?.result_status ?? "",
+          templateMap.get(runMap.get(event.run_id)?.action_template_id ?? "") ??
+            "",
+          targetMap.get(runMap.get(event.run_id)?.target_id ?? "") ?? "",
+        ].some((value) => value.toLocaleLowerCase().includes(needle))),
+  );
+  const visibleAuthEvents = authEvents.filter(
+    (event) =>
+      result === "all" &&
+      targetFilter === "all" &&
+      templateFilter === "all" &&
+      filter === "all" &&
+      event.created_at_unix_ms >= since &&
+      (!needle ||
+        [event.kind, event.channel, event.approval_id ?? ""].some((value) =>
+          value.toLocaleLowerCase().includes(needle),
+        )),
+  );
 
   async function refresh() {
     const [
@@ -188,39 +276,64 @@ export function AuditView({
         <LockKeyhole className="mt-0.5 size-5 shrink-0" />
         <p className="m-0 font-medium">{text.policy}</p>
       </div>
-      <section className="space-y-3">
-        <h2 className="m-0 text-lg font-semibold text-slate-950">
-          {text.authTitle}
-        </h2>
-        {authEvents.length === 0 ? (
-          <p className={emptyClass}>{text.authEmpty}</p>
-        ) : (
-          <ol className="enterprise-surface enterprise-table m-0 p-0">
-            {authEvents.map((event) => (
-              <li key={event.id} className="list-none p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-slate-950">
-                    {text.authKinds[event.kind]}
-                  </span>
-                  <time className="text-xs text-slate-400">
-                    {new Intl.DateTimeFormat(language, {
-                      dateStyle: "medium",
-                      timeStyle: "medium",
-                    }).format(event.created_at_unix_ms)}
-                  </time>
-                </div>
-                <p className="mb-0 mt-2 text-xs text-slate-500">
-                  {text.channels[event.channel]}
-                  {event.approval_id
-                    ? ` · ${text.approval}: ${event.approval_id}`
-                    : ""}
-                </p>
-              </li>
-            ))}
-          </ol>
+      {source !== "run" &&
+        result === "all" &&
+        targetFilter === "all" &&
+        templateFilter === "all" &&
+        filter === "all" && (
+          <section className="space-y-3">
+            <h2 className="m-0 text-lg font-semibold text-slate-950">
+              {text.authTitle}
+            </h2>
+            {visibleAuthEvents.length === 0 ? (
+              <p className={emptyClass}>{text.authEmpty}</p>
+            ) : (
+              <ol className="enterprise-surface enterprise-table m-0 p-0">
+                {visibleAuthEvents.slice(0, visibleCount).map((event) => (
+                  <li key={event.id} className="list-none p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-slate-950">
+                        {text.authKinds[event.kind]}
+                      </span>
+                      <time className="text-xs text-slate-400">
+                        {formatEventTime(event.created_at_unix_ms)}
+                      </time>
+                    </div>
+                    <p className="mb-0 mt-2 text-xs text-slate-500">
+                      {text.channels[event.channel]}
+                    </p>
+                    {event.approval_id && (
+                      <details className="mt-2 text-xs text-slate-500">
+                        <summary>{text.technical}</summary>
+                        {text.approval}: {event.approval_id}
+                      </details>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
         )}
-      </section>
       <div className="flex flex-wrap items-center justify-between gap-3">
+        <label className="text-sm font-semibold text-slate-700">
+          {text.source}
+          <select
+            value={source}
+            onChange={(event) => setSource(event.target.value as typeof source)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            <option value="auth">{text.authSource}</option>
+            <option value="run">{text.runSource}</option>
+          </select>
+        </label>
+        <input
+          aria-label={text.search}
+          placeholder={text.search}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="min-w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+        />
         <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
           <Filter className="size-4" />
           <select
@@ -238,6 +351,65 @@ export function AuditView({
             ))}
           </select>
         </label>
+        <label className="text-sm font-semibold text-slate-700">
+          {text.period}
+          <select
+            value={period}
+            onChange={(event) => setPeriod(event.target.value as typeof period)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            <option value="day">{text.lastDay}</option>
+            <option value="week">{text.lastWeek}</option>
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          {text.result}
+          <select
+            value={result}
+            onChange={(event) => setResult(event.target.value as typeof result)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            <option value="succeeded">{text.kinds.succeeded}</option>
+            <option value="failed">{text.kinds.failed}</option>
+            <option value="cancelled">{text.kinds.cancelled}</option>
+            <option value="timed_out">{text.timeout}</option>
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          {text.target}
+          <select
+            value={targetFilter}
+            onChange={(event) => setTargetFilter(event.target.value)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            {targets.map((target) => (
+              <option key={target.id} value={target.id}>
+                {target.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          {text.template}
+          <select
+            value={templateFilter}
+            onChange={(event) => setTemplateFilter(event.target.value)}
+            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+          >
+            <option value="all">{text.all}</option>
+            <option value="one_time">
+              {zh ? "一次性操作" : "One-time operations"}
+            </option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           onClick={() => void refresh()}
@@ -246,7 +418,67 @@ export function AuditView({
           <RefreshCw className="size-4" />
           {events.length}
         </button>
+        <button
+          type="button"
+          className="workbench-button"
+          onClick={() => {
+            const entries = [
+              ...(source === "run"
+                ? []
+                : visibleAuthEvents.map((event) => ({
+                    source: "authentication",
+                    kind: event.kind,
+                    channel: event.channel,
+                    approval_id: event.approval_id,
+                    created_at_unix_ms: event.created_at_unix_ms,
+                  }))),
+              ...(source === "auth"
+                ? []
+                : visibleEvents.map((event) => ({
+                    source: "run",
+                    kind: event.kind,
+                    run_id: event.run_id,
+                    sequence: event.sequence,
+                    state: runMap.get(event.run_id)?.state ?? null,
+                    result_status:
+                      runMap.get(event.run_id)?.result_status ?? null,
+                    created_at_unix_ms: event.created_at_unix_ms,
+                  }))),
+            ].sort((a, b) => a.created_at_unix_ms - b.created_at_unix_ms);
+            saveDownload(
+              new Blob(
+                [
+                  JSON.stringify(
+                    {
+                      format: "secretbridge-safe-log",
+                      schema_version: 1,
+                      exported_at_unix_ms: Date.now(),
+                      filters: {
+                        source,
+                        kind: filter,
+                        period,
+                        result,
+                        target_id: targetFilter === "all" ? null : targetFilter,
+                        template_id:
+                          templateFilter === "all" ? null : templateFilter,
+                        keyword_applied: needle.length > 0,
+                      },
+                      entries,
+                    },
+                    null,
+                    2,
+                  ),
+                ],
+                { type: "application/json" },
+              ),
+              "secretbridge-safe-log.json",
+            );
+          }}
+        >
+          {text.download}
+        </button>
       </div>
+      <p className="text-xs text-slate-600">{text.privacy}</p>
       {error && (
         <p
           role="alert"
@@ -255,13 +487,13 @@ export function AuditView({
           {error}
         </p>
       )}
-      {loading ? (
+      {source === "auth" ? null : loading ? (
         <p className={emptyClass}>{text.loading}</p>
       ) : visibleEvents.length === 0 ? (
         <p className={emptyClass}>{text.empty}</p>
       ) : (
         <ol className="enterprise-surface enterprise-table m-0 p-0">
-          {visibleEvents.map((event) => {
+          {visibleEvents.slice(0, visibleCount).map((event) => {
             const run = runMap.get(event.run_id);
             return (
               <li key={event.id} className="list-none p-5">
@@ -272,43 +504,49 @@ export function AuditView({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h2 className="m-0 text-sm font-semibold text-slate-950">
-                        {text.kinds[event.kind]}
+                        {event.kind === "failed" &&
+                        run?.result_status === "timed_out"
+                          ? text.timeout
+                          : text.kinds[event.kind]}
                       </h2>
                       <time className="text-xs text-slate-400">
-                        {new Intl.DateTimeFormat(language, {
-                          dateStyle: "medium",
-                          timeStyle: "medium",
-                        }).format(event.created_at_unix_ms)}
+                        {formatEventTime(event.created_at_unix_ms)}
                       </time>
                     </div>
-                    <div className="mt-2 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
-                      <span>
-                        <strong>{text.sequence}：</strong>#{event.sequence}
-                      </span>
-                      <span className="truncate">
-                        <strong>{text.run}：</strong>
-                        {event.run_id}
-                      </span>
+                    <div className="mt-2 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
                       <span className="truncate">
                         <strong>{text.template}：</strong>
                         {run
                           ? (templateMap.get(run.action_template_id) ??
-                            run.action_template_id)
+                            (zh ? "一次性操作" : "One-time operation"))
                           : "—"}
                       </span>
                       <span className="truncate">
                         <strong>{text.target}：</strong>
-                        {run
-                          ? (targetMap.get(run.target_id) ?? run.target_id)
-                          : "—"}
+                        {run ? (targetMap.get(run.target_id) ?? "—") : "—"}
                       </span>
                     </div>
+                    <details className="mt-2 text-xs text-slate-500">
+                      <summary>{text.technical}</summary>
+                      {text.run}: {event.run_id} · {text.sequence}: #
+                      {event.sequence}
+                    </details>
                   </div>
                 </div>
               </li>
             );
           })}
         </ol>
+      )}
+      {((source !== "auth" && visibleEvents.length > visibleCount) ||
+        (source !== "run" && visibleAuthEvents.length > visibleCount)) && (
+        <button
+          type="button"
+          className="workbench-button"
+          onClick={() => setVisibleCount((count) => count + 100)}
+        >
+          {zh ? "加载更多" : "Load more"}
+        </button>
       )}
     </section>
   );

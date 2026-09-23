@@ -77,6 +77,8 @@ export function ActionTemplatesView({
           conflict: "模板已被其他页面修改，列表已刷新。",
           deleteConfirm: "确定删除这个未被审批引用的模板吗？",
           active: "可申请",
+          terminalUnavailable:
+            "绑定的终端已关闭或处于未验证的交互上下文。请新建安全终端并编辑模板引用；原模板暂不可申请。",
           inactive: "已停用",
           version: "版本",
           seconds: "秒",
@@ -128,6 +130,8 @@ export function ActionTemplatesView({
           deleteConfirm:
             "Delete this template if it is not referenced by an approval?",
           active: "Available",
+          terminalUnavailable:
+            "The bound terminal is closed or its interactive context is unverified. Create a new secure terminal and edit this template before requesting approval.",
           inactive: "Disabled",
           version: "Version",
           seconds: "seconds",
@@ -494,7 +498,7 @@ export function ActionTemplatesView({
             items={items.map((item) => ({
               id: item.id,
               name: item.name,
-              detail: `${targetNames.get(item.target_id) ?? item.target_id} · ${item.enabled ? text.active : text.inactive}`,
+              detail: `${targetNames.get(item.target_id) ?? item.target_id} · ${item.terminal_available === false ? text.inactive : item.enabled ? text.active : text.inactive}`,
             }))}
           >
             {items.map((item) => (
@@ -503,9 +507,11 @@ export function ActionTemplatesView({
                   <div className="min-w-0">
                     <div className="flex flex-wrap gap-2">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${item.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
+                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${item.enabled && item.terminal_available !== false ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
                       >
-                        {item.enabled ? text.active : text.inactive}
+                        {item.enabled && item.terminal_available !== false
+                          ? text.active
+                          : text.inactive}
                       </span>
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                         {text.operationLabels[item.operation]}
@@ -523,6 +529,14 @@ export function ActionTemplatesView({
                     {item.description && (
                       <p className="mb-0 mt-1 text-sm leading-6 text-slate-500">
                         {item.description}
+                      </p>
+                    )}
+                    {item.terminal_available === false && (
+                      <p
+                        role="status"
+                        className="mb-0 mt-2 text-sm text-amber-800"
+                      >
+                        {text.terminalUnavailable}
                       </p>
                     )}
                   </div>
@@ -554,17 +568,19 @@ export function ActionTemplatesView({
                     language={language}
                   />
                 )}
-                {onRequest && item.enabled && (
-                  <button
-                    type="button"
-                    onClick={() => onRequest(item.id)}
-                    className="workbench-primary mt-4"
-                  >
-                    {language === "zh-CN"
-                      ? "申请授权"
-                      : "Request authorization"}
-                  </button>
-                )}
+                {onRequest &&
+                  item.enabled &&
+                  item.terminal_available !== false && (
+                    <button
+                      type="button"
+                      onClick={() => onRequest(item.id)}
+                      className="workbench-primary mt-4"
+                    >
+                      {language === "zh-CN"
+                        ? "申请授权"
+                        : "Request authorization"}
+                    </button>
+                  )}
               </article>
             ))}
           </MasterDetail>

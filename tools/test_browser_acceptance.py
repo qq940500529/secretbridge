@@ -22,6 +22,7 @@ CHROMIUM_SCRIPTS = (
     "smoke_connector_ui.mjs",
     "smoke_maintenance_ui.mjs",
     "smoke_background_ui.mjs",
+    "smoke_browser_auth_ui.mjs",
 )
 
 

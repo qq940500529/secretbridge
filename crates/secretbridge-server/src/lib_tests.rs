@@ -141,6 +141,19 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
     assert_eq!(methods["pin_enabled"], true);
     assert!(!methods.to_string().contains("synthetic-local-pin"));
 
+    let missing_current_proof = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &token,
+            ORIGIN,
+            r#"{"method":"pairing_link"}"#,
+        ))
+        .await
+        .expect("current PIN is required to disable it");
+    assert_eq!(missing_current_proof.status(), StatusCode::UNAUTHORIZED);
+
     let incorrect = app
         .clone()
         .oneshot(
@@ -209,6 +222,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         .expect("router response");
     assert_eq!(blocked.status(), StatusCode::UNAUTHORIZED);
 
+    super::reset_authentication_attempts(&state).await;
     let disabled = app
         .clone()
         .oneshot(authenticated_json_request(
@@ -216,7 +230,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
             "/api/v1/session/method",
             &token,
             ORIGIN,
-            r#"{"method":"pairing_link"}"#,
+            r#"{"method":"pairing_link","current_pin":"synthetic-local-pin"}"#,
         ))
         .await
         .expect("router response");
@@ -227,6 +241,17 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
             .get(super::BROWSER_PIN_CREDENTIAL_ID)
             .is_err()
     );
+    let audit = app
+        .clone()
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/session/auth-events",
+            &token,
+            Some(ORIGIN),
+        ))
+        .await
+        .expect("PIN disablement audit");
+    assert!(response_json(audit).await.to_string().contains("disabled"));
     let methods = app
         .oneshot(
             Request::builder()
@@ -239,7 +264,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
     assert_eq!(response_json(methods).await["pin_enabled"], false);
 }
 
-fn totp_code(secret: &str, step_offset: u64) -> String {
+fn totp_code(secret: &str, step_offset: i64) -> String {
     let totp = TotpBuilder::new()
         .with_secret(TotpSecret::try_from_base32(secret).expect("base32 test secret"))
         .with_skew(0)
@@ -249,8 +274,10 @@ fn totp_code(secret: &str, step_offset: u64) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("current time")
         .as_secs();
-    totp.generate(now + step_offset * crate::totp_auth::STEP_SECONDS)
-        .to_string()
+    totp.generate(
+        now.saturating_add_signed(step_offset * crate::totp_auth::STEP_SECONDS.cast_signed()),
+    )
+    .to_string()
 }
 
 #[tokio::test]
@@ -264,11 +291,12 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
     let token = pair_test_session(&app, &bootstrap).await;
     let setup = app
         .clone()
-        .oneshot(authenticated_request(
+        .oneshot(authenticated_json_request(
             "POST",
             "/api/v1/session/totp/setup",
             &token,
-            Some(ORIGIN),
+            ORIGIN,
+            "{}",
         ))
         .await
         .expect("start TOTP setup");
@@ -364,13 +392,21 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
     assert!(!events.contains(&enrollment_code));
     assert!(!events.contains(&next_code));
 
+    // Advance the isolated fixture's replay state to model a later verification window.
+    state.catalog.reset_totp_replay_guard().unwrap();
+
     let disabled = app
+        .clone()
         .oneshot(authenticated_json_request(
             "PUT",
             "/api/v1/session/method",
             &token,
             ORIGIN,
-            r#"{"method":"pairing_link"}"#,
+            &serde_json::json!({
+                "method": "pairing_link",
+                "current_totp_code": totp_code(manual_key, -1),
+            })
+            .to_string(),
         ))
         .await
         .expect("disable TOTP");
@@ -381,6 +417,18 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
             .get(super::BROWSER_TOTP_CREDENTIAL_ID)
             .is_err()
     );
+    let disabled_events = app
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/session/auth-events",
+            &token,
+            Some(ORIGIN),
+        ))
+        .await
+        .expect("disablement audit events");
+    let disabled_events = response_json(disabled_events).await.to_string();
+    assert!(disabled_events.contains("disabled"));
+    assert!(!disabled_events.contains(manual_key));
 }
 
 #[tokio::test]

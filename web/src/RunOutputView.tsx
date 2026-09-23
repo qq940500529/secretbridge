@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useEffect, useRef, useState } from "react";
-import { readRunOutput, type RunOutput } from "./api";
+import { deleteRunOutput, readRunOutput, type RunOutput } from "./api";
 import { useServiceChanges } from "./service-events";
 import { DatabaseResultView, parseDatabaseResult } from "./DatabaseResultView";
+import { saveDownload } from "./DataMaintenanceView";
 
 export function RunOutputView({
   id,
@@ -19,34 +20,83 @@ export function RunOutputView({
   const [gap, setGap] = useState(false);
   const [exit, setExit] = useState<number | null>(null);
   const [error, setError] = useState(false);
+  const [runState, setRunState] = useState<RunOutput["state"] | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [cleared, setCleared] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const cursor = useRef(0);
   const busy = useRef(false);
   const active = useRef(true);
+  const generation = useRef(0);
   async function load() {
     if (busy.current || !active.current) return;
+    const requestedGeneration = generation.current;
     busy.current = true;
     try {
-      for (let page = 0; page < 8; page++) {
+      for (let page = 0; page < 128; page++) {
         const result = await readRunOutput(sessionToken, id, cursor.current);
-        if (!active.current) return;
+        if (!active.current || generation.current !== requestedGeneration)
+          return;
         cursor.current = result.next_cursor;
         if (result.truncated) setGap(true);
-        setChunks((previous) => [...previous, ...result.items].slice(-64));
+        setChunks((previous) => [...previous, ...result.items].slice(-2048));
         setExit(result.exit_code);
+        setRunState(result.state);
         setError(false);
         if (!result.has_more) break;
       }
     } catch {
-      if (active.current) setError(true);
+      if (active.current && generation.current === requestedGeneration)
+        setError(true);
     } finally {
+      if (generation.current === requestedGeneration) busy.current = false;
+    }
+  }
+  async function clearRetainedOutput() {
+    const requestedGeneration = generation.current;
+    setDeleting(true);
+    try {
+      await deleteRunOutput(sessionToken, id);
+      if (!active.current || generation.current !== requestedGeneration) return;
+      generation.current += 1;
       busy.current = false;
+      setChunks([]);
+      cursor.current = 0;
+      setGap(false);
+      setCleared(true);
+      setError(false);
+      setConfirmDelete(false);
+      void load();
+    } catch {
+      if (active.current && generation.current === requestedGeneration) {
+        setError(true);
+        setConfirmDelete(false);
+      }
+    } finally {
+      if (
+        active.current &&
+        (generation.current === requestedGeneration ||
+          generation.current === requestedGeneration + 1)
+      )
+        setDeleting(false);
     }
   }
   useEffect(() => {
+    generation.current += 1;
     active.current = true;
+    busy.current = false;
+    cursor.current = 0;
+    setChunks([]);
+    setGap(false);
+    setCleared(false);
+    setExit(null);
+    setRunState(null);
+    setConfirmDelete(false);
+    setDeleting(false);
     void load();
     return () => {
       active.current = false;
+      generation.current += 1;
     };
   }, [id, sessionToken]);
   useServiceChanges(sessionToken, () => void load());
@@ -61,10 +111,95 @@ export function RunOutputView({
     >
       <div className="mb-2 flex justify-between text-xs font-semibold text-slate-600">
         <span>{zh ? "运行输出" : "Run output"}</span>
-        <span>
+        <span className="flex items-center gap-3">
           {exit !== null ? `${zh ? "退出码" : "Exit code"}: ${exit}` : ""}
+          {chunks.length > 0 && (
+            <>
+              <button
+                type="button"
+                className="underline"
+                onClick={() =>
+                  saveDownload(
+                    new Blob([chunks.map((chunk) => chunk.text).join("")], {
+                      type: "text/plain;charset=utf-8",
+                    }),
+                    `secretbridge-run-${id}.txt`,
+                  )
+                }
+              >
+                {zh ? "下载脱敏输出" : "Download sanitized output"}
+              </button>
+              <button
+                type="button"
+                className="underline"
+                onClick={() =>
+                  saveDownload(
+                    new Blob(
+                      [
+                        JSON.stringify(
+                          {
+                            format: "secretbridge-run-output",
+                            schema_version: 1,
+                            run_id: id,
+                            truncated: gap,
+                            items: chunks,
+                          },
+                          null,
+                          2,
+                        ),
+                      ],
+                      { type: "application/json" },
+                    ),
+                    `secretbridge-run-${id}.json`,
+                  )
+                }
+              >
+                {zh ? "下载结构化记录" : "Download structured record"}
+              </button>
+            </>
+          )}
+          {chunks.length > 0 &&
+            runState !== "queued" &&
+            runState !== "running" && (
+              <button
+                type="button"
+                className="underline text-rose-700"
+                onClick={() => setConfirmDelete(true)}
+              >
+                {zh ? "删除保留输出" : "Delete retained output"}
+              </button>
+            )}
         </span>
       </div>
+      {confirmDelete && (
+        <div
+          role="alert"
+          className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900"
+        >
+          <p>
+            {zh
+              ? "确认永久删除此运行保留的脱敏输出？运行状态和安全事件仍保留。"
+              : "Permanently delete this run’s retained sanitized output? Run status and safe events remain."}
+          </p>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className="workbench-button"
+              disabled={deleting}
+              onClick={() => void clearRetainedOutput()}
+            >
+              {zh ? "确认删除" : "Confirm deletion"}
+            </button>
+            <button
+              type="button"
+              className="workbench-button"
+              onClick={() => setConfirmDelete(false)}
+            >
+              {zh ? "取消" : "Cancel"}
+            </button>
+          </div>
+        </div>
+      )}
       {gap && (
         <p role="status" className="text-xs text-amber-700">
           {zh
@@ -87,14 +222,31 @@ export function RunOutputView({
             ? chunks.map((chunk) => (
                 <span
                   key={chunk.sequence}
+                  title={
+                    chunk.created_at_unix_ms > 0
+                      ? new Date(chunk.created_at_unix_ms).toLocaleString(
+                          language,
+                        )
+                      : undefined
+                  }
                   className={chunk.stream === "stderr" ? "text-amber-300" : ""}
                 >
                   {chunk.text}
                 </span>
               ))
-            : zh
-              ? "等待任务输出…"
-              : "Waiting for task output…"}
+            : cleared
+              ? zh
+                ? "保留输出已删除。"
+                : "Retained output was deleted."
+              : runState === "queued" ||
+                  runState === "running" ||
+                  runState === null
+                ? zh
+                  ? "等待任务输出…"
+                  : "Waiting for task output…"
+                : zh
+                  ? "命令未产生输出。"
+                  : "The command produced no output."}
         </pre>
       )}
     </section>

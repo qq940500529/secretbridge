@@ -84,6 +84,7 @@ export interface Diagnostics {
   format: string;
   version: string;
   platform: string;
+  generated_at_unix_ms: number;
   schema_version: number;
   storage: ConfigurationStorage;
   credentials: number;
@@ -94,6 +95,8 @@ export interface Diagnostics {
   failed_runs: number;
   terminal_sessions: number;
   error_codes: Record<string, number>;
+  run_states: Record<string, number>;
+  failure_stages: Record<string, number>;
 }
 async function maintenanceJson<T>(
   token: string,
@@ -229,13 +232,22 @@ export async function pairWithTotp(code: string): Promise<PairResponse> {
   );
 }
 
-export async function startTotpSetup(token: string): Promise<TotpSetup> {
+export interface CurrentBrowserAuthProof {
+  current_pin?: string;
+  current_totp_code?: string;
+}
+
+export async function startTotpSetup(
+  token: string,
+  proof: CurrentBrowserAuthProof = {},
+): Promise<TotpSetup> {
   return readJson<TotpSetup>(
     await fetch("/api/v1/session/totp/setup", {
       method: "POST",
       credentials: "omit",
       cache: "no-store",
-      headers: sessionHeaders(token),
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify(proof),
     }),
   );
 }
@@ -271,6 +283,7 @@ export async function setBrowserAuthMethod(
   token: string,
   method: "pairing_link" | "pin",
   pin?: string,
+  proof: CurrentBrowserAuthProof = {},
 ): Promise<void> {
   await requireOk(
     await fetch("/api/v1/session/method", {
@@ -278,7 +291,7 @@ export async function setBrowserAuthMethod(
       credentials: "omit",
       cache: "no-store",
       headers: sessionJsonHeaders(token),
-      body: JSON.stringify({ method, ...(pin ? { pin } : {}) }),
+      body: JSON.stringify({ method, ...(pin ? { pin } : {}), ...proof }),
     }),
   );
 }
@@ -302,6 +315,7 @@ export interface TerminalSummary {
   created_at_unix_ms: number;
   status: TerminalStatus;
   exit_code: number | null;
+  interactive_unverified?: boolean;
 }
 
 export interface TerminalCapabilities {
@@ -414,6 +428,8 @@ export type ApprovalState =
 
 export interface ActionTemplate {
   command?: CommandConfig | null;
+  one_time?: boolean;
+  terminal_available?: boolean;
   id: string;
   target_id: string;
   name: string;
@@ -540,7 +556,12 @@ export interface ParameterDefinition {
   max_length: number | null;
 }
 export interface RunOutput {
-  items: Array<{ sequence: number; stream: string; text: string }>;
+  items: Array<{
+    sequence: number;
+    stream: string;
+    text: string;
+    created_at_unix_ms: number;
+  }>;
   next_cursor: number;
   oldest_cursor: number;
   truncated: boolean;
@@ -559,6 +580,18 @@ export async function readRunOutput(
       method: "POST",
       headers: sessionJsonHeaders(token),
       body: JSON.stringify({ cursor, wait_ms: 0 }),
+    }),
+  );
+}
+
+export async function deleteRunOutput(
+  token: string,
+  id: string,
+): Promise<void> {
+  await requireOk(
+    await fetch(`/api/v1/runs/${encodeURIComponent(id)}/output`, {
+      method: "DELETE",
+      headers: sessionHeaders(token),
     }),
   );
 }
@@ -946,6 +979,19 @@ export async function listActionTemplates(
 ): Promise<ActionTemplateListResponse> {
   return readJson<ActionTemplateListResponse>(
     await fetch("/api/v1/action-templates", {
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionHeaders(sessionToken),
+    }),
+  );
+}
+
+export async function getActionTemplate(
+  sessionToken: string,
+  id: string,
+): Promise<ActionTemplate> {
+  return readJson<ActionTemplate>(
+    await fetch(`/api/v1/action-templates/${encodeURIComponent(id)}`, {
       cache: "no-store",
       credentials: "omit",
       headers: sessionHeaders(sessionToken),

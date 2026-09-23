@@ -46,6 +46,12 @@ try {
           };
         else if (path === "/api/v1/session")
           body = { authenticated: true, expires_in_seconds: 3600 };
+        else if (path === "/api/v1/session/methods")
+          body = {
+            pin_enabled: false,
+            totp_enabled: false,
+            pairing_link_enabled: true,
+          };
         else if (
           /credential-references|targets|action-templates|approvals|runs|events|terminals/.test(
             path,

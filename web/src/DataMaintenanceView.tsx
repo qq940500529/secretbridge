@@ -11,6 +11,7 @@ import {
   previewConfiguration,
   type BackupReport,
   type ConfigurationBundle,
+  type Diagnostics,
   type ImportReport,
 } from "./api";
 
@@ -44,6 +45,7 @@ export function DataMaintenanceView({
   const [imported, setImported] = useState(false);
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   async function perform(action: () => Promise<void>) {
     setBusy(true);
     setError(false);
@@ -282,6 +284,55 @@ export function DataMaintenanceView({
                 ? "精简诊断仅包含软件版本、平台、数据库版本和状态计数，不包含主机地址、路径、凭据名称、参数或输出。"
                 : "A concise diagnostic report contains software/platform/schema versions and status counts, without host addresses, paths, credential names, arguments or output."}
             </p>
+            <button
+              className="workbench-button"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () =>
+                  setDiagnostics(await getDiagnostics(sessionToken)),
+                )
+              }
+            >
+              {zh ? "预览诊断信息" : "Preview diagnostics"}
+            </button>
+            {diagnostics && (
+              <div className="rounded-lg border border-slate-200 p-4 text-sm space-y-2">
+                <p>
+                  {zh ? "生成时间" : "Generated"}:{" "}
+                  {new Intl.DateTimeFormat(language, {
+                    dateStyle: "medium",
+                    timeStyle: "medium",
+                  }).format(diagnostics.generated_at_unix_ms)}
+                </p>
+                <p>
+                  {zh ? "软件版本" : "Version"}: {diagnostics.version} ·{" "}
+                  {zh ? "数据库版本" : "Schema"}: {diagnostics.schema_version}
+                </p>
+                <p>
+                  {zh ? "凭据引用" : "Credentials"}: {diagnostics.credentials} ·{" "}
+                  {zh ? "连接" : "Connections"}: {diagnostics.connections} ·{" "}
+                  {zh ? "模板" : "Templates"}: {diagnostics.templates}
+                </p>
+                <p>
+                  {zh ? "运行状态" : "Run states"}:{" "}
+                  {Object.entries(diagnostics.run_states)
+                    .map(([name, count]) => `${name} ${count}`)
+                    .join(" · ") || "—"}
+                </p>
+                <p>
+                  {zh ? "失败阶段" : "Failure stages"}:{" "}
+                  {Object.entries(diagnostics.failure_stages)
+                    .map(([name, count]) => `${name} ${count}`)
+                    .join(" · ") || "—"}
+                </p>
+                <p>
+                  {zh ? "错误分类" : "Error classes"}:{" "}
+                  {Object.entries(diagnostics.error_codes)
+                    .map(([name, count]) => `${name} ${count}`)
+                    .join(" · ") || "—"}
+                </p>
+              </div>
+            )}
             <button
               className="workbench-button"
               disabled={busy}

@@ -5,10 +5,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     ApiError, AppState, BROWSER_PIN_CREDENTIAL_ID, BROWSER_TOTP_CREDENTIAL_ID, BrowserAuthChannel,
-    BrowserAuthEventKind, BrowserAuthMode, CatalogError, HeaderMap, Json, PairResponse, State,
-    StatusCode, TotpCodeRequest, TotpSetupResponse, Uuid, authentication_attempt_allowed,
-    map_catalog_error, map_secret_store_error, record_authentication_failure, require_session,
-    reset_authentication_attempts, task, validate_origin,
+    BrowserAuthEventKind, BrowserAuthMode, CatalogError, CurrentBrowserAuthProof, HeaderMap, Json,
+    PairResponse, State, StatusCode, TotpCodeRequest, TotpSetupResponse, Uuid,
+    authentication_attempt_allowed, map_catalog_error, map_secret_store_error,
+    record_authentication_failure, require_session, reset_authentication_attempts, task,
+    validate_origin, verify_current_browser_auth,
 };
 use base64::Engine as _;
 use qrcodegen::{QrCode, QrCodeEcc};
@@ -233,9 +234,15 @@ pub(super) async fn pair(
 pub(super) async fn start_setup(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Json(proof): Json<CurrentBrowserAuthProof>,
 ) -> Result<Json<TotpSetupResponse>, ApiError> {
     validate_origin(&headers, &state)?;
     require_session(&state, &headers).await?;
+    let previous_mode = state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?;
+    verify_current_browser_auth(&state, previous_mode, proof).await?;
     let material = generate_setup().map_err(|()| ApiError::Internal)?;
     let response = TotpSetupResponse {
         manual_key: material.secret.to_string(),
@@ -312,6 +319,10 @@ pub(super) async fn confirm_setup(
             .map_err(map_catalog_error)?;
         return Err(ApiError::Unauthorized);
     };
+    let previous_mode = state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?;
     let store = state.secret_store.clone();
     let previous_secret = {
         let store = store.clone();
@@ -337,6 +348,16 @@ pub(super) async fn confirm_setup(
     let store = state.secret_store.clone();
     let _ = task::spawn_blocking(move || store.delete(BROWSER_PIN_CREDENTIAL_ID)).await;
     reset_authentication_attempts(&state).await;
+    if previous_mode != BrowserAuthMode::PairingLink {
+        state
+            .catalog
+            .record_browser_auth_event(
+                BrowserAuthEventKind::Disabled,
+                BrowserAuthChannel::Settings,
+                None,
+            )
+            .map_err(map_catalog_error)?;
+    }
     state
         .catalog
         .record_browser_auth_event(

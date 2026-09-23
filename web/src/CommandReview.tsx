@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { useState } from "react";
 import type { ActionTemplate, ParameterValue } from "./api";
 import { sshCommandPreview } from "./SshEditor";
 
@@ -8,12 +9,17 @@ export function CommandReview({
   expectedVersion,
   language,
   parameters = {},
+  expanded = false,
 }: {
   parameters?: Record<string, ParameterValue>;
   template?: ActionTemplate;
   expectedVersion: number | null;
   language: "zh-CN" | "en";
+  expanded?: boolean;
 }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   if (!template?.command) return null;
   const zh = language === "zh-CN";
   if (template.version !== expectedVersion)
@@ -25,6 +31,14 @@ export function CommandReview({
       </p>
     );
   const config = template.command;
+  const reviewedArguments = config.arguments.map((argument) => {
+    const parameter = config.parameters?.find(
+      (definition) => argument === `{{param:${definition.name}}}`,
+    );
+    return parameter && Object.hasOwn(parameters, parameter.name)
+      ? String(parameters[parameter.name])
+      : argument;
+  });
   if (config.database)
     return (
       <details className="mt-3 border-y border-slate-200 py-3">
@@ -201,7 +215,7 @@ export function CommandReview({
       </details>
     );
   return (
-    <details className="mt-3 border-y border-slate-200 py-3">
+    <details open={expanded} className="mt-3 border-y border-slate-200 py-3">
       <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
         {zh ? "查看将执行的程序与插槽" : "Review program and credential slots"}
       </summary>
@@ -211,7 +225,14 @@ export function CommandReview({
             <dt className="text-slate-500">
               {zh ? "安全终端" : "Secure terminal"}
             </dt>
-            <dd className="m-0 break-all font-mono">{config.terminal_id}</dd>
+            <dd className="m-0">
+              <details>
+                <summary className="cursor-pointer text-slate-600">
+                  {zh ? "查看内部终端 ID" : "Show internal terminal ID"}
+                </summary>
+                <code className="break-all">{config.terminal_id}</code>
+              </details>
+            </dd>
           </>
         )}
         <dt className="text-slate-500">{zh ? "程序" : "Program"}</dt>
@@ -219,18 +240,43 @@ export function CommandReview({
         <dt className="text-slate-500">{zh ? "工作目录" : "Directory"}</dt>
         <dd className="m-0 break-all font-mono">{config.working_directory}</dd>
         <dt className="text-slate-500">{zh ? "参数" : "Arguments"}</dt>
-        <dd className="m-0 whitespace-pre-wrap break-all font-mono">
-          {JSON.stringify(
-            config.arguments.map((arg) => {
-              const p = config.parameters?.find(
-                (p) => arg === `{{param:${p.name}}}`,
-              );
-              return p && Object.hasOwn(parameters, p.name)
-                ? String(parameters[p.name])
-                : arg;
-            }),
-            null,
-            2,
+        <dd className="m-0 min-w-0">
+          <ol className="m-0 list-decimal space-y-2 pl-5 font-mono">
+            {reviewedArguments.map((argument, index) => (
+              <li
+                key={index}
+                className="whitespace-pre-wrap break-all rounded bg-slate-50 px-2 py-1"
+              >
+                {argument || (zh ? "（空参数）" : "(empty argument)")}
+              </li>
+            ))}
+          </ol>
+          <button
+            type="button"
+            className="workbench-button mt-2"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(
+                  reviewedArguments.join("\n"),
+                );
+                setCopyState("copied");
+              } catch {
+                setCopyState("failed");
+              }
+            }}
+          >
+            {zh ? "复制脱敏参数" : "Copy sanitized arguments"}
+          </button>
+          {copyState !== "idle" && (
+            <span role="status" className="ml-2 text-slate-600">
+              {copyState === "copied"
+                ? zh
+                  ? "已复制"
+                  : "Copied"
+                : zh
+                  ? "复制失败"
+                  : "Could not copy"}
+            </span>
           )}
         </dd>
         <dt className="text-slate-500">{zh ? "凭据插槽" : "Slots"}</dt>
@@ -245,6 +291,13 @@ export function CommandReview({
           ))}
         </dd>
       </dl>
+      {reviewedArguments.some((argument) => argument.length > 2048) && (
+        <p role="status" className="mt-3 text-xs font-semibold text-amber-800">
+          {zh
+            ? "此操作包含长参数。批准前请展开并逐项核对完整内容。"
+            : "This operation has long arguments. Expand and review every item before approval."}
+        </p>
+      )}
       {config.terminal_id && (
         <p className="mt-2 text-xs text-slate-600">
           {zh

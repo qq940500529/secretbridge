@@ -30,13 +30,22 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7, pinned
         with:
           node-version-file: .node-version
+      - name: Restore pinned cargo-audit
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4, pinned
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('security/dependency-vulnerability-policy.json', 'rust-toolchain.toml') }}
       - name: Install locked dependency scanners
         shell: bash
         run: |
           corepack enable
           pnpm install --frozen-lockfile
           version="$(python tools/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
-          cargo install cargo-audit --version "$version" --locked
+          installed="$(cargo audit --version 2>/dev/null || true)"
+          case "$installed" in
+            "cargo-audit $version"|"cargo-audit-audit $version") ;;
+            *) cargo install cargo-audit --version "$version" --locked --force ;;
+          esac
       - name: Check Rust and production Web dependencies
         run: python tools/check_dependency_vulnerabilities.py
   database-connectors:
@@ -62,6 +71,10 @@ jobs:
         run: bash tools/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +126,45 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check locked dependency licenses
         run: python tools/check_dependency_licenses.py
+      - name: Record toolchain metadata
+        if: always()
+        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
+      - name: Retain sanitized check reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: repository-checks-${{ runner.os }}-${{ runner.arch }}
+          path: dist/ci-metadata.json
+          if-no-files-found: warn
+          retention-days: 14
+  package-delivery:
+    name: package-delivery (${{ matrix.os }})
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, pinned
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7, pinned
+        with:
+          node-version-file: .node-version
+      - name: Build Web assets needed by native package
+        shell: bash
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Build native application
+        run: cargo build --locked
       - name: Package matching native application and source
         shell: bash
         env:
@@ -120,7 +172,6 @@ jobs:
         run: |
           executable=target/debug/secretbridge-server
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          cargo build --locked
           python tools/package_release.py --binary "$executable" --output dist/acceptance
       - name: Check personal-scale startup and idle resource baseline
         shell: bash
@@ -131,9 +182,14 @@ jobs:
       - name: Test isolated native package lifecycle
         shell: bash
         run: |
+          archives_checked=0
           for archive in dist/acceptance/*.zip dist/acceptance/*.tar.gz; do
-            if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
+            if [ -f "$archive" ]; then
+              python tools/test_packaged_delivery.py "$archive"
+              archives_checked=$((archives_checked + 1))
+            fi
           done
+          test "$archives_checked" -eq 1
       - name: Record toolchain metadata
         if: always()
         run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
@@ -141,7 +197,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: repository-checks-${{ runner.os }}-${{ runner.arch }}
+          name: package-delivery-${{ runner.os }}-${{ runner.arch }}
           path: |
             dist/ci-metadata.json
             dist/personal-scale.json

@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use rusqlite::{Connection, OptionalExtension};
 use uuid::Uuid;
 
 use super::{
-    CredentialKind, CredentialReference, PostgresTargetConfig, PostgresTlsMode, SecretState,
-    Target, TargetEnvironment, TargetKind, u64_from_row, uuid_from_row,
+    ActionTemplate, ApprovalOperation, ApprovalResultScope, CatalogError, CredentialKind,
+    CredentialReference, PostgresTargetConfig, PostgresTlsMode, SecretState, Target,
+    TargetEnvironment, TargetKind, u64_from_row, uuid_from_row,
 };
 
 pub(super) fn credential_from_row(
@@ -68,5 +70,46 @@ pub(super) fn target_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Targe
         created_at_unix_ms: u64_from_row(row, 14)?,
         updated_at_unix_ms: u64_from_row(row, 15)?,
         version: u64_from_row(row, 16)?,
+    })
+}
+
+pub(super) fn action_template_by_id(
+    connection: &Connection,
+    id: Uuid,
+) -> Result<Option<ActionTemplate>, CatalogError> {
+    connection
+        .query_row(
+            "SELECT id, target_id, name, operation, result_scope, description,
+                    timeout_seconds, enabled, created_at_unix_ms,
+                    updated_at_unix_ms, version, command_json, lifecycle
+               FROM action_templates WHERE id = ?1",
+            [id.to_string()],
+            action_template_from_row,
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)
+}
+
+pub(super) fn action_template_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<ActionTemplate> {
+    Ok(ActionTemplate {
+        command: row
+            .get::<_, Option<String>>(11)?
+            .map(|json| serde_json::from_str(&json).map_err(|_| rusqlite::Error::InvalidQuery))
+            .transpose()?,
+        one_time: row.get::<_, String>(12)? == "one_time",
+        terminal_available: true,
+        id: uuid_from_row(row, 0)?,
+        target_id: uuid_from_row(row, 1)?,
+        name: row.get(2)?,
+        operation: ApprovalOperation::from_storage(&row.get::<_, String>(3)?)?,
+        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(4)?)?,
+        description: row.get(5)?,
+        timeout_seconds: u64_from_row(row, 6)?,
+        enabled: row.get(7)?,
+        created_at_unix_ms: u64_from_row(row, 8)?,
+        updated_at_unix_ms: u64_from_row(row, 9)?,
+        version: u64_from_row(row, 10)?,
     })
 }

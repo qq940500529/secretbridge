@@ -51,6 +51,12 @@ try {
       };
     else if (path.endsWith("/session"))
       body = { authenticated: true, expires_in_seconds: 3600 };
+    else if (path.endsWith("/session/methods"))
+      body = {
+        pin_enabled: false,
+        totp_enabled: false,
+        pairing_link_enabled: true,
+      };
     else if (path.endsWith("/maintenance/configuration")) body = bundle;
     else if (path.endsWith("/configuration/preview")) {
       assert.deepEqual(request.postDataJSON(), bundle);
@@ -89,11 +95,19 @@ try {
         format: "secretbridge-diagnostics",
         version: "0.1.0-test",
         platform: "windows",
-        schema_version: 16,
+        generated_at_unix_ms: Date.now(),
+        schema_version: 20,
+        storage: "sqlite",
         credentials: 1,
+        configured_credentials: 1,
         connections: 1,
         templates: 1,
-        error_codes: {},
+        pending_authorizations: 0,
+        failed_runs: 1,
+        terminal_sessions: 0,
+        run_states: { failed: 1 },
+        failure_stages: { connection: 1 },
+        error_codes: { ssh_connection_failed: 1 },
       };
     else body = { items: [], storage: "sqlite" };
     await route.fulfill({
@@ -178,6 +192,8 @@ try {
       fullPage: true,
     });
   await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await page.getByRole("button", { name: "预览诊断信息" }).click();
+  await page.getByText("connection 1", { exact: false }).waitFor();
   download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载诊断信息", exact: true }).click();
   assert.equal(
