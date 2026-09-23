@@ -118,13 +118,22 @@ def accept(archive: Path) -> None:
                 )
 
             installed = run("install", package)
+            assert installed["management_page"] in {"opened", "manual_open_required"}
+            if installed["management_page"] == "manual_open_required":
+                assert (
+                    installed["management_page_next_action"]
+                    == "run_active_binary_open_on_local_desktop"
+                )
+            assert not any(key in installed for key in ("token", "pairing_url", "console_url"))
             replayed = run("install", package)
             assert replayed["replayed"]
             assert replayed["binary"] == installed["binary"]
+            assert replayed["management_page"] == "not_requested"
             run("stop")
             replayed = run("install", package)
             assert replayed["replayed"]
             assert replayed["binary"] == installed["binary"]
+            assert replayed["management_page"] == "not_requested"
             assert run("status")["running"]
             installed_status = run("status")["installation"]
             assert installed_status["binary"] == installed["binary"]
@@ -210,6 +219,7 @@ def accept(archive: Path) -> None:
             rehash(upgraded)
             upgrade_result = run("install", upgraded)
             assert upgrade_result["binary"] != installed["binary"]
+            assert upgrade_result["management_page"] == "not_requested"
             assert "delivery upgrade" in web_text()
             assert run("status")["installation"]["previous_release"] == original
             rollback_result = run("rollback")
@@ -236,7 +246,11 @@ def accept(archive: Path) -> None:
             assert all(not Path(path).exists() for path in saved_startup)
             # A second clean installation exercises the explicit configuration-removal option.
             env["SECRETBRIDGE_INSTALL_DIR"] = str(workspace / "second-install")
-            run("install", package)
+            skipped = run("install", package, "--no-open")
+            assert skipped["management_page"] == "manual_open_required"
+            assert (
+                skipped["management_page_next_action"] == "run_active_binary_open_on_local_desktop"
+            )
             (data / "user-note.txt").write_text("retain", encoding="utf-8")
             result = run("uninstall", "--remove-configuration")
             assert result["system_credentials_retained"] and not result["data_retained"]

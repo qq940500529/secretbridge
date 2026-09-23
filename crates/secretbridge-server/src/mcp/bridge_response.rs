@@ -107,6 +107,14 @@ impl BridgeResponse {
                     })
                 })
             })
+        } else if code == "initialization_required" {
+            error.data.and_then(|value| {
+                let console_url = value.get("console_url")?.as_str()?;
+                Some(serde_json::json!({
+                    "console_url": console_url,
+                    "next_actions": ["open_local_management_page", "set_required_pin", "optionally_bind_authenticator", "retry_after_initialization"]
+                }))
+            })
         } else {
             None
         };

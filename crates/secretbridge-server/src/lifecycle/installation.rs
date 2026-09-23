@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     env, fs,
+    future::Future,
     io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
@@ -361,7 +362,40 @@ pub(super) fn verify(package: &Path) -> Result<serde_json::Value> {
     }))
 }
 
-pub(super) async fn install(package: &Path) -> Result<()> {
+async fn management_page_handoff<F, Fut>(fresh: bool, skip_open: bool, open: F) -> &'static str
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    if !fresh {
+        return "not_requested";
+    }
+    if skip_open {
+        return "manual_open_required";
+    }
+    if open().await.is_ok() {
+        "opened"
+    } else {
+        "manual_open_required"
+    }
+}
+
+async fn handoff_after_install(fresh: bool, no_open: bool) -> &'static str {
+    let skip_open = no_open
+        || ["CI", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+            .iter()
+            .any(|name| env::var_os(name).is_some());
+    management_page_handoff(fresh, skip_open, || async {
+        super::controller()?
+            .open()
+            .await
+            .map(|_| ())
+            .map_err(|_| "browser_open_failed")
+    })
+    .await
+}
+
+pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
     let package = fs::canonicalize(package).map_err(|_| "package_unavailable")?;
     let verified = manifest(&package, true)?;
     let root = root()?;
@@ -408,7 +442,7 @@ pub(super) async fn install(package: &Path) -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"replayed":true})
+            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"replayed":true,"management_page":"not_requested"})
         );
         return Ok(());
     }
@@ -416,9 +450,12 @@ pub(super) async fn install(package: &Path) -> Result<()> {
     pending.previous = old.active.clone();
     pending.active = Some(id);
     activate(&root, &old, &mut pending, &release, &verified).await?;
+    let management_page = handoff_after_install(old.active.is_none(), no_open).await;
+    let management_page_next_action = (management_page == "manual_open_required")
+        .then_some("run_active_binary_open_on_local_desktop");
     println!(
         "{}",
-        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"data_retained":true})
+        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"data_retained":true,"management_page":management_page,"management_page_next_action":management_page_next_action})
     );
     Ok(())
 }
@@ -650,6 +687,39 @@ async fn remove_release_files_with_retry(release: &Path, manifest: &Manifest) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fresh_install_handoff_reports_open_failure_and_skip_without_retrying() {
+        use std::cell::Cell;
+
+        assert_eq!(
+            management_page_handoff(true, false, || async { Ok(()) }).await,
+            "opened"
+        );
+        assert_eq!(
+            management_page_handoff(true, false, || async { Err("browser_open_failed") }).await,
+            "manual_open_required"
+        );
+        let called = Cell::new(false);
+        assert_eq!(
+            management_page_handoff(true, true, || {
+                called.set(true);
+                async { Ok(()) }
+            })
+            .await,
+            "manual_open_required"
+        );
+        assert!(!called.get());
+        assert_eq!(
+            management_page_handoff(false, false, || {
+                called.set(true);
+                async { Ok(()) }
+            })
+            .await,
+            "not_requested"
+        );
+        assert!(!called.get());
+    }
 
     #[test]
     fn package_paths_reject_traversal_absolute_and_platform_escapes() {
