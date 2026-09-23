@@ -518,6 +518,7 @@ impl McpBackend {
                             slot: "login".to_owned(),
                         },
                         remote_program: params.remote_program,
+                        working_directory: params.working_directory,
                         arguments: params
                             .arguments
                             .into_iter()
@@ -2089,6 +2090,9 @@ struct RequestSshParams {
     port: u16,
     #[schemars(description = "Absolute remote executable path, not a shell command string")]
     remote_program: String,
+    #[serde(default)]
+    #[schemars(description = "Optional absolute remote working directory; no shell expressions")]
+    working_directory: Option<String>,
     #[schemars(description = "Remote argv items; sent as individually quoted POSIX words")]
     arguments: Vec<String>,
     #[schemars(description = "Pending approval lifetime in seconds, 60 through 3600")]

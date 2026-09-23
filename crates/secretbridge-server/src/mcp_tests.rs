@@ -278,6 +278,182 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
         .expect("remove secure terminal");
 }
 
+#[tokio::test]
+async fn dynamic_ssh_uses_only_catalog_metadata_and_keeps_host_key_pinned() {
+    use std::sync::atomic::Ordering;
+
+    let fixture = crate::ssh_task::tests::server().await;
+    let (state, _) = AppState::new([]);
+    let credential = state
+        .catalog
+        .create_credential_reference(
+            &serde_json::from_value(json!({
+                "name":"Synthetic SSH credential", "kind":"password",
+                "address":"127.0.0.1", "username":"operator"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    state
+        .secret_store
+        .set(credential.id, crate::ssh_task::tests::SECRET)
+        .unwrap();
+    state
+        .catalog
+        .set_credential_secret_state(credential.id, credential.version, true)
+        .unwrap();
+    let target = state
+        .catalog
+        .create_target(&CreateTarget {
+            name: "Synthetic SSH target".to_owned(),
+            kind: TargetKind::SshHost,
+            environment: TargetEnvironment::Test,
+            description: None,
+            address: Some("127.0.0.1".to_owned()),
+            username: Some("operator".to_owned()),
+            allow_insecure_protocol: false,
+            credential_reference_id: Some(credential.id),
+            postgres: None,
+        })
+        .unwrap();
+    let (client, server_handle) = connect(state.clone()).await;
+    let conversation = terminal_tool(
+        &client,
+        "secretbridge_begin_conversation",
+        json!({"summary":"Synthetic SSH validation"}),
+    )
+    .await;
+    let request = |fingerprint: &str, program: &str, timeout: u64| {
+        json!({
+            "connection_id": target.id,
+            "conversation_id": conversation["id"],
+            "name": "Synthetic SSH read",
+            "host_key_sha256": fingerprint,
+            "port": fixture.port,
+            "remote_program": program,
+            "working_directory": "/tmp/synthetic' folder",
+            "arguments": ["non-secret"],
+            "expires_in_seconds": 60,
+            "timeout_seconds": timeout,
+            "reason": "Synthetic read-only check"
+        })
+    };
+    let approval = terminal_tool(
+        &client,
+        "secretbridge_request_ssh",
+        request(&fixture.fingerprint, "/usr/bin/printf", 10),
+    )
+    .await;
+    assert_eq!(approval["state"], "pending");
+    assert_eq!(approval["conversation_id"], conversation["id"]);
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 0);
+    let approval_id = Uuid::parse_str(approval["id"].as_str().unwrap()).unwrap();
+    state
+        .catalog
+        .approve_approval(
+            approval_id,
+            &DecideApproval {
+                expected_version: approval["version"].as_u64().unwrap(),
+                note: None,
+            },
+        )
+        .unwrap();
+    let run = terminal_tool(
+        &client,
+        "secretbridge_create_run",
+        json!({"approval_id":approval_id,"idempotency_key":"synthetic-ssh-success"}),
+    )
+    .await;
+    let run_id = Uuid::parse_str(run["run"]["id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        crate::ssh_task::tests::wait(&state, run_id).await.state,
+        crate::catalog::RunState::Succeeded
+    );
+    let output = terminal_tool(
+        &client,
+        "secretbridge_read_run_output",
+        json!({"id":run_id,"cursor":0}),
+    )
+    .await;
+    let encoded = output.to_string();
+    assert!(encoded.contains("[REDACTED]"));
+    assert!(!encoded.contains(crate::ssh_task::tests::SECRET));
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 1);
+    assert!(
+        fixture.commands.lock().unwrap()[0]
+            .starts_with("cd '/tmp/synthetic'\\'' folder' && exec '/usr/bin/printf'")
+    );
+
+    let wrong = russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+        .unwrap()
+        .public_key()
+        .fingerprint(russh::keys::HashAlg::Sha256)
+        .to_string();
+    let rejected = terminal_tool(
+        &client,
+        "secretbridge_request_ssh",
+        request(&wrong, "/usr/bin/printf", 10),
+    )
+    .await;
+    let rejected_id = Uuid::parse_str(rejected["id"].as_str().unwrap()).unwrap();
+    state
+        .catalog
+        .approve_approval(
+            rejected_id,
+            &DecideApproval {
+                expected_version: rejected["version"].as_u64().unwrap(),
+                note: None,
+            },
+        )
+        .unwrap();
+    let failed = terminal_tool(
+        &client,
+        "secretbridge_create_run",
+        json!({"approval_id":rejected_id,"idempotency_key":"synthetic-ssh-wrong-key"}),
+    )
+    .await;
+    let failed_id = Uuid::parse_str(failed["run"]["id"].as_str().unwrap()).unwrap();
+    let page = crate::ssh_task::tests::wait(&state, failed_id).await;
+    assert_eq!(page.state, crate::catalog::RunState::Failed);
+    assert!(
+        page.items
+            .iter()
+            .any(|item| item.text.contains("host_key_rejected"))
+    );
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 1);
+
+    let denied = terminal_tool(
+        &client,
+        "secretbridge_request_ssh",
+        request(&fixture.fingerprint, "/usr/bin/printf", 10),
+    )
+    .await;
+    let denied_id = Uuid::parse_str(denied["id"].as_str().unwrap()).unwrap();
+    state
+        .catalog
+        .deny_approval(
+            denied_id,
+            &DecideApproval {
+                expected_version: denied["version"].as_u64().unwrap(),
+                note: None,
+            },
+        )
+        .unwrap();
+    assert!(
+        client
+            .call_tool(
+                CallToolRequestParams::new("secretbridge_create_run").with_arguments(arguments(
+                    json!({"approval_id":denied_id,"idempotency_key":"synthetic-ssh-denied"}),
+                )),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 1);
+    client.cancel().await.expect("stop MCP client");
+    server_handle.await.expect("join MCP server");
+}
+
 async fn connect(
     state: AppState,
 ) -> (
@@ -420,6 +596,7 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "reason",
                 "remote_program",
                 "timeout_seconds",
+                "working_directory",
             ],
         ),
         ("secretbridge_get_approval", vec!["id"]),

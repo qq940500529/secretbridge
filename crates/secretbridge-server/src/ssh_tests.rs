@@ -282,6 +282,27 @@ pub(crate) async fn wait(state: &AppState, id: Uuid) -> crate::command::OutputPa
 fn text(page: &crate::command::OutputPage) -> String {
     page.items.iter().map(|c| c.text.as_str()).collect()
 }
+
+#[tokio::test]
+async fn remote_working_directory_is_absolute_bounded_and_quoted() {
+    let fixture = server().await;
+    let mut command = config(&fixture, Uuid::new_v4());
+    command.ssh.as_mut().unwrap().working_directory = Some("/tmp/synthetic' folder".into());
+    let ssh = command.ssh.as_ref().unwrap();
+    ssh.validate(&command).unwrap();
+    assert!(
+        ssh.command(&ParameterValues::from([(
+            "message".to_owned(),
+            json!("ok")
+        )]))
+        .unwrap()
+        .starts_with("cd '/tmp/synthetic'\\'' folder' && exec '/usr/bin/printf'")
+    );
+    command.ssh.as_mut().unwrap().working_directory = Some("relative".into());
+    assert!(command.ssh.as_ref().unwrap().validate(&command).is_err());
+    command.ssh.as_mut().unwrap().working_directory = Some("/tmp/line\nbreak".into());
+    assert!(command.ssh.as_ref().unwrap().validate(&command).is_err());
+}
 #[tokio::test]
 async fn real_ssh_password_uses_frozen_quoted_arguments_filters_streams_and_replays() {
     let fixture = server().await;
