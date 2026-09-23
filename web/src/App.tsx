@@ -19,7 +19,7 @@ import {
   SquareTerminal,
   type LucideIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 
 import {
   getBrowserAuthMethods,
@@ -29,9 +29,13 @@ import {
   pairWithPin,
   pairWithTotp,
   revokePageSession,
+  type BrowserAuthMethods,
   type ServiceStatus,
 } from "./api";
-import { BrowserAuthenticationSettings } from "./BrowserAuthenticationSettings";
+import {
+  BrowserAuthenticationSettings,
+  type AuthMethodStatus,
+} from "./BrowserAuthenticationSettings";
 import { consumePairingToken } from "./pairing";
 import { BackgroundServiceView } from "./BackgroundServiceView";
 import { ISSUE_URL, LegalConsent } from "./LegalConsent";
@@ -229,8 +233,10 @@ export function App() {
     null,
   );
   const [sessionToken, setSessionToken] = useState<string | null>(null);
-  const [pinEnabled, setPinEnabled] = useState(false);
-  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [browserAuthMethods, setBrowserAuthMethods] =
+    useState<BrowserAuthMethods | null>(null);
+  const [authMethodStatus, setAuthMethodStatus] =
+    useState<AuthMethodStatus>("loading");
   const [activePage, setActivePage] = useState<Page>("operations");
   const [taskContext, setTaskContext] = useState<{
     targetId?: string;
@@ -240,6 +246,19 @@ export function App() {
   const [disconnectError, setDisconnectError] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const text = copy[language];
+  const pinEnabled = browserAuthMethods?.pin_enabled ?? false;
+  const totpEnabled = browserAuthMethods?.totp_enabled ?? false;
+
+  const refreshBrowserAuthMethods = useCallback(async () => {
+    setAuthMethodStatus("loading");
+    try {
+      setBrowserAuthMethods(await getBrowserAuthMethods());
+      setAuthMethodStatus("ready");
+    } catch {
+      setBrowserAuthMethods(null);
+      setAuthMethodStatus("error");
+    }
+  }, []);
 
   function changeLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
@@ -252,6 +271,7 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    void refreshBrowserAuthMethods();
 
     async function initialize() {
       // Remove the one-time capability before the first network round-trip.
@@ -294,12 +314,6 @@ export function App() {
           if (active) setServiceStatus(refreshedStatus);
           return;
         }
-
-        const methods = await getBrowserAuthMethods();
-        if (active) {
-          setPinEnabled(methods.pin_enabled);
-          setTotpEnabled(methods.totp_enabled);
-        }
       } catch {
         if (!active) return;
         setConnection("offline");
@@ -313,7 +327,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshBrowserAuthMethods]);
 
   return (
     <Tooltip.Provider delayDuration={250}>
@@ -453,7 +467,7 @@ export function App() {
           <main
             id="main-content"
             tabIndex={-1}
-            className="mx-auto max-w-7xl px-4 py-8 sm:px-8 sm:py-10"
+            className="mx-auto max-w-[104rem] px-4 py-8 sm:px-8 sm:py-10"
           >
             {activePage === "settings" ? (
               <>
@@ -483,10 +497,9 @@ export function App() {
                     sessionToken={sessionToken}
                     pinEnabled={pinEnabled}
                     totpEnabled={totpEnabled}
-                    onChanged={(method) => {
-                      setPinEnabled(method === "pin");
-                      setTotpEnabled(method === "totp");
-                    }}
+                    authMethodStatus={authMethodStatus}
+                    onRetry={() => void refreshBrowserAuthMethods()}
+                    onChanged={() => void refreshBrowserAuthMethods()}
                   />
                 )}
                 {sessionToken && (
@@ -590,6 +603,8 @@ export function App() {
                 language={language}
                 pinEnabled={pinEnabled}
                 totpEnabled={totpEnabled}
+                authMethodStatus={authMethodStatus}
+                onRetry={() => void refreshBrowserAuthMethods()}
                 onPin={async (pin) => {
                   setAuthentication("pairing");
                   try {
@@ -689,6 +704,8 @@ function PairingRequired({
   language,
   pinEnabled,
   totpEnabled,
+  authMethodStatus,
+  onRetry,
   onPin,
   onTotp,
 }: {
@@ -697,6 +714,8 @@ function PairingRequired({
   language: Language;
   pinEnabled: boolean;
   totpEnabled: boolean;
+  authMethodStatus: AuthMethodStatus;
+  onRetry: () => void;
   onPin: (pin: string) => Promise<void>;
   onTotp: (code: string) => Promise<void>;
 }) {
@@ -717,7 +736,26 @@ function PairingRequired({
           {text.futureModule}
         </h1>
         <p className="mb-0 mt-3 leading-7 text-slate-600">{text.futureBody}</p>
-        {(pinEnabled || totpEnabled) && (
+        {authMethodStatus === "loading" && (
+          <p role="status" className="mt-5 text-sm text-slate-600">
+            {zh ? "正在检查身份验证方式…" : "Checking verification methods…"}
+          </p>
+        )}
+        {authMethodStatus === "error" && (
+          <div role="alert" className="mt-5 text-sm text-rose-700">
+            {zh
+              ? "无法读取身份验证配置。请重试；不会将其视为未配置。"
+              : "Could not load verification settings. Retry; they are not assumed unset."}
+            <button
+              type="button"
+              className="workbench-button ml-3"
+              onClick={onRetry}
+            >
+              {zh ? "重试" : "Retry"}
+            </button>
+          </div>
+        )}
+        {authMethodStatus === "ready" && (pinEnabled || totpEnabled) && (
           <form
             className="mx-auto mt-6 max-w-sm space-y-3 text-left"
             onSubmit={async (event) => {

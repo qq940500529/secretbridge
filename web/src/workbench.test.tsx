@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorDialog, MasterDetail, SectionTabs } from "./Workbench";
 import { revokePageSession } from "./api";
+import type { ActionTemplate } from "./api";
+import { CommandReview } from "./CommandReview";
 
 afterEach(() => vi.unstubAllGlobals());
 describe("workbench surfaces", () => {
@@ -109,5 +111,40 @@ describe("workbench surfaces", () => {
       vi.fn().mockResolvedValue(new Response(null, { status: 401 })),
     );
     await expect(revokePageSession("synthetic-session")).rejects.toThrow();
+  });
+  it("shows every byte of a long command argument in the expanded approval review", () => {
+    const longArgument = "合成参数".repeat(700);
+    const template = {
+      id: "draft",
+      target_id: "target",
+      name: "Long command",
+      operation: "command_execution",
+      result_scope: "sanitized_output",
+      description: null,
+      timeout_seconds: 30,
+      enabled: true,
+      created_at_unix_ms: 1,
+      updated_at_unix_ms: 1,
+      version: 1,
+      command: {
+        terminal_id: "terminal",
+        program: "/usr/bin/example",
+        working_directory: "/tmp",
+        arguments: ["{{.Names}}", longArgument],
+        slots: [],
+      },
+    } as ActionTemplate;
+    const html = renderToStaticMarkup(
+      <CommandReview
+        template={template}
+        expectedVersion={1}
+        language="zh-CN"
+        expanded
+      />,
+    );
+    expect(html).toContain(longArgument);
+    expect(html).toContain("{{.Names}}");
+    expect(html).toContain("terminal");
+    expect(html).toContain('open=""');
   });
 });

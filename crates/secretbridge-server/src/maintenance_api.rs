@@ -106,6 +106,7 @@ struct Diagnostics {
     format: &'static str,
     version: &'static str,
     platform: &'static str,
+    generated_at_unix_ms: u64,
     schema_version: i64,
     storage: ConfigurationStorage,
     credentials: usize,
@@ -116,7 +117,13 @@ struct Diagnostics {
     failed_runs: usize,
     terminal_sessions: usize,
     error_codes: std::collections::BTreeMap<&'static str, usize>,
+    run_states: std::collections::BTreeMap<&'static str, usize>,
+    failure_stages: std::collections::BTreeMap<&'static str, usize>,
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "diagnostic counts are assembled from one consistent catalog snapshot"
+)]
 async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>, ApiError> {
     task::spawn_blocking(move || {
         let credentials = state
@@ -128,6 +135,18 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             .list_synthetic_runs()
             .map_err(map_catalog_error)?;
         let mut error_codes = std::collections::BTreeMap::new();
+        let mut run_states = std::collections::BTreeMap::new();
+        let mut failure_stages = std::collections::BTreeMap::new();
+        for run in &runs {
+            let state = match run.state {
+                catalog::RunState::Queued => "queued",
+                catalog::RunState::Running => "running",
+                catalog::RunState::Succeeded => "succeeded",
+                catalog::RunState::Cancelled => "cancelled",
+                catalog::RunState::Failed => "failed",
+            };
+            *run_states.entry(state).or_insert(0) += 1;
+        }
         for run in runs
             .iter()
             .filter(|item| item.state == catalog::RunState::Failed)
@@ -150,11 +169,32 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
             .find(|code| run.result_status.as_deref() == Some(*code))
             .unwrap_or("other_failure");
             *error_codes.entry(code).or_insert(0) += 1;
+            let failure_stage = match code {
+                "credential_unavailable" => "credential_resolution",
+                "postgres_configuration_invalid" => "configuration",
+                "postgres_connection_failed"
+                | "database_connection_failed"
+                | "ssh_connection_failed" => "connection",
+                "timed_out" | "service_restarted" => "lifecycle",
+                "database_query_failed"
+                | "http_request_failed"
+                | "sftp_transfer_failed"
+                | "git_failed"
+                | "command_failed" => "execution",
+                _ => "other",
+            };
+            *failure_stages.entry(failure_stage).or_insert(0) += 1;
         }
         Ok(Json(Diagnostics {
             format: "secretbridge-diagnostics",
             version: env!("CARGO_PKG_VERSION"),
             platform: std::env::consts::OS,
+            generated_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
             schema_version: catalog::SCHEMA_VERSION,
             storage: state.configuration_storage,
             credentials: credentials.len(),
@@ -185,6 +225,8 @@ async fn diagnostics(State(state): State<AppState>) -> Result<Json<Diagnostics>,
                 .count(),
             terminal_sessions: state.terminals.list().len(),
             error_codes,
+            run_states,
+            failure_stages,
         }))
     })
     .await

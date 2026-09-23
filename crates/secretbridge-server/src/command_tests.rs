@@ -175,8 +175,15 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
         terminal_output.text
     );
     assert!(
-        page.items.is_empty(),
-        "terminal-backed output stays in the PTY"
+        page.items
+            .iter()
+            .any(|item| item.text.contains("stdout-marker")),
+        "terminal-backed output is retained for run history"
+    );
+    assert!(
+        !serde_json::to_string(&page)
+            .unwrap()
+            .contains("Synthetic-SB-command_A&z")
     );
 
     let read = terminal_output;
@@ -200,6 +207,10 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
     })
     .await
     .expect("ordinary follow-up completes in the same terminal");
+    assert!(matches!(
+        state.terminals.begin_broker(terminal.id),
+        Err(crate::terminal::TerminalError::ContextUnknown)
+    ));
     state
         .terminals
         .remove(terminal.id)
@@ -400,6 +411,47 @@ async fn command_timeout_and_explicit_cancellation_stop_real_processes() {
 }
 
 #[tokio::test]
+async fn timed_out_terminal_command_closes_the_unverified_shell() {
+    let (state, _) = AppState::new([]);
+    let terminal = state
+        .terminals
+        .create(&crate::terminal::CreateTerminal {
+            rows: 24,
+            cols: 100,
+            shell: None,
+            name: Some("Timeout fixture".to_owned()),
+            working_directory: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
+            environment: std::collections::BTreeMap::new(),
+        })
+        .expect("create terminal");
+    let (approval, _) = configure_in_terminal(&state, "sleep", 1, Some(terminal.id));
+    let created = crate::create_run_for_state(
+        &state,
+        CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+    .expect("start command");
+    let page = wait(&state, created.run.id).await;
+    assert_eq!(page.state, RunState::Failed);
+    assert_eq!(
+        state
+            .catalog
+            .get_synthetic_run(created.run.id)
+            .unwrap()
+            .result_status
+            .as_deref(),
+        Some("timed_out")
+    );
+    assert_ne!(
+        state.terminals.list()[0].status,
+        crate::terminal::TerminalStatus::Running
+    );
+}
+
+#[tokio::test]
 async fn credential_file_storage_failure_is_atomic_and_releases_capacity() {
     let blocker = std::env::temp_dir().join(format!(
         "secretbridge-command-storage-failure-{}",
@@ -507,8 +559,11 @@ fn template_storage_failure_rolls_back_definition_and_credential_links() {
 #[test]
 fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
     let mut config = fixture("argument", Uuid::new_v4());
-    config.arguments.push("prefix{{password}}".into());
+    config.arguments.push("prefix{{secret:password}}".into());
     assert!(config.validate().is_err());
+    let mut literal = fixture("argument", Uuid::new_v4());
+    literal.arguments.push("{{.Names}}".into());
+    assert!(literal.validate().is_ok());
     let mut config = fixture("stdin", Uuid::new_v4());
     let mut second = config.slots[0].clone();
     second.name = "second".into();
@@ -623,7 +678,7 @@ fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
             idempotency_key: Uuid::new_v4().to_string(),
         })
         .unwrap();
-    for _ in 0..70 {
+    for _ in 0..2110 {
         state
             .catalog
             .append_output(outcome.run.id, "stdout", "中\n")
@@ -631,9 +686,9 @@ fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
     }
     let page = state.catalog.output(outcome.run.id, 0).unwrap();
     assert!(page.truncated && page.has_more);
-    assert_eq!(page.oldest_cursor, 7);
+    assert_eq!(page.oldest_cursor, 63);
     assert_eq!(page.items.len(), 16);
-    assert!(state.catalog.output(outcome.run.id, 71).is_err());
+    assert!(state.catalog.output(outcome.run.id, 2111).is_err());
     assert!(
         !state
             .catalog

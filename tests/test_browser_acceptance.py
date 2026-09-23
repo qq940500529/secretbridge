@@ -25,7 +25,7 @@ class BrowserAcceptanceTests(unittest.TestCase):
                 ("webkit", "smoke_workbench_ui.mjs"),
             ],
         )
-        self.assertEqual(len(plan), 6)
+        self.assertEqual(len(plan), 7)
 
     def test_restricted_plan_does_not_claim_chromium_coverage(self):
         self.assertEqual(

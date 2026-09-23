@@ -32,8 +32,10 @@ import {
   type PolicyEvaluation,
   type PolicyRequirement,
   createApproval,
+  createActionTemplate,
   decideApproval,
   evaluateActionTemplate,
+  getActionTemplate,
   listApprovals,
   listActionTemplates,
   listTargets,
@@ -148,6 +150,11 @@ export function ApprovalView({
           decisionLabel: "决定备注",
           expires: "到期时间",
           version: "版本",
+          saveDraft: "显式保存为模板",
+          savedDraft: "模板已保存，请前往执行策略查看。",
+          unavailableDraft: "此终端已不可用，不能执行旧请求。",
+          saveScope:
+            "保存命令、普通参数和凭据引用；不保存临时终端绑定。复用时在隔离进程中执行，必须重新申请授权。",
           states: {
             pending: "待审批",
             approved: "已批准",
@@ -220,6 +227,12 @@ export function ApprovalView({
           decisionLabel: "Decision note",
           expires: "Expires",
           version: "Version",
+          saveDraft: "Save as reusable template",
+          savedDraft: "Template saved. See Policies.",
+          unavailableDraft:
+            "This terminal is unavailable; the old request cannot run.",
+          saveScope:
+            "Save the command, ordinary arguments and credential references without the temporary terminal. Reuse runs in an isolated process and requires a new approval.",
           states: {
             pending: "Pending",
             approved: "Approved",
@@ -247,6 +260,7 @@ export function ApprovalView({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const targetNames = useMemo(
     () => new Map(targets.map((target) => [target.id, target.name])),
     [targets],
@@ -256,9 +270,44 @@ export function ApprovalView({
     [templates],
   );
   const enabledTemplates = useMemo(
-    () => templates.filter((template) => template.enabled),
+    () =>
+      templates.filter(
+        (template) =>
+          template.enabled &&
+          !template.one_time &&
+          template.terminal_available !== false,
+      ),
     [templates],
   );
+
+  async function includeApprovalDrafts(
+    approvals: Approval[],
+    saved: ActionTemplate[],
+  ) {
+    const known = new Set(saved.map((template) => template.id));
+    const missing = [
+      ...new Set(
+        approvals
+          .filter(
+            (item) => item.state === "pending" || item.state === "approved",
+          )
+          .map((item) => item.action_template_id)
+          .filter((id): id is string => !!id && !known.has(id)),
+      ),
+    ];
+    const fetched = await Promise.allSettled(
+      missing.map((id) => getActionTemplate(sessionToken, id)),
+    );
+    return [
+      ...saved,
+      ...fetched
+        .filter(
+          (result): result is PromiseFulfilledResult<ActionTemplate> =>
+            result.status === "fulfilled",
+        )
+        .map((result) => result.value),
+    ];
+  }
 
   async function reload() {
     const [approvals, targetsResponse, templatesResponse] = await Promise.all([
@@ -268,14 +317,21 @@ export function ApprovalView({
     ]);
     setItems(approvals.items);
     setTargets(targetsResponse.items);
-    setTemplates(templatesResponse.items);
+    setTemplates(
+      await includeApprovalDrafts(approvals.items, templatesResponse.items),
+    );
     setTemplateId((current) =>
       templatesResponse.items.some(
-        (template) => template.id === current && template.enabled,
+        (template) =>
+          template.id === current &&
+          template.enabled &&
+          template.terminal_available !== false,
       )
         ? current
-        : (templatesResponse.items.find((template) => template.enabled)?.id ??
-          ""),
+        : (templatesResponse.items.find(
+            (template) =>
+              template.enabled && template.terminal_available !== false,
+          )?.id ?? ""),
     );
   }
 
@@ -295,19 +351,25 @@ export function ApprovalView({
       listTargets(sessionToken),
       listActionTemplates(sessionToken),
     ])
-      .then(([approvals, targetsResponse, templatesResponse]) => {
+      .then(async ([approvals, targetsResponse, templatesResponse]) => {
         if (!active) return;
         setItems(approvals.items);
         setTargets(targetsResponse.items);
-        setTemplates(templatesResponse.items);
+        setTemplates(
+          await includeApprovalDrafts(approvals.items, templatesResponse.items),
+        );
         setTemplateId(
           (initialTemplateId
             ? templatesResponse.items.find(
                 (template) =>
-                  template.id === initialTemplateId && template.enabled,
+                  template.id === initialTemplateId &&
+                  template.enabled &&
+                  template.terminal_available !== false,
               )?.id
-            : templatesResponse.items.find((template) => template.enabled)
-                ?.id) ?? "",
+            : templatesResponse.items.find(
+                (template) =>
+                  template.enabled && template.terminal_available !== false,
+              )?.id) ?? "",
         );
       })
       .catch(() => {
@@ -407,6 +469,30 @@ export function ApprovalView({
       } else {
         setError(text.saveError);
       }
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function saveDraft(template: ActionTemplate) {
+    setBusyId(template.id);
+    setError(null);
+    try {
+      const saved = await createActionTemplate(sessionToken, {
+        target_id: template.target_id,
+        name: template.name,
+        operation: template.operation,
+        result_scope: template.result_scope,
+        description: template.description ?? undefined,
+        timeout_seconds: template.timeout_seconds,
+        command: template.command
+          ? { ...template.command, terminal_id: undefined }
+          : undefined,
+      });
+      setTemplates((current) => [...current, saved]);
+      setNotice(text.savedDraft);
+    } catch {
+      setError(text.saveError);
     } finally {
       setBusyId(null);
     }
@@ -585,6 +671,15 @@ export function ApprovalView({
         </form>
       </EditorDialog>
 
+      {notice && (
+        <p
+          role="status"
+          className="border-l-4 border-emerald-400 bg-emerald-50 p-3 text-sm text-emerald-800"
+        >
+          {notice}
+        </p>
+      )}
+
       <div>
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 className="m-0 text-lg font-semibold text-slate-950">
@@ -694,7 +789,39 @@ export function ApprovalView({
                       expectedVersion={item.action_template_version}
                       language={language}
                       parameters={item.parameters}
+                      expanded={item.state === "pending"}
                     />
+                    {templates.find(
+                      (template) => template.id === item.action_template_id,
+                    )?.terminal_available === false && (
+                      <p role="alert" className="text-sm text-rose-700">
+                        {text.unavailableDraft}
+                      </p>
+                    )}
+                    {templates.find(
+                      (template) => template.id === item.action_template_id,
+                    )?.one_time && (
+                      <div className="mb-3 space-y-2">
+                        <p className="text-xs text-slate-600">
+                          {text.saveScope}
+                        </p>
+                        <button
+                          type="button"
+                          className="workbench-button"
+                          disabled={busyId !== null}
+                          onClick={() =>
+                            void saveDraft(
+                              templates.find(
+                                (template) =>
+                                  template.id === item.action_template_id,
+                              )!,
+                            )
+                          }
+                        >
+                          {text.saveDraft}
+                        </button>
+                      </div>
+                    )}
                     <label
                       htmlFor={`approval-note-${item.id}`}
                       className="text-xs font-semibold text-slate-600"
@@ -718,7 +845,17 @@ export function ApprovalView({
                       {item.state === "pending" ? (
                         <>
                           <ActionButton
-                            disabled={busyId !== null}
+                            disabled={
+                              busyId !== null ||
+                              !templates.find(
+                                (template) =>
+                                  template.id === item.action_template_id,
+                              ) ||
+                              templates.find(
+                                (template) =>
+                                  template.id === item.action_template_id,
+                              )?.terminal_available === false
+                            }
                             onClick={() => void decide(item, "approve")}
                             icon={Check}
                             label={text.approve}

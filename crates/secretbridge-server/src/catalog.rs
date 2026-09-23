@@ -25,7 +25,7 @@ mod schema;
 pub use browser_auth::{
     BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind, BrowserAuthMode,
 };
-use rows::{credential_from_row, target_from_row};
+use rows::{action_template_by_id, action_template_from_row, credential_from_row, target_from_row};
 
 pub(crate) const SCHEMA_VERSION: i64 = secretbridge_core::SCHEMA_VERSION;
 const SYNTHETIC_POLICY_VERSION: &str = "synthetic-policy-v1";
@@ -369,6 +369,8 @@ pub enum ApprovalState {
 #[derive(Clone, Debug, Serialize)]
 pub struct ActionTemplate {
     pub command: Option<crate::command::CommandConfig>,
+    pub one_time: bool,
+    pub terminal_available: bool,
     pub id: Uuid,
     pub target_id: Uuid,
     pub name: String,
@@ -1106,8 +1108,9 @@ impl Catalog {
             .prepare(
                 "SELECT id, target_id, name, operation, result_scope, description,
                         timeout_seconds, enabled, created_at_unix_ms,
-                        updated_at_unix_ms, version, command_json
+                    updated_at_unix_ms, version, command_json, lifecycle
                    FROM action_templates
+                  WHERE lifecycle = 'saved'
                   ORDER BY created_at_unix_ms, id",
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -1116,6 +1119,10 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| CatalogError::Storage)
+    }
+
+    pub fn get_action_template(&self, id: Uuid) -> Result<ActionTemplate, CatalogError> {
+        action_template_by_id(&self.lock(), id)?.ok_or(CatalogError::NotFound)
     }
 
     pub fn evaluate_action_template(&self, id: Uuid) -> Result<PolicyEvaluation, CatalogError> {
@@ -1130,6 +1137,21 @@ impl Catalog {
         &self,
         request: &CreateActionTemplate,
     ) -> Result<ActionTemplate, CatalogError> {
+        self.create_action_template_with_lifecycle(request, "saved")
+    }
+
+    pub(crate) fn create_one_time_draft(
+        &self,
+        request: &CreateActionTemplate,
+    ) -> Result<ActionTemplate, CatalogError> {
+        self.create_action_template_with_lifecycle(request, "one_time")
+    }
+
+    fn create_action_template_with_lifecycle(
+        &self,
+        request: &CreateActionTemplate,
+        lifecycle: &'static str,
+    ) -> Result<ActionTemplate, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
             normalize_optional(request.description.as_deref(), MAX_DESCRIPTION_CHARS)?;
@@ -1138,7 +1160,22 @@ impl Catalog {
         }
         let connection = self.lock();
         validate_command(&connection, request.operation, request.command.as_ref())?;
-        ensure_capacity(&connection, "action_templates", MAX_ACTION_TEMPLATES)?;
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM action_templates WHERE lifecycle = ?1",
+                [lifecycle],
+                |row| row.get(0),
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        if count
+            >= if lifecycle == "saved" {
+                MAX_ACTION_TEMPLATES
+            } else {
+                10_000
+            }
+        {
+            return Err(CatalogError::Capacity);
+        }
         ensure_target_exists(&connection, request.target_id)?;
         let id = Uuid::new_v4();
         let now = now_unix_ms_i64()?;
@@ -1150,8 +1187,8 @@ impl Catalog {
                 "INSERT INTO action_templates
                     (id, target_id, name, operation, result_scope, description,
                      timeout_seconds, enabled, created_at_unix_ms,
-                     updated_at_unix_ms, version, command_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, 1, ?9)",
+                     updated_at_unix_ms, version, command_json, lifecycle)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8, 1, ?9, ?10)",
                 params![
                     id.to_string(),
                     request.target_id.to_string(),
@@ -1166,7 +1203,8 @@ impl Catalog {
                         .as_ref()
                         .map(serde_json::to_string)
                         .transpose()
-                        .map_err(|_| CatalogError::Invalid)?
+                        .map_err(|_| CatalogError::Invalid)?,
+                    lifecycle,
                 ],
             )
             .map_err(|_| CatalogError::Storage)?;
@@ -2110,43 +2148,6 @@ fn target_by_id(connection: &Connection, id: Uuid) -> Result<Option<Target>, Cat
         )
         .optional()
         .map_err(|_| CatalogError::Storage)
-}
-
-fn action_template_by_id(
-    connection: &Connection,
-    id: Uuid,
-) -> Result<Option<ActionTemplate>, CatalogError> {
-    connection
-        .query_row(
-            "SELECT id, target_id, name, operation, result_scope, description,
-                    timeout_seconds, enabled, created_at_unix_ms,
-                    updated_at_unix_ms, version, command_json
-               FROM action_templates WHERE id = ?1",
-            [id.to_string()],
-            action_template_from_row,
-        )
-        .optional()
-        .map_err(|_| CatalogError::Storage)
-}
-
-fn action_template_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ActionTemplate> {
-    Ok(ActionTemplate {
-        command: row
-            .get::<_, Option<String>>(11)?
-            .map(|json| serde_json::from_str(&json).map_err(|_| rusqlite::Error::InvalidQuery))
-            .transpose()?,
-        id: uuid_from_row(row, 0)?,
-        target_id: uuid_from_row(row, 1)?,
-        name: row.get(2)?,
-        operation: ApprovalOperation::from_storage(&row.get::<_, String>(3)?)?,
-        result_scope: ApprovalResultScope::from_storage(&row.get::<_, String>(4)?)?,
-        description: row.get(5)?,
-        timeout_seconds: u64_from_row(row, 6)?,
-        enabled: row.get(7)?,
-        created_at_unix_ms: u64_from_row(row, 8)?,
-        updated_at_unix_ms: u64_from_row(row, 9)?,
-        version: u64_from_row(row, 10)?,
-    })
 }
 
 fn approval_by_id(connection: &Connection, id: Uuid) -> Result<Option<Approval>, CatalogError> {

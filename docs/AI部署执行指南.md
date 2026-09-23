@@ -1,6 +1,6 @@
 # SecretBridge AI deployment runbook
 
-This file is an execution contract for local automation agents. User-facing context and copyable prompts are in [AI辅助部署.md](AI辅助部署.md). Ordinary deployment prefers a verified published package and ends after a healthy loopback service check; the source quality and package phases below apply only when no suitable release exists or the user requests maintainer acceptance.
+This file is an execution contract for local automation agents. User-facing context and copyable prompts are in [AI辅助部署.md](AI辅助部署.md). Ordinary deployment prefers a verified published package and ends after MCP verification, a local management-page handoff, and a final health check; the source quality and package phases below apply only when no suitable release exists or the user requests maintainer acceptance.
 
 ## Scope
 
@@ -69,7 +69,7 @@ Skip this phase when installing a verified published package. For a source fallb
 - Check `status`, loopback-only listening, `open`, browser pairing, stop/start and the documented login-start descriptor.
 - Do not claim desktop, credential-store, reboot or accessibility acceptance unless actually observed on that platform.
 
-For an ordinary deployment, success is a healthy `status` response and a loopback-only listener after start. Browser, stop/start, login startup and lifecycle checks are maintainer acceptance unless the user explicitly requests them.
+For an ordinary deployment, require a healthy `status` response and a loopback-only listener after start. Opening the management page and guiding required first-use actions are part of the ordinary deployment; browser interaction, stop/start, login startup and lifecycle acceptance remain maintainer checks unless requested.
 
 ### 5. Connect the user's MCP host
 
@@ -92,14 +92,21 @@ For an ordinary deployment, success is a healthy `status` response and a loopbac
 }
 ```
 
-### 6. Upgrade or rollback
+### 6. Open the management page and guide first use
+
+- After MCP tool discovery and the read-only capability call, check whether the current machine has an interactive desktop session. On a fresh local desktop install, run the installed active `binary open`; it creates a one-time local pairing page and asks the OS to open it. Do not capture, copy, print or send the pairing URL or token to the AI client.
+- If a reused installation is already initialized and no license, pairing or authentication action is needed, do not force another browser window. When a human action is required, explain whether it is license acceptance, local pairing, selecting a PIN/authenticator, or connection setup, and open the page on a local desktop.
+- If there is no desktop, this is a remote SSH session, or `open` returns `browser_open_failed`, keep the loopback boundary and tell the user to run the active `binary open` in an interactive session **on the machine running SecretBridge**. Do not expose the port, alter firewall rules, tunnel a pairing token, or claim the page opened.
+- Recheck `status` and `secretbridge_terminal_capabilities` after the handoff. Report page-open success, failure or headless limitation separately from service health and MCP health. User-completed initialization is a separate outcome; do not infer it from a successful `open` command.
+
+### 7. Upgrade or rollback
 
 - Never treat rollback as a database downgrade.
-- This unreleased beta accepts only the current schema. Do not migrate or reuse an older unpublished beta database; use a new data directory after preserving the old directory for manual recovery.
+- The current development schema is 20 and can migrate published Beta 7 schema 18 and Beta 8 schema 19. Preserve a compatible independent backup before an upgrade; older unpublished development databases remain unsupported. An older binary cannot reopen a migrated schema 20 database.
 - On activation failure, verify the old pointer and old process were restored. If recovery also fails, stop and report the fixed public error code.
 - After a successful upgrade or rollback, update the MCP `command` to the absolute `binary` returned by that command, reload the host and repeat the read-only capability call.
 
-### 7. Cleanup and report
+### 8. Cleanup and report
 
 - Remove only temporary directories, disposable services and synthetic credentials created by this run.
 - Stop test processes and confirm no test listener remains.
@@ -108,4 +115,4 @@ For an ordinary deployment, success is a healthy `status` response and a loopbac
 
 ## Success condition
 
-For ordinary deployment, success means the selected package or source build was verified, installation completed, the broker reports healthy status while listening only on loopback, and the user's MCP host passed tool discovery plus the read-only capability call. When client configuration cannot be completed safely, the deployment report must instead contain one paste-ready configuration and identify that client reload and verification are the only remaining manual steps. Maintainer acceptance additionally requires all applicable quality gates, package verification, stop/start and cleanup checks. Anything not executed must not be reported as passed.
+For ordinary deployment, success means the selected package or source build was verified, installation completed or a healthy existing install reused, the broker reports healthy status while listening only on loopback, the user's MCP host passed tool discovery plus the read-only capability call, and the management-page handoff was attempted or a safe local manual-open instruction was given. Report any required human initialization separately. When client configuration cannot be completed safely, the deployment report must include a paste-ready configuration and the remaining reload, verification and page-opening steps. Maintainer acceptance additionally requires all applicable quality gates, package verification, stop/start and cleanup checks. Anything not executed must not be reported as passed.

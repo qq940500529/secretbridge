@@ -441,6 +441,19 @@ struct SetBrowserAuthMethodRequest {
     method: BrowserAuthMethod,
     #[serde(default)]
     pin: Option<String>,
+    #[serde(default)]
+    current_pin: Option<String>,
+    #[serde(default)]
+    current_totp_code: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CurrentBrowserAuthProof {
+    #[serde(default)]
+    current_pin: Option<String>,
+    #[serde(default)]
+    current_totp_code: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -754,7 +767,9 @@ fn api_router(state: AppState) -> Router {
         )
         .route(
             "/api/v1/action-templates/{id}",
-            delete(delete_action_template).put(update_action_template),
+            get(get_action_template)
+                .delete(delete_action_template)
+                .put(update_action_template),
         )
         .route(
             "/api/v1/action-templates/{id}/policy-evaluation",
@@ -1110,6 +1125,15 @@ async fn set_browser_auth_method(
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?;
+    verify_current_browser_auth(
+        &state,
+        previous_mode,
+        CurrentBrowserAuthProof {
+            current_pin: request.current_pin,
+            current_totp_code: request.current_totp_code,
+        },
+    )
+    .await?;
     match request.method {
         BrowserAuthMethod::Pin => {
             let pin = request
@@ -1150,7 +1174,7 @@ async fn set_browser_auth_method(
     }
     reset_authentication_attempts(&state).await;
     state.pin_attempts.lock().await.pending_totp_setup = None;
-    if previous_mode == BrowserAuthMode::Totp {
+    if previous_mode != BrowserAuthMode::PairingLink {
         state
             .catalog
             .record_browser_auth_event(
@@ -1161,6 +1185,50 @@ async fn set_browser_auth_method(
             .map_err(map_catalog_error)?;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn verify_current_browser_auth(
+    state: &AppState,
+    mode: BrowserAuthMode,
+    proof: CurrentBrowserAuthProof,
+) -> Result<(), ApiError> {
+    match mode {
+        BrowserAuthMode::PairingLink => Ok(()),
+        BrowserAuthMode::Totp => {
+            state
+                .verify_and_consume_totp(
+                    proof.current_totp_code.ok_or(ApiError::Unauthorized)?,
+                    BrowserAuthChannel::Settings,
+                    None,
+                )
+                .await
+        }
+        BrowserAuthMode::Pin => {
+            if !authentication_attempt_allowed(state).await {
+                return Err(ApiError::Unauthorized);
+            }
+            let pin = proof.current_pin.ok_or(ApiError::Unauthorized)?;
+            if !valid_browser_pin(&pin) {
+                record_authentication_failure(state).await;
+                return Err(ApiError::Unauthorized);
+            }
+            let store = state.secret_store.clone();
+            let matches = task::spawn_blocking(move || {
+                store
+                    .get(BROWSER_PIN_CREDENTIAL_ID)
+                    .map(|expected| verify_browser_pin(&pin, expected.as_str()))
+            })
+            .await
+            .map_err(|_| ApiError::Internal)?
+            .map_err(map_secret_store_error)?;
+            if !matches {
+                record_authentication_failure(state).await;
+                return Err(ApiError::Unauthorized);
+            }
+            reset_authentication_attempts(state).await;
+            Ok(())
+        }
+    }
 }
 
 async fn session(
@@ -1365,15 +1433,54 @@ async fn list_action_templates(
 ) -> Result<Json<ActionTemplateListResponse>, ApiError> {
     require_session(&state, &headers).await?;
     let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_action_templates())
+    let mut items = task::spawn_blocking(move || catalog.list_action_templates())
         .await
         .map_err(|_| ApiError::Internal)?
         .map_err(map_catalog_error)?;
+    let terminals = state.terminals.list();
+    for template in &mut items {
+        if let Some(id) = template
+            .command
+            .as_ref()
+            .and_then(|command| command.terminal_id)
+        {
+            template.terminal_available = terminals.iter().any(|terminal| {
+                terminal.id == id
+                    && terminal.status == TerminalStatus::Running
+                    && !terminal.interactive_unverified
+            });
+        }
+    }
     Ok(Json(ActionTemplateListResponse {
         items,
         storage: state.configuration_storage,
         execution_enabled: true,
     }))
+}
+
+async fn get_action_template(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<ActionTemplate>, ApiError> {
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let mut template = task::spawn_blocking(move || catalog.get_action_template(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    if let Some(terminal_id) = template
+        .command
+        .as_ref()
+        .and_then(|command| command.terminal_id)
+    {
+        template.terminal_available = state.terminals.list().iter().any(|terminal| {
+            terminal.id == terminal_id
+                && terminal.status == TerminalStatus::Running
+                && !terminal.interactive_unverified
+        });
+    }
+    Ok(Json(template))
 }
 
 async fn evaluate_action_template(
@@ -2251,6 +2358,7 @@ fn map_terminal_error(error: TerminalError) -> ApiError {
     match error {
         TerminalError::Capacity => ApiError::TerminalCapacity,
         TerminalError::Busy
+        | TerminalError::ContextUnknown
         | TerminalError::InvalidInput
         | TerminalError::InvalidSize
         | TerminalError::InvalidEnvironment

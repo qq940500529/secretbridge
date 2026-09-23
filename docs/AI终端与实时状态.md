@@ -61,7 +61,7 @@ Shell 可能为 `powershell`、`cmd`、`bash` 或 `zsh`，以能力查询结果�
 
 每次最多读取 16 KiB，代理保留最近 64 KiB。`truncated: true` 表示请求位置已经早于保留窗口；此时只能从 `oldest_cursor` 继续，不能通过重跑命令补数据。`bytes` 用于无损增量解码，`text` 只是 UTF-8 预览。
 
-终端回放、WebSocket 与 MCP 读取共用同一份已脱敏缓冲区。凭据命令的完成状态写入运行记录，但它的连续终端输出应通过 `secretbridge_terminal_read` 读取；不要改用 `secretbridge_read_run_output`，也不要重新执行命令。
+终端回放、WebSocket 与 MCP 读取共用同一份已脱敏缓冲区。凭据命令的完成状态写入运行记录。运行期间的连续终端交互可通过 `secretbridge_terminal_read` 读取；运行详情和服务重启后的历史脱敏输出可通过 `secretbridge_read_run_output` 读取，不应重新执行命令来恢复输出。
 
 ## 输入权与连续性
 

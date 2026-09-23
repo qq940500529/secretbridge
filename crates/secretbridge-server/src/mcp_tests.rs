@@ -6,13 +6,19 @@ use std::os::unix::fs::PermissionsExt;
 use std::{collections::BTreeMap, fs, time::Duration};
 use tokio::time;
 
-use rmcp::{ServiceExt, model::CallToolRequestParams};
+use rmcp::{
+    ServiceExt,
+    model::{CallToolRequestParams, ErrorData},
+};
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
 use totp_rs::{Builder as TotpBuilder, Secret as TotpSecret};
 use uuid::Uuid;
 
-use super::{BridgeClient, LocalMcpBridge, OwnedTerminalRequest, SecretBridgeMcp, TerminalRequest};
+use super::{
+    BridgeClient, BridgeResponse, LocalMcpBridge, OwnedTerminalRequest, SecretBridgeMcp,
+    TerminalRequest,
+};
 use crate::{
     AppState,
     catalog::{
@@ -22,6 +28,32 @@ use crate::{
 };
 
 const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
+
+#[test]
+fn bridge_argument_errors_preserve_field_bounds_without_echoing_values() {
+    let response = BridgeResponse::from_error(ErrorData::invalid_params(
+        "command_argument_too_large",
+        Some(json!({
+            "field": "arguments[0]",
+            "actual_bytes": 9000,
+            "limit_bytes": 8192,
+            "untrusted_value": SENSITIVE_MARKER,
+        })),
+    ));
+    assert_eq!(
+        response.error.as_deref(),
+        Some("command_argument_too_large")
+    );
+    assert_eq!(
+        response.error_data.as_ref().unwrap()["field"],
+        "arguments[0]"
+    );
+    assert!(
+        !serde_json::to_string(&response)
+            .unwrap()
+            .contains(SENSITIVE_MARKER)
+    );
+}
 
 #[tokio::test]
 #[allow(
@@ -222,6 +254,7 @@ async fn advertises_only_the_bounded_tool_surface() {
             "secretbridge_read_run_output",
             "secretbridge_request_approval",
             "secretbridge_request_command",
+            "secretbridge_request_ssh",
             "secretbridge_terminal_attach",
             "secretbridge_terminal_capabilities",
             "secretbridge_terminal_close",
@@ -249,7 +282,9 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "action_template_id",
                 "authorization_mode",
                 "expires_in_seconds",
+                "language",
                 "parameters",
+                "reason",
             ],
         ),
         (
@@ -260,11 +295,28 @@ async fn advertises_only_the_bounded_tool_surface() {
                 "connection_id",
                 "credential_slots",
                 "expires_in_seconds",
+                "language",
                 "name",
                 "program",
+                "reason",
                 "terminal_id",
                 "timeout_seconds",
                 "working_directory",
+            ],
+        ),
+        (
+            "secretbridge_request_ssh",
+            vec![
+                "arguments",
+                "connection_id",
+                "expires_in_seconds",
+                "host_key_sha256",
+                "language",
+                "name",
+                "port",
+                "reason",
+                "remote_program",
+                "timeout_seconds",
             ],
         ),
         ("secretbridge_get_approval", vec!["id"]),

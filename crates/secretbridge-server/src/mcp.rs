@@ -52,7 +52,7 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = "Use SecretBridge only through these MCP tools. Never operate, automate, or inspect the SecretBridge Web console; that surface is reserved for the local human. Never ask for a PIN, passphrase, TOTP setup key, QR code, or credential. If the user voluntarily provides a current six-digit authenticator code after reviewing a specific pending approval, secretbridge_confirm_approval may submit it once for that approval; never retain, repeat, log, or reuse the code. Otherwise wait for the user to decide in the Web console. Read the non-secret credential and connection catalog to plan an operation, submit credential values only by opaque placeholders, and never retrieve credential files or use a shell to bypass a controlled operation. Terminal input and output must remain broker-mediated; use returned cursors, do not re-execute to recover output, and do not blindly retry writes.";
+const SERVER_INSTRUCTIONS: &str = "SecretBridge / 安全操作: use only these MCP tools; the Web console is for the local human. Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. Choose a structured connection operation when available, a one-time request for a changing command, and a saved template only for an explicitly reusable task. Never read a secret or ask for a PIN, passphrase, TOTP setup key, QR code, or credential. Request approval, then show the user the exact pending approval ID, target, command/parameters, opaque credential references, expiry and risk before offering two choices: approve in the local Web console, or if TOTP is configured, provide the current six-digit code for secretbridge_confirm_approval with that ID and version. / 先展示审批对象、目标、命令与参数、凭据引用、到期时间和风险，再让用户选择网页批准或提交当前六位验证码。 Never retain, repeat, log or reuse a code; never submit it to another approval. Only then create a run and read sanitized output with the returned cursor. The terminal-create response ID is terminal.id, not top-level id. Terminal input and output remain broker-mediated. A timed-out or context-unknown terminal must be replaced; do not retry writes blindly or use a shell to bypass approval.";
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -175,13 +175,17 @@ impl McpBackend {
                     parameters: params.parameters,
                     authorization_mode: params.authorization_mode,
                     action_template_id: parse_uuid(&params.action_template_id)?,
-                    reason: Some("Requested through MCP".to_owned()),
+                    reason: Some(
+                        params
+                            .reason
+                            .unwrap_or_else(|| params.language.default_reason("template")),
+                    ),
                     expires_in_seconds: params.expires_in_seconds,
                 };
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
                 let _ = state.changes.send(());
                 open_console_for_human(state).await;
-                Ok(ApprovalSummary::from(approval))
+                Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_REQUEST_APPROVAL, &params).await,
         }
@@ -241,22 +245,34 @@ impl McpBackend {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "dynamic draft creation and approval rollback share one guarded transaction flow"
+    )]
     async fn request_command(
         &self,
         params: RequestCommandParams,
     ) -> Result<ApprovalSummary, ErrorData> {
+        validate_dynamic_arguments(&params)?;
         match self {
             Self::Local(state) => {
                 let target_id = parse_uuid(&params.connection_id)?;
                 let terminal_id = parse_uuid(&params.terminal_id)?;
-                if !state.terminals.list().into_iter().any(|terminal| {
-                    terminal.id == terminal_id
-                        && terminal.status == crate::terminal::TerminalStatus::Running
+                let terminal = state
+                    .terminals
+                    .list()
+                    .into_iter()
+                    .find(|terminal| terminal.id == terminal_id);
+                if !terminal.as_ref().is_some_and(|terminal| {
+                    terminal.status == crate::terminal::TerminalStatus::Running
                 }) {
                     return Err(ErrorData::invalid_params(
                         "secure_terminal_not_running",
                         None,
                     ));
+                }
+                if terminal.is_some_and(|terminal| terminal.interactive_unverified) {
+                    return Err(ErrorData::invalid_params("terminal_context_unknown", None));
                 }
                 let catalog = state.catalog.clone();
                 let target = catalog_task({
@@ -306,14 +322,18 @@ impl McpBackend {
                 };
                 let created = catalog_task({
                     let catalog = catalog.clone();
-                    move || catalog.create_action_template(&template)
+                    move || catalog.create_one_time_draft(&template)
                 })
                 .await?;
                 let request = CreateApproval {
                     parameters: std::collections::BTreeMap::default(),
                     authorization_mode: params.authorization_mode,
                     action_template_id: created.id,
-                    reason: Some("One-time command requested through MCP".to_owned()),
+                    reason: Some(
+                        params
+                            .reason
+                            .unwrap_or_else(|| params.language.default_reason("command")),
+                    ),
                     expires_in_seconds: params.expires_in_seconds,
                 };
                 let approval = match catalog_task({
@@ -331,9 +351,139 @@ impl McpBackend {
                 };
                 let _ = state.changes.send(());
                 open_console_for_human(state).await;
-                Ok(ApprovalSummary::from(approval))
+                Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_REQUEST_COMMAND, &params).await,
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one SSH draft request validates and freezes its full approval scope"
+    )]
+    async fn request_ssh(&self, params: RequestSshParams) -> Result<ApprovalSummary, ErrorData> {
+        match self {
+            Self::Local(state) => {
+                let connection_id = parse_uuid(&params.connection_id)?;
+                let catalog = state.catalog.clone();
+                let target = catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.get_target(connection_id)
+                })
+                .await?;
+                if target.kind != crate::catalog::TargetKind::SshHost {
+                    return Err(ErrorData::invalid_params("ssh_connection_required", None));
+                }
+                let host = target.address.ok_or_else(|| {
+                    ErrorData::invalid_params("ssh_connection_address_required", None)
+                })?;
+                let username = target.username.ok_or_else(|| {
+                    ErrorData::invalid_params("ssh_connection_username_required", None)
+                })?;
+                let credential_id = target.credential_reference_id.ok_or_else(|| {
+                    ErrorData::invalid_params("ssh_connection_credential_required", None)
+                })?;
+                let credential = catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.get_credential_reference(credential_id)
+                })
+                .await?;
+                if credential.kind != crate::catalog::CredentialKind::Password {
+                    return Err(ErrorData::invalid_params(
+                        "ssh_password_credential_required",
+                        None,
+                    ));
+                }
+                if credential
+                    .address
+                    .as_deref()
+                    .is_some_and(|value| value != host.as_str())
+                    || credential
+                        .username
+                        .as_deref()
+                        .is_some_and(|value| value != username.as_str())
+                {
+                    return Err(ErrorData::invalid_params(
+                        "ssh_credential_target_mismatch",
+                        None,
+                    ));
+                }
+                let command = crate::command::CommandConfig {
+                    terminal_id: None,
+                    database: None,
+                    http: None,
+                    ssh: Some(crate::ssh_task::SshConfig {
+                        host,
+                        port: params.port,
+                        username,
+                        host_key_sha256: params.host_key_sha256,
+                        authentication: crate::ssh_task::Authentication::Password {
+                            slot: "login".to_owned(),
+                        },
+                        remote_program: params.remote_program,
+                        arguments: params
+                            .arguments
+                            .into_iter()
+                            .map(|value| crate::ssh_task::Argument::Literal { value })
+                            .collect(),
+                        transfer: None,
+                    }),
+                    telnet: None,
+                    git: None,
+                    parameters: Vec::new(),
+                    program: String::new(),
+                    working_directory: String::new(),
+                    arguments: Vec::new(),
+                    slots: vec![crate::command::CredentialSlot {
+                        name: "login".to_owned(),
+                        credential_id,
+                        injection: crate::command::Injection::Protocol,
+                        environment_variable: None,
+                    }],
+                };
+                let template = crate::catalog::CreateActionTemplate {
+                    command: Some(command),
+                    target_id: connection_id,
+                    name: params.name,
+                    operation: ApprovalOperation::CommandExecution,
+                    result_scope: ApprovalResultScope::SanitizedOutput,
+                    description: Some("One-time structured SSH operation".to_owned()),
+                    timeout_seconds: params.timeout_seconds,
+                };
+                let created = catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.create_one_time_draft(&template)
+                })
+                .await?;
+                let request = CreateApproval {
+                    parameters: std::collections::BTreeMap::default(),
+                    authorization_mode: crate::parameters::AuthorizationMode::EveryRun,
+                    action_template_id: created.id,
+                    reason: Some(
+                        params
+                            .reason
+                            .unwrap_or_else(|| params.language.default_reason("ssh")),
+                    ),
+                    expires_in_seconds: params.expires_in_seconds,
+                };
+                let approval = match catalog_task({
+                    let catalog = catalog.clone();
+                    move || catalog.create_approval(&request)
+                })
+                .await
+                {
+                    Ok(approval) => approval,
+                    Err(error) => {
+                        let _ =
+                            catalog_task(move || catalog.delete_action_template(created.id)).await;
+                        return Err(error);
+                    }
+                };
+                let _ = state.changes.send(());
+                open_console_for_human(state).await;
+                Ok(ApprovalSummary::from(approval).with_human_action(state))
+            }
+            Self::Remote(client) => client.call(OP_REQUEST_SSH, &params).await,
         }
     }
 
@@ -343,7 +493,7 @@ impl McpBackend {
                 let id = parse_uuid(&params.id)?;
                 let catalog = state.catalog.clone();
                 let approval = catalog_task(move || catalog.get_approval(id)).await?;
-                Ok(ApprovalSummary::from(approval))
+                Ok(ApprovalSummary::from(approval).with_human_action(state))
             }
             Self::Remote(client) => client.call(OP_GET_APPROVAL, &params).await,
         }
@@ -431,6 +581,49 @@ impl McpBackend {
     }
 }
 
+fn validate_dynamic_arguments(params: &RequestCommandParams) -> Result<(), ErrorData> {
+    let total = params.arguments.iter().map(String::len).sum::<usize>();
+    if total > crate::command::MAX_ARGUMENTS_BYTES {
+        return Err(ErrorData::invalid_params(
+            "command_arguments_too_large",
+            Some(serde_json::json!({
+                "field": "arguments",
+                "actual_bytes": total,
+                "limit_bytes": crate::command::MAX_ARGUMENTS_BYTES,
+                "next_actions": ["split_the_operation", "use_a_structured_connector"]
+            })),
+        ));
+    }
+    for (index, argument) in params.arguments.iter().enumerate() {
+        if argument.len() > crate::command::MAX_ARGUMENT_BYTES {
+            return Err(ErrorData::invalid_params(
+                "command_argument_too_large",
+                Some(serde_json::json!({
+                    "field": format!("arguments[{index}]"),
+                    "actual_bytes": argument.len(),
+                    "limit_bytes": crate::command::MAX_ARGUMENT_BYTES,
+                    "next_actions": ["split_the_operation", "use_a_structured_connector"]
+                })),
+            ));
+        }
+        if argument.contains("{{secret:")
+            && !params
+                .credential_slots
+                .iter()
+                .any(|slot| argument == &format!("{{{{secret:{}}}}}", slot.name))
+        {
+            return Err(ErrorData::invalid_params(
+                "unknown_credential_placeholder",
+                Some(serde_json::json!({
+                    "field": format!("arguments[{index}]"),
+                    "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
+                })),
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn open_console_for_human(state: &AppState) {
     if state.runtime_control.is_some() {
         let _ = crate::runtime::handle(state, crate::runtime::RuntimeRequest::Open).await;
@@ -441,7 +634,7 @@ async fn open_console_for_human(state: &AppState) {
 impl SecretBridgeMcp {
     #[tool(
         name = "secretbridge_read_run_output",
-        description = "Read sanitized stdout/stderr for an isolated approved run. Commands submitted to a secure terminal keep their output in that terminal and must be read with secretbridge_terminal_read. cursor is the last chunk sequence; continue with next_cursor. Never re-execute a command to recover output."
+        description = "Read retained, bounded, sanitized output for an approved run, including controlled commands sent to a secure terminal. cursor is the last chunk sequence; continue with next_cursor. Use secretbridge_terminal_read for live terminal interaction. Never re-execute a command to recover output."
     )]
     async fn read_run_output(
         &self,
@@ -617,6 +810,17 @@ impl SecretBridgeMcp {
     }
 
     #[tool(
+        name = "secretbridge_request_ssh",
+        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. Returns a pending approval, never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before asking the human to approve in Web or provide a current TOTP code."
+    )]
+    async fn request_ssh(
+        &self,
+        Parameters(params): Parameters<RequestSshParams>,
+    ) -> Result<McpJson<ApprovalSummary>, ErrorData> {
+        Ok(McpJson(self.backend.request_ssh(params).await?))
+    }
+
+    #[tool(
         name = "secretbridge_get_approval",
         description = "Read one approval lifecycle summary by its returned identifier. Reasons, decision notes, target details, credentials, and secrets are omitted."
     )]
@@ -740,6 +944,7 @@ const OP_EVALUATE_POLICY: &str = "evaluate_policy";
 const OP_REQUEST_APPROVAL: &str = "request_approval";
 const OP_CONFIRM_APPROVAL: &str = "confirm_approval";
 const OP_REQUEST_COMMAND: &str = "request_command";
+const OP_REQUEST_SSH: &str = "request_ssh";
 const OP_GET_APPROVAL: &str = "get_approval";
 const OP_CREATE_RUN: &str = "create_run";
 const OP_GET_RUN: &str = "get_run";
@@ -915,7 +1120,10 @@ impl BridgeClient {
                     None,
                 ));
             }
-            Err(remote_error(response.error.as_deref().unwrap_or_default()))
+            Err(remote_error(
+                response.error.as_deref().unwrap_or_default(),
+                response.error_data,
+            ))
         }
     }
 }
@@ -1009,6 +1217,8 @@ struct BridgeResponse {
     payload: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_data: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1274,7 +1484,7 @@ async fn process_bridge_request(
     }
     match dispatch_bridge_request(state.clone(), &request.operation, request.payload).await {
         Ok(payload) => BridgeResponse::success(payload),
-        Err(error) => BridgeResponse::error(&safe_bridge_error_code(error)),
+        Err(error) => BridgeResponse::from_error(error),
     }
 }
 
@@ -1332,6 +1542,9 @@ async fn dispatch_bridge_request(
                 .request_command(parse_bridge_payload(payload)?)
                 .await?,
         ),
+        OP_REQUEST_SSH => {
+            serialize_bridge_payload(backend.request_ssh(parse_bridge_payload(payload)?).await?)
+        }
         OP_GET_APPROVAL => {
             serialize_bridge_payload(backend.get_approval(parse_bridge_payload(payload)?).await?)
         }
@@ -1384,9 +1597,8 @@ fn serialize_bridge_payload<T: Serialize>(payload: T) -> Result<serde_json::Valu
         .map_err(|_| ErrorData::internal_error("secretbridge_operation_failed", None))
 }
 
-fn safe_bridge_error_code(error: ErrorData) -> String {
-    let code = error.message.into_owned();
-    match code.as_str() {
+fn safe_bridge_error_code(code: &str) -> String {
+    match code {
         "not_found"
         | "approval_consumed"
         | "approval_not_usable"
@@ -1403,12 +1615,25 @@ fn safe_bridge_error_code(error: ErrorData) -> String {
         | "verification_failed"
         | "terminal_attach_required"
         | "terminal_input_required"
+        | "terminal_busy"
+        | "terminal_context_unknown"
+        | "secure_terminal_not_usable"
+        | "secure_terminal_not_running"
+        | "ssh_connection_required"
+        | "ssh_connection_address_required"
+        | "ssh_connection_username_required"
+        | "ssh_connection_credential_required"
+        | "ssh_password_credential_required"
+        | "ssh_credential_target_mismatch"
         | "terminal_closed"
         | "terminal_spawn_failed"
         | "terminal_unsupported_shell"
         | "runtime_control_unavailable"
         | "browser_open_failed"
-        | "broker_stopping" => code,
+        | "broker_stopping"
+        | "command_arguments_too_large"
+        | "command_argument_too_large"
+        | "unknown_credential_placeholder" => code.to_owned(),
         _ => "secretbridge_operation_failed".to_owned(),
     }
 }
@@ -1420,6 +1645,7 @@ impl BridgeResponse {
             ok: true,
             payload: Some(payload),
             error: None,
+            error_data: None,
         }
     }
 
@@ -1429,6 +1655,51 @@ impl BridgeResponse {
             ok: false,
             payload: None,
             error: Some(code.to_owned()),
+            error_data: None,
+        }
+    }
+
+    fn from_error(error: ErrorData) -> Self {
+        let code = safe_bridge_error_code(error.message.as_ref());
+        let error_data = if matches!(
+            code.as_str(),
+            "command_arguments_too_large"
+                | "command_argument_too_large"
+                | "unknown_credential_placeholder"
+        ) {
+            error.data.and_then(|value| {
+                let field = value.get("field")?.as_str()?;
+                if field != "arguments"
+                    && !(field.starts_with("arguments[")
+                        && field.ends_with(']')
+                        && field.len() <= 32
+                        && field[10..field.len() - 1].bytes().all(|byte| byte.is_ascii_digit()))
+                {
+                    return None;
+                }
+                Some(if code == "unknown_credential_placeholder" {
+                    serde_json::json!({
+                        "field": field,
+                        "next_actions": ["declare_matching_credential_slot", "use_literal_double_braces_without_secret_prefix"]
+                    })
+                } else {
+                    serde_json::json!({
+                        "field": field,
+                        "actual_bytes": value.get("actual_bytes")?.as_u64()?,
+                        "limit_bytes": value.get("limit_bytes")?.as_u64()?,
+                        "next_actions": ["split_the_operation", "use_a_structured_connector"]
+                    })
+                })
+            })
+        } else {
+            None
+        };
+        Self {
+            schema_version: BRIDGE_CONNECTION_SCHEMA,
+            ok: false,
+            payload: None,
+            error: Some(code),
+            error_data,
         }
     }
 }
@@ -1629,7 +1900,7 @@ fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, _connection_file: &Path) -> 
     identifier.len() == 32 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn remote_error(code: &str) -> ErrorData {
+fn remote_error(code: &str, data: Option<serde_json::Value>) -> ErrorData {
     match code {
         "not_found" => ErrorData::resource_not_found("not_found", None),
         "approval_consumed"
@@ -1642,7 +1913,41 @@ fn remote_error(code: &str) -> ErrorData {
         | "idempotency_conflict"
         | "policy_denied"
         | "resource_in_use"
-        | "version_conflict" => ErrorData::invalid_params(code.to_owned(), None),
+        | "version_conflict"
+        | "command_arguments_too_large"
+        | "command_argument_too_large"
+        | "unknown_credential_placeholder"
+        | "verification_failed"
+        | "terminal_attach_required"
+        | "terminal_input_required"
+        | "terminal_busy"
+        | "terminal_context_unknown"
+        | "terminal_closed"
+        | "terminal_spawn_failed"
+        | "terminal_unsupported_shell"
+        | "secure_terminal_not_usable"
+        | "ssh_connection_required"
+        | "ssh_connection_address_required"
+        | "ssh_connection_username_required"
+        | "ssh_connection_credential_required"
+        | "ssh_password_credential_required"
+        | "ssh_credential_target_mismatch"
+        | "secure_terminal_not_running"
+        | "browser_open_failed"
+        | "broker_stopping" => ErrorData::invalid_params(
+            code.to_owned(),
+            if matches!(
+                code,
+                "command_arguments_too_large"
+                    | "command_argument_too_large"
+                    | "unknown_credential_placeholder"
+            ) {
+                data
+            } else {
+                None
+            },
+        ),
+        "runtime_control_unavailable" => ErrorData::internal_error(code.to_owned(), None),
         "bridge_unauthorized" => {
             ErrorData::internal_error("secretbridge_bridge_authentication_failed", None)
         }
@@ -1710,6 +2015,32 @@ struct RequestApprovalParams {
     action_template_id: String,
     #[schemars(description = "Approval lifetime in seconds, from 60 through 3600")]
     expires_in_seconds: u64,
+    #[serde(default)]
+    #[schemars(
+        description = "Non-secret reason in the current conversation language, up to 240 characters"
+    )]
+    reason: Option<String>,
+    #[serde(default)]
+    language: ConversationLanguage,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ConversationLanguage {
+    #[default]
+    En,
+    Zh,
+}
+
+impl ConversationLanguage {
+    fn default_reason(self, kind: &str) -> String {
+        match (self, kind) {
+            (Self::Zh, "command") => "通过 MCP 申请一次性命令".to_owned(),
+            (Self::Zh, _) => "通过 MCP 申请受控操作".to_owned(),
+            (Self::En, "command") => "One-time command requested through MCP".to_owned(),
+            (Self::En, _) => "Requested through MCP".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -1753,6 +2084,44 @@ struct RequestCommandParams {
     expires_in_seconds: u64,
     #[schemars(description = "Maximum command runtime in seconds, from 1 through 300")]
     timeout_seconds: u64,
+    #[serde(default)]
+    #[schemars(
+        description = "Non-secret reason in the current conversation language, up to 240 characters"
+    )]
+    reason: Option<String>,
+    #[serde(default)]
+    language: ConversationLanguage,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RequestSshParams {
+    #[schemars(description = "Saved SSH connection UUID from secretbridge_list_catalog")]
+    connection_id: String,
+    #[schemars(description = "Short human-readable label for this one-time operation")]
+    name: String,
+    #[schemars(
+        description = "User-confirmed SHA256 host-key fingerprint; never accept an unknown host automatically"
+    )]
+    host_key_sha256: String,
+    #[serde(default = "default_ssh_port")]
+    port: u16,
+    #[schemars(description = "Absolute remote executable path, not a shell command string")]
+    remote_program: String,
+    #[schemars(description = "Remote argv items; sent as individually quoted POSIX words")]
+    arguments: Vec<String>,
+    #[schemars(description = "Pending approval lifetime in seconds, 60 through 3600")]
+    expires_in_seconds: u64,
+    #[schemars(description = "Maximum remote runtime in seconds, 1 through 300")]
+    timeout_seconds: u64,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    language: ConversationLanguage,
+}
+
+const fn default_ssh_port() -> u16 {
+    22
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
@@ -2002,11 +2371,16 @@ struct ApprovalSummary {
     authorization_mode: crate::parameters::AuthorizationMode,
     id: String,
     action_template_id: Option<String>,
+    action_template_version: Option<u64>,
+    target_id: String,
+    reason: Option<String>,
     operation: ApprovalOperation,
     result_scope: ApprovalResultScope,
     state: ApprovalState,
     expires_at_unix_ms: u64,
     version: u64,
+    console_url: Option<String>,
+    next_actions: Vec<String>,
 }
 
 impl From<Approval> for ApprovalSummary {
@@ -2016,12 +2390,35 @@ impl From<Approval> for ApprovalSummary {
             authorization_mode: approval.authorization_mode,
             id: approval.id.to_string(),
             action_template_id: approval.action_template_id.map(|id| id.to_string()),
+            action_template_version: approval.action_template_version,
+            target_id: approval.target_id.to_string(),
+            reason: approval.reason,
             operation: approval.operation,
             result_scope: approval.result_scope,
             state: approval.state,
             expires_at_unix_ms: approval.expires_at_unix_ms,
             version: approval.version,
+            console_url: None,
+            next_actions: Vec::new(),
         }
+    }
+}
+
+impl ApprovalSummary {
+    fn with_human_action(mut self, state: &AppState) -> Self {
+        if self.state == ApprovalState::Pending {
+            self.console_url = state
+                .runtime_control
+                .as_ref()
+                .map(|control| control.origin.clone());
+            self.next_actions = vec![
+                "show_pending_approval_details_to_user".to_owned(),
+                "user_approves_in_local_web_console".to_owned(),
+                "or_if_totp_configured_submit_current_code_with_secretbridge_confirm_approval"
+                    .to_owned(),
+            ];
+        }
+        self
     }
 }
 

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { readRunOutput, type RunOutput } from "./api";
 import { useServiceChanges } from "./service-events";
 import { DatabaseResultView, parseDatabaseResult } from "./DatabaseResultView";
+import { saveDownload } from "./DataMaintenanceView";
 
 export function RunOutputView({
   id,
@@ -19,6 +20,7 @@ export function RunOutputView({
   const [gap, setGap] = useState(false);
   const [exit, setExit] = useState<number | null>(null);
   const [error, setError] = useState(false);
+  const [runState, setRunState] = useState<RunOutput["state"] | null>(null);
   const cursor = useRef(0);
   const busy = useRef(false);
   const active = useRef(true);
@@ -26,13 +28,14 @@ export function RunOutputView({
     if (busy.current || !active.current) return;
     busy.current = true;
     try {
-      for (let page = 0; page < 8; page++) {
+      for (let page = 0; page < 128; page++) {
         const result = await readRunOutput(sessionToken, id, cursor.current);
         if (!active.current) return;
         cursor.current = result.next_cursor;
         if (result.truncated) setGap(true);
-        setChunks((previous) => [...previous, ...result.items].slice(-64));
+        setChunks((previous) => [...previous, ...result.items].slice(-2048));
         setExit(result.exit_code);
+        setRunState(result.state);
         setError(false);
         if (!result.has_more) break;
       }
@@ -61,8 +64,24 @@ export function RunOutputView({
     >
       <div className="mb-2 flex justify-between text-xs font-semibold text-slate-600">
         <span>{zh ? "运行输出" : "Run output"}</span>
-        <span>
+        <span className="flex items-center gap-3">
           {exit !== null ? `${zh ? "退出码" : "Exit code"}: ${exit}` : ""}
+          {chunks.length > 0 && (
+            <button
+              type="button"
+              className="underline"
+              onClick={() =>
+                saveDownload(
+                  new Blob([chunks.map((chunk) => chunk.text).join("")], {
+                    type: "text/plain;charset=utf-8",
+                  }),
+                  `secretbridge-run-${id}.txt`,
+                )
+              }
+            >
+              {zh ? "下载脱敏输出" : "Download sanitized output"}
+            </button>
+          )}
         </span>
       </div>
       {gap && (
@@ -92,9 +111,15 @@ export function RunOutputView({
                   {chunk.text}
                 </span>
               ))
-            : zh
-              ? "等待任务输出…"
-              : "Waiting for task output…"}
+            : runState === "queued" ||
+                runState === "running" ||
+                runState === null
+              ? zh
+                ? "等待任务输出…"
+                : "Waiting for task output…"
+              : zh
+                ? "命令未产生输出。"
+                : "The command produced no output."}
         </pre>
       )}
     </section>

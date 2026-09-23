@@ -423,6 +423,18 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              COMMIT;",
         )?;
     }
+    if version < 20 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE action_templates
+               ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'saved'
+               CHECK (lifecycle IN ('saved', 'one_time'));
+             CREATE INDEX action_templates_lifecycle_idx
+               ON action_templates(lifecycle, created_at_unix_ms);
+             PRAGMA user_version = 20;
+             COMMIT;",
+        )?;
+    }
     Ok(())
 }
 

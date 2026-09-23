@@ -147,6 +147,13 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
     )
     .await;
     assert_eq!(diagnostic["templates"], 2);
+    assert!(
+        diagnostic["generated_at_unix_ms"]
+            .as_u64()
+            .is_some_and(|value| value > 0)
+    );
+    assert!(diagnostic["run_states"].is_object());
+    assert!(diagnostic["failure_stages"].is_object());
     assert!(!diagnostic.to_string().contains("Credential echo fixture"));
     let bytes = app
         .clone()
@@ -348,7 +355,13 @@ async fn maintenance_body_limits_and_origin_checks_apply_before_import() {
         .as_mut()
         .unwrap()
         .arguments
-        .extend(vec!["x".repeat(2048); 16]);
+        .extend(vec!["x".repeat(3000); 2]);
+    for index in 0..2 {
+        let mut copy = bundle.templates[0].clone();
+        copy.id = Uuid::new_v4();
+        copy.name = format!("large valid template {index}");
+        bundle.templates.push(copy);
+    }
     let body = serde_json::to_string(&bundle).unwrap();
     assert!(body.len() > 16 * 1024);
     let (token, _) = state.issue_session().await.expect("issue session");

@@ -180,7 +180,7 @@ button:disabled {
 }
 .workbench-master-detail {
   display: grid;
-  grid-template-columns: minmax(13rem, 18rem) minmax(0, 1fr);
+  grid-template-columns: minmax(13rem, 20rem) minmax(0, 1fr);
 }
 .workbench-master {
   min-width: 0;

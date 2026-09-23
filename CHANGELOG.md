@@ -6,6 +6,11 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+- Fail closed when a controlled command tries to reuse a terminal after interactive input, and terminate its terminal on command timeout or cancellation. Preserve bounded sanitized terminal-run output for later reading.
+- Keep MCP one-time drafts out of reusable template lists and configuration exports; provide explicit saving, structured SSH requests, bilingual approval guidance and field-level command argument errors.
+- Restore browser PIN/TOTP settings after session recovery and require the current method before changing or disabling it. Add filtered event export, diagnostic previews and broader approval review layout.
+- Advance SQLite to schema 20 for one-time draft lifecycle metadata. Published Beta 7/8 schemas migrate in place; keep an independent backup before upgrade.
+
 ## 0.2.0-beta.8 — 2026-09-20
 
 ### Product

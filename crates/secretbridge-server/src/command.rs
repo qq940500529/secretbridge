@@ -63,7 +63,23 @@ pub enum Injection {
     Protocol,
 }
 
+pub const MAX_ARGUMENT_BYTES: usize = 8192;
+pub const MAX_ARGUMENTS_BYTES: usize = 12_000;
+const MAX_RUN_OUTPUT_CHUNKS: i64 = 2048;
+
+fn credential_placeholder(name: &str) -> String {
+    format!("{{{{secret:{name}}}}}")
+}
+
+fn is_credential_placeholder(argument: &str, name: &str) -> bool {
+    argument == credential_placeholder(name) || argument == format!("{{{{{name}}}}}")
+}
+
 impl CommandConfig {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "all command and placeholder safety checks remain together"
+    )]
     pub fn validate(&self) -> Result<(), CatalogError> {
         crate::parameters::validate(&self.parameters)?;
         if usize::from(self.http.is_some())
@@ -106,10 +122,11 @@ impl CommandConfig {
             || self.program.len() > 1024
             || self.working_directory.len() > 1024
             || self.arguments.len() > 32
+            || self.arguments.iter().map(String::len).sum::<usize>() > MAX_ARGUMENTS_BYTES
             || self
                 .arguments
                 .iter()
-                .any(|a| a.len() > 2048 || a.contains('\0'))
+                .any(|a| a.len() > MAX_ARGUMENT_BYTES || a.contains('\0'))
             || self.slots.len() > 8
         {
             return Err(CatalogError::Invalid);
@@ -138,7 +155,11 @@ impl CommandConfig {
                     }
                 }
                 Injection::Argument | Injection::File => {
-                    if !self.arguments.contains(&format!("{{{{{}}}}}", slot.name)) {
+                    if !self
+                        .arguments
+                        .iter()
+                        .any(|argument| is_credential_placeholder(argument, &slot.name))
+                    {
                         return Err(CatalogError::Invalid);
                     }
                 }
@@ -148,10 +169,10 @@ impl CommandConfig {
             }
         }
         for argument in &self.arguments {
-            if argument.contains("{{")
+            if (argument.contains("{{secret:") || argument.contains("{{param:"))
                 && !self.slots.iter().any(|s| {
                     matches!(s.injection, Injection::Argument | Injection::File)
-                        && *argument == format!("{{{{{}}}}}", s.name)
+                        && is_credential_placeholder(argument, &s.name)
                 })
                 && !self
                     .parameters
@@ -217,8 +238,8 @@ impl Catalog {
             transaction.execute("INSERT INTO run_output(run_id, sequence, stream, text) SELECT ?1, COALESCE(MAX(sequence),0)+1, ?2, ?3 FROM run_output WHERE run_id=?1", rusqlite::params![id.to_string(),stream,chunk]).map_err(|_| CatalogError::Storage)?;
             remaining = tail;
         }
-        // 64 chunks of at most 4 KiB: only already-redacted bytes are stored.
-        transaction.execute("DELETE FROM run_output WHERE run_id=?1 AND sequence <= (SELECT COALESCE(MAX(sequence),0)-64 FROM run_output WHERE run_id=?1)", [id.to_string()]).map_err(|_| CatalogError::Storage)?;
+        // A bounded 8 MiB history survives terminal closure and service restart.
+        transaction.execute("DELETE FROM run_output WHERE run_id=?1 AND sequence <= (SELECT COALESCE(MAX(sequence),0)-?2 FROM run_output WHERE run_id=?1)", rusqlite::params![id.to_string(), MAX_RUN_OUTPUT_CHUNKS]).map_err(|_| CatalogError::Storage)?;
         transaction.commit().map_err(|_| CatalogError::Storage)?;
         Ok(())
     }
@@ -539,25 +560,42 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
     let deadline = tokio::time::sleep(limit);
     tokio::pin!(deadline);
     let mut recent = String::new();
+    let mut pending_output = String::new();
     let result = loop {
         tokio::select! {
             () = cancellation.cancelled() => {
-                let _ = broker.write(&[3]);
+                let _ = broker.terminate();
                 break ("cancelled", None);
             }
             () = &mut deadline => {
-                let _ = broker.write(&[3]);
+                let _ = broker.terminate();
                 break ("timed_out", None);
             }
             event = events.recv() => match event {
                 Ok(crate::terminal::TerminalEvent::Output { data, .. }) => {
-                    recent.push_str(&String::from_utf8_lossy(&data));
+                    let text = String::from_utf8_lossy(&data);
+                    recent.push_str(&text);
+                    pending_output.extend(text.chars().filter(|character| {
+                        !character.is_control() || matches!(character, '\n' | '\r' | '\t')
+                    }));
                     if recent.len() > 16_384 {
                         let keep = recent.floor_char_boundary(recent.len() - 8_192);
                         recent.drain(..keep);
                     }
                     if let Some(exit) = terminal_exit_marker(&recent, &marker) {
+                        if let Some(position) = pending_output.rfind(&marker) {
+                            pending_output.truncate(position);
+                        }
                         break (if exit == 0 { "command_ok" } else { "command_failed" }, Some(exit));
+                    }
+                    if pending_output.len() > 256 {
+                        let end = pending_output.floor_char_boundary(pending_output.len() - 128);
+                        if state.catalog.append_output(run_id, "terminal", &pending_output[..end]).is_err() {
+                            let _ = broker.terminate();
+                            return ("command_failed", None);
+                        }
+                        pending_output.drain(..end);
+                        let _ = state.changes.send(());
                     }
                 }
                 Ok(crate::terminal::TerminalEvent::Exited(code)) => {
@@ -568,6 +606,15 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
             }
         }
     };
+    if state
+        .catalog
+        .append_output(run_id, "terminal", &pending_output)
+        .is_err()
+    {
+        let _ = broker.terminate();
+        return ("command_failed", None);
+    }
+    let _ = state.changes.send(());
     if !files.cleanup() {
         return ("command_cleanup_failed", result.1);
     }
@@ -649,7 +696,7 @@ fn terminal_command_posix(
         command.push(' ');
         let mut rendered = None;
         for (slot, path) in config.slots.iter().zip(secret_paths) {
-            if *argument == format!("{{{{{}}}}}", slot.name) {
+            if is_credential_placeholder(argument, &slot.name) {
                 let path = quote(&path.to_string_lossy());
                 rendered = Some(if slot.injection == Injection::Argument {
                     format!("\"$(cat -- {path})\"")
@@ -708,7 +755,7 @@ fn terminal_command_powershell(
         command.push(' ');
         let mut rendered = None;
         for (slot, path) in config.slots.iter().zip(secret_paths) {
-            if *argument == format!("{{{{{}}}}}", slot.name) {
+            if is_credential_placeholder(argument, &slot.name) {
                 let path = quote(&path.to_string_lossy());
                 rendered = Some(if slot.injection == Injection::Argument {
                     format!("([IO.File]::ReadAllText({path}))")
@@ -879,9 +926,8 @@ fn execute(
                 } else {
                     secret.clone()
                 };
-                let placeholder = format!("{{{{{}}}}}", slot.name);
                 for (index, original) in config.arguments.iter().enumerate() {
-                    if *original == placeholder {
+                    if is_credential_placeholder(original, &slot.name) {
                         arguments[index].clone_from(&value);
                     }
                 }
