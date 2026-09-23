@@ -411,7 +411,9 @@ pub(crate) fn inspect_backup(bytes: &[u8]) -> Result<(BackupReport, Catalog), Ca
     catalog.list_approvals()?;
     catalog.list_safe_events(None)?;
     catalog.list_diagnostic_failures()?;
-    if credentials > 128 || connections > 128 || templates > 256 || runs > 1024 {
+    // Historical runs are not subject to the active-run limit. A long-lived
+    // personal catalog can legitimately hold thousands of completed runs.
+    if credentials > 128 || connections > 128 || templates > 256 || runs > 10_000 {
         return Err(CatalogError::Invalid);
     }
     for template in catalog.list_action_templates()? {
