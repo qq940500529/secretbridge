@@ -28,6 +28,44 @@ export function saveDownload(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+const recoveryLabelsZh: Record<string, string> = {
+  split_the_operation: "拆分操作",
+  use_bounded_stdin_or_structured_connector: "使用有界标准输入或结构化连接器",
+  remove_invalid_stdin_content_or_conflicting_slot:
+    "修正输入内容或冲突的凭据插槽",
+  review_explicit_secret_slot_syntax: "检查显式凭据插槽语法",
+  wait_for_active_run: "等待当前运行完成",
+  inspect_terminal_state: "检查终端状态",
+  attach_terminal_and_request_input: "连接终端并请求输入",
+  create_new_terminal: "新建终端",
+  request_new_approval_if_needed: "按需重新请求授权",
+  review_current_approval_state: "检查当前授权状态",
+  refresh_catalog: "刷新目录",
+  ask_human_to_reenter_credential: "请用户重新录入凭据",
+  check_shell_and_program_availability: "检查 Shell 与程序是否可用",
+  check_local_broker_health: "检查本地代理状态",
+  review_private_data_directory: "检查私有数据目录",
+  check_request_and_retry_if_safe: "检查请求后安全重试",
+  check_os_credential_store: "检查系统凭据库",
+  inspect_sanitized_output: "检查过滤后的输出",
+  review_timeout_and_target: "检查超时设置与目标",
+  inspect_run_state: "检查任务状态",
+  check_private_temporary_directory: "检查私有临时目录",
+  do_not_retry_until_clean: "清理完成前不要重试",
+  ask_human_to_correct_connection_metadata: "请用户修正连接配置",
+  check_target_network_and_trust: "检查目标网络与信任配置",
+  verify_operation_parameters: "检查操作参数",
+  contact_maintainer_with_safe_diagnostics: "携带安全诊断信息联系维护者",
+};
+
+function recoveryText(actions: string[], zh: boolean) {
+  return actions
+    .map((action) =>
+      zh ? (recoveryLabelsZh[action] ?? action) : action.replaceAll("_", " "),
+    )
+    .join(" · ");
+}
+
 export function DataMaintenanceView({
   sessionToken,
   language,
@@ -288,8 +326,8 @@ export function DataMaintenanceView({
           <>
             <p className="text-sm text-slate-600">
               {zh
-                ? "运行时持续加密保存详细诊断记录。输入初始化时设置的 PIN 后，可选择导出事件和完整命令配置。命令默认不导出。导出的 JSON 是明文，可能包含路径、地址或业务参数，请先预览并谨慎分享；注入的凭据值不写入诊断记录。"
-                : "Detailed diagnostic records are encrypted continuously. Enter your setup PIN to select events and complete command configurations. Commands are excluded by default. Exported JSON is plaintext and may contain paths, addresses, or business arguments. Preview it before sharing. Injected credential values are not recorded."}
+                ? "精简摘要只含固定错误码、状态计数和时间，不含名称、地址、路径、命令或输出。运行时持续加密保存详细诊断记录。输入初始化时设置的 PIN 后，可选择导出事件和完整命令配置。命令默认不导出。导出的 JSON 是明文，可能包含路径、地址或业务参数，请先预览并谨慎分享；注入的凭据值不写入诊断记录。"
+                : "The compact summary contains fixed error codes, state counts and times, without names, addresses, paths, commands or output. Detailed diagnostic records are encrypted continuously. Enter your setup PIN to select events and complete command configurations. Commands are excluded by default. Exported JSON is plaintext and may contain paths, addresses, or business arguments. Preview it before sharing. Injected credential values are not recorded."}
             </p>
             <button
               className="workbench-button"
@@ -320,7 +358,15 @@ export function DataMaintenanceView({
                 <p>
                   {zh ? "浏览器认证" : "Browser authentication"}:{" "}
                   {diagnostics.authentication_mode} ·{" "}
-                  {zh ? "桥接协议" : "Bridge protocol"}:{" "}
+                  {zh ? "加密诊断" : "Encrypted diagnostics"}:{" "}
+                  {diagnostics.encrypted_diagnostics_ready
+                    ? zh
+                      ? "已启用"
+                      : "ready"
+                    : zh
+                      ? "待初始化"
+                      : "not initialized"}{" "}
+                  · {zh ? "桥接协议" : "Bridge protocol"}:{" "}
                   {diagnostics.bridge_schema_version}
                 </p>
                 <p>
@@ -354,6 +400,20 @@ export function DataMaintenanceView({
                   · {zh ? "失效终端引用" : "Stale terminal references"}{" "}
                   {diagnostics.stale_terminal_references}
                 </p>
+                <p>
+                  {zh ? "状态一致性问题" : "State consistency issues"}:{" "}
+                  {diagnostics.state_consistency_issues}
+                  {diagnostics.state_consistency_issues > 0 && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      {Object.entries(diagnostics.state_consistency)
+                        .filter(([, count]) => count > 0)
+                        .map(([name, count]) => `${name} ${count}`)
+                        .join(" · ")}
+                    </>
+                  )}
+                </p>
                 <ul aria-label={zh ? "MCP 失败摘要" : "MCP failure summary"}>
                   {diagnostics.mcp_failures.map((failure) => (
                     <li key={failure.code}>
@@ -365,6 +425,9 @@ export function DataMaintenanceView({
                       {new Intl.DateTimeFormat(language).format(
                         failure.last_at_unix_ms,
                       )}
+                      <br />
+                      {zh ? "建议" : "Suggested recovery"}:{" "}
+                      {recoveryText(failure.recovery_actions, zh)}
                     </li>
                   ))}
                 </ul>
@@ -379,9 +442,28 @@ export function DataMaintenanceView({
                       {new Intl.DateTimeFormat(language).format(
                         failure.last_at_unix_ms,
                       )}
+                      {failure.failures_with_later_same_template_success >
+                        0 && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          {zh
+                            ? "后续出现同模板成功的失败记录"
+                            : "Failures followed by a same-template success"}
+                          : {failure.failures_with_later_same_template_success}
+                        </>
+                      )}
+                      <br />
+                      {zh ? "建议" : "Suggested recovery"}:{" "}
+                      {recoveryText(failure.recovery_actions, zh)}
                     </li>
                   ))}
                 </ul>
+                <p className="text-xs text-slate-600">
+                  {zh
+                    ? "后续成功仅是时间线索，不能证明此前故障已经修复。"
+                    : "A later success is a timeline clue, not proof that the earlier failure was fixed."}
+                </p>
               </div>
             )}
             <div className="space-y-3 rounded-lg border border-slate-200 p-4">

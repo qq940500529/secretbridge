@@ -119,11 +119,12 @@ try {
     } else if (path.endsWith("/maintenance/diagnostics"))
       body = {
         format: "secretbridge-diagnostics",
-        diagnostic_schema_version: 3,
+        diagnostic_schema_version: 4,
         version: "0.1.0-test",
         platform: "windows",
         bridge_schema_version: 2,
         authentication_mode: "totp",
+        encrypted_diagnostics_ready: true,
         generated_at_unix_ms: Date.now(),
         schema_version: 23,
         storage: "sqlite",
@@ -139,11 +140,20 @@ try {
         error_codes: { ssh_connection_failed: 1 },
         terminal_states: { exited: 1 },
         stale_terminal_references: 0,
+        state_consistency: {
+          active_runs_missing_start: 0,
+          finished_runs_missing_finish: 0,
+          active_runs_missing_template: 0,
+          active_terminal_runs_missing_terminal: 0,
+        },
+        state_consistency_issues: 0,
         run_failures: [
           {
             code: "ssh_connection_failed",
             stage: "connection",
+            recovery_actions: ["check_target_network_and_trust"],
             occurrences: 1,
+            failures_with_later_same_template_success: 0,
             first_at_unix_ms: 100,
             last_at_unix_ms: 200,
           },
@@ -152,6 +162,7 @@ try {
           {
             code: "terminal_busy",
             stage: "terminal_lease",
+            recovery_actions: ["wait_for_active_run"],
             occurrences: 2,
             first_at_unix_ms: 100,
             last_at_unix_ms: 200,
@@ -247,6 +258,7 @@ try {
   );
   await page.getByRole("button", { name: "预览诊断信息" }).click();
   await page.getByText("connection 1", { exact: false }).waitFor();
+  await page.getByText("等待当前运行完成", { exact: false }).waitFor();
   await page
     .getByText("terminal_lease / terminal_busy", { exact: false })
     .waitFor();

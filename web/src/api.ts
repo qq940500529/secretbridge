@@ -87,6 +87,7 @@ export interface Diagnostics {
   platform: string;
   bridge_schema_version: number;
   authentication_mode: "pairing_link" | "pin" | "totp";
+  encrypted_diagnostics_ready: boolean;
   generated_at_unix_ms: number;
   schema_version: number;
   storage: ConfigurationStorage;
@@ -103,19 +104,29 @@ export interface Diagnostics {
   run_failures: {
     code: string;
     stage: string;
+    recovery_actions: string[];
     occurrences: number;
+    failures_with_later_same_template_success: number;
     first_at_unix_ms: number;
     last_at_unix_ms: number;
   }[];
   mcp_failures: {
     code: string;
     stage: string;
+    recovery_actions: string[];
     occurrences: number;
     first_at_unix_ms: number;
     last_at_unix_ms: number;
   }[];
   terminal_states: Record<string, number>;
   stale_terminal_references: number;
+  state_consistency: {
+    active_runs_missing_start: number;
+    finished_runs_missing_finish: number;
+    active_runs_missing_template: number;
+    active_terminal_runs_missing_terminal: number;
+  };
+  state_consistency_issues: number;
 }
 async function maintenanceJson<T>(
   token: string,
