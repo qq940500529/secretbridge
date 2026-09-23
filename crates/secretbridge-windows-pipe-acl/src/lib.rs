@@ -282,6 +282,15 @@ pub fn is_private_path(path: &Path) -> io::Result<bool> {
     has_private_dacl(descriptor.0.as_ptr())
 }
 
+/// Checks the connection document and its parent data directory together.
+///
+/// # Errors
+/// Returns an error when either descriptor cannot be queried.
+pub fn is_private_connection_path(path: &Path) -> io::Result<bool> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    Ok(is_private_path(parent)? && is_private_path(path)?)
+}
+
 /// Atomically creates a bridge document with a protected current-user DACL.
 ///
 /// # Errors
