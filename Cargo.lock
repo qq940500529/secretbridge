@@ -3329,6 +3329,7 @@ dependencies = [
  "rustls-tokio-postgres",
  "schemars",
  "secretbridge-core",
+ "secretbridge-windows-pipe-acl",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3345,6 +3346,14 @@ dependencies = [
  "uuid",
  "webbrowser",
  "zeroize",
+]
+
+[[package]]
+name = "secretbridge-windows-pipe-acl"
+version = "0.2.0-beta.8"
+dependencies = [
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

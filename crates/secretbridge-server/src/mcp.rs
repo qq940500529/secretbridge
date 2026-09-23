@@ -1823,13 +1823,13 @@ fn bind_bridge_listener(
     instance_id: Uuid,
 ) -> io::Result<(BridgeListener, BridgeEndpoint, Option<PathBuf>)> {
     let name = format!(r"\\.\pipe\secretbridge-{}", instance_id.simple());
-    let server = ServerOptions::new()
+    let options = ServerOptions::new()
         .first_pipe_instance(true)
         .reject_remote_clients(true)
         .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
         .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
-        .out_buffer_size(64 * 1024)
-        .create(&name)?;
+        .out_buffer_size(64 * 1024);
+    let server = secretbridge_windows_pipe_acl::create_private_named_pipe(&options, &name)?;
     Ok((
         BridgeListener::Windows {
             server,
@@ -1895,12 +1895,12 @@ async fn serve_bridge_listener(
             result = server.connect() => result?,
         }
         let connected = server;
-        server = ServerOptions::new()
+        let options = ServerOptions::new()
             .reject_remote_clients(true)
             .max_instances(MAX_BRIDGE_PIPE_INSTANCES)
             .in_buffer_size(MAX_BRIDGE_PIPE_BUFFER_BYTES)
-            .out_buffer_size(64 * 1024)
-            .create(&name)?;
+            .out_buffer_size(64 * 1024);
+        server = secretbridge_windows_pipe_acl::create_private_named_pipe(&options, &name)?;
         let state = state.clone();
         tokio::spawn(async move {
             let _permit = permit;
