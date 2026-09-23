@@ -55,6 +55,7 @@ describe("SSH configuration", () => {
     );
     expect(html).toContain("可信主机指纹");
     expect(html).toContain("远程程序绝对路径");
+    expect(html).toContain("远程工作目录（可选绝对路径）");
     expect(html).not.toContain("程序与凭据插槽");
     expect(html).not.toContain("工作目录（绝对路径）");
   });
@@ -94,5 +95,23 @@ describe("SSH configuration", () => {
     expect(html).toContain("safe value");
     expect(html).toContain("cannot guarantee remote rollback");
     expect(html).not.toContain("hidden-reference-id");
+  });
+  it("quotes the optional remote working directory in the reviewed command", () => {
+    const working = { ...ssh, working_directory: "/tmp/a' b" };
+    expect(sshCommandPreview(working, { message: "ok" })).toBe(
+      "cd '/tmp/a'\\'' b' && exec '/usr/bin/printf' '%s' 'ok'",
+    );
+    const html = renderToStaticMarkup(
+      <CommandReview
+        template={
+          { command: { ...config, ssh: working }, version: 1 } as ActionTemplate
+        }
+        expectedVersion={1}
+        language="en"
+        parameters={{ message: "ok" }}
+      />,
+    );
+    expect(html).toContain("Remote working directory");
+    expect(html).toContain("/tmp/a&#x27; b");
   });
 });

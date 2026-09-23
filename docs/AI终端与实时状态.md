@@ -63,6 +63,8 @@ MCP 的 `tools/list` 公布各工具的输入和输出 JSON Schema。响应均�
 
 常见恢复提示由固定代码映射生成，不包含失败输入原文：`terminal_context_unknown` 建议新建终端并重新申请，`approval_not_usable` 建议查询审批状态并在仍有执行意图时重新申请，`ssh_credential_target_mismatch` 建议由人修正连接元数据。字段长度错误另返回安全的字段位置、实际字节数和上限；不要为了绕过界限把秘密或不可信文本写到 Shell 中。
 
+`secretbridge_request_ssh` 使用连接中的地址、账号和密码凭据引用；AI 只需提交经用户从可信渠道核实的主机指纹、远程程序、逐项参数、可选绝对工作目录及超时。首次未知或变更的主机指纹不能自动信任；不匹配时代理在认证之前拒绝，用户应先核查目标，再重新发起申请。
+
 ## 输出游标
 
 `attach` 和 `read` 会返回 `oldest_cursor`、`next_cursor` 与 `available_cursor`。调用方应保存 `next_cursor` 并在下一次读取时作为 `cursor` 提交：

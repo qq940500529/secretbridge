@@ -42,6 +42,8 @@ pub struct SshConfig {
     pub authentication: Authentication,
     pub remote_program: String,
     #[serde(default)]
+    pub working_directory: Option<String>,
+    #[serde(default)]
     pub arguments: Vec<Argument>,
     #[serde(default)]
     pub transfer: Option<crate::sftp_task::TransferConfig>,
@@ -89,6 +91,11 @@ impl SshConfig {
             || (self.transfer.is_none() && !self.remote_program.starts_with('/'))
             || self.remote_program.len() > 1024
             || self.remote_program.contains('\0')
+            || self.working_directory.as_ref().is_some_and(|directory| {
+                !directory.starts_with('/')
+                    || directory.len() > 1024
+                    || directory.chars().any(char::is_control)
+            })
             || self.arguments.len() > 32
             || !config.program.is_empty()
             || !config.working_directory.is_empty()
@@ -158,7 +165,11 @@ impl SshConfig {
             };
             pieces.push(quote(&value));
         }
-        Ok(pieces.join(" "))
+        let command = pieces.join(" ");
+        Ok(match &self.working_directory {
+            Some(directory) => format!("cd {} && exec {command}", quote(directory)),
+            None => command,
+        })
     }
 }
 
