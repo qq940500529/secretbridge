@@ -35,7 +35,7 @@ mod errors;
 mod ready;
 use bridge_response::safe_bridge_error_code;
 use conversation::{BeginConversationParams, resolve_conversation_id};
-use errors::{catalog_error, parse_uuid, remote_error};
+use errors::{catalog_error, parse_uuid, recoverable_error, remote_error};
 use ready::ensure_bridge_ready;
 
 #[cfg(unix)]
@@ -61,12 +61,7 @@ use crate::{
     constant_time_equal, create_run_for_state, run_execution_mode, token_digest,
 };
 
-const SERVER_INSTRUCTIONS: &str = r"SecretBridge controlled operations / SecretBridge 安全操作
-Use only these MCP tools. The local Web console is for the human; never inspect or automate it. Start each AI chat with secretbridge_begin_conversation using a short non-secret summary, then pass its conversation_id to every request in that chat. Only the human can set conversation approval policy in Web. A prior policy may preapprove a request; disclose its scope and risk before creating a run.
-Discover with secretbridge_terminal_capabilities and secretbridge_list_catalog. The catalog returns credentials and connections as non-secret metadata. Prefer a structured connection operation where supported, a one-time request for a changing command, and a saved template only when the user explicitly wants reuse. With no template, use secretbridge_request_command for a controlled local command or secretbridge_request_ssh for a structured SSH operation; do not create helper scripts to handle credentials. A command argument or file credential slot uses one whole argv item in the form {{secret:slot_name}}; other double-brace text is literal.
-Response paths: terminal creation returns terminal.id (not a top-level id); approval requests return id, state, version, next_actions and possibly console_url; run creation returns run.id and run.state; read_run_output returns items and next_cursor. Check advertised output schemas. For a pending approval, show its exact ID, target, program/parameters, opaque credential references, expiry and risk. Invite the human to approve in the local Web console, or accept only a current six-digit TOTP code the human voluntarily provides for that exact ID and version. Never ask for a PIN, passphrase, setup key, QR code or credential; never retain, repeat, log or reuse a TOTP code. Use secretbridge_confirm_approval only for that pending request.
-Create a run only after approval; read sanitized output with the returned cursor. Inspect next_actions and stable error codes for recovery. Terminal input and output remain broker-mediated. Replace a timed-out or context-unknown terminal; do not blindly retry writes or use a shell to bypass approval.
-中文：每段 AI 对话先登记不含秘密的摘要，并把会话 ID 传入后续申请。会话审批策略只由人在本机网页设置；先前策略可能使申请直接获批，执行前应说明范围与风险。先发现终端能力和非秘密目录；有结构化连接器时优先使用，一次性变化命令使用动态申请，只有用户明确要求复用时才保存模板。命令参数或文件凭据槽位须以完整参数 {{secret:slot_name}} 引用，其他双花括号文本按字面量传递。创建终端的 ID 位于 terminal.id；审批的 id、state、version、next_actions 表明下一步；创建运行后读取 run.id，再用输出的 next_cursor 继续读取。待审批时请用户在本机网页处理，或仅转交用户主动提供给该审批的当前六位 TOTP；不得索要或保存 PIN、凭据或 TOTP 密钥，也不得自动化网页。";
+const SERVER_INSTRUCTIONS: &str = include_str!("mcp/guidance.md");
 
 #[derive(Clone)]
 struct SecretBridgeMcp {
@@ -309,7 +304,7 @@ impl McpBackend {
                 if current.state != ApprovalState::Pending
                     || current.version != params.expected_version
                 {
-                    return Err(ErrorData::invalid_params("approval_not_pending", None));
+                    return Err(recoverable_error("approval_not_pending"));
                 }
                 state
                     .verify_and_consume_totp(
@@ -370,13 +365,10 @@ impl McpBackend {
                 if !terminal.as_ref().is_some_and(|terminal| {
                     terminal.status == crate::terminal::TerminalStatus::Running
                 }) {
-                    return Err(ErrorData::invalid_params(
-                        "secure_terminal_not_running",
-                        None,
-                    ));
+                    return Err(recoverable_error("secure_terminal_not_running"));
                 }
                 if terminal.is_some_and(|terminal| terminal.interactive_unverified) {
-                    return Err(ErrorData::invalid_params("terminal_context_unknown", None));
+                    return Err(recoverable_error("terminal_context_unknown"));
                 }
                 let catalog = state.catalog.clone();
                 let target = catalog_task({
@@ -483,27 +475,24 @@ impl McpBackend {
                 })
                 .await?;
                 if target.kind != crate::catalog::TargetKind::SshHost {
-                    return Err(ErrorData::invalid_params("ssh_connection_required", None));
+                    return Err(recoverable_error("ssh_connection_required"));
                 }
-                let host = target.address.ok_or_else(|| {
-                    ErrorData::invalid_params("ssh_connection_address_required", None)
-                })?;
-                let username = target.username.ok_or_else(|| {
-                    ErrorData::invalid_params("ssh_connection_username_required", None)
-                })?;
-                let credential_id = target.credential_reference_id.ok_or_else(|| {
-                    ErrorData::invalid_params("ssh_connection_credential_required", None)
-                })?;
+                let host = target
+                    .address
+                    .ok_or_else(|| recoverable_error("ssh_connection_address_required"))?;
+                let username = target
+                    .username
+                    .ok_or_else(|| recoverable_error("ssh_connection_username_required"))?;
+                let credential_id = target
+                    .credential_reference_id
+                    .ok_or_else(|| recoverable_error("ssh_connection_credential_required"))?;
                 let credential = catalog_task({
                     let catalog = catalog.clone();
                     move || catalog.get_credential_reference(credential_id)
                 })
                 .await?;
                 if credential.kind != crate::catalog::CredentialKind::Password {
-                    return Err(ErrorData::invalid_params(
-                        "ssh_password_credential_required",
-                        None,
-                    ));
+                    return Err(recoverable_error("ssh_password_credential_required"));
                 }
                 if credential
                     .address
@@ -514,10 +503,7 @@ impl McpBackend {
                         .as_deref()
                         .is_some_and(|value| value != username.as_str())
                 {
-                    return Err(ErrorData::invalid_params(
-                        "ssh_credential_target_mismatch",
-                        None,
-                    ));
+                    return Err(recoverable_error("ssh_credential_target_mismatch"));
                 }
                 let command = crate::command::CommandConfig {
                     terminal_id: None,

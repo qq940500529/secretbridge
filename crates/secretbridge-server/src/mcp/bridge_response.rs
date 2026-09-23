@@ -3,7 +3,7 @@
 
 use rmcp::ErrorData;
 
-use super::{BRIDGE_CONNECTION_SCHEMA, BridgeResponse};
+use super::{BRIDGE_CONNECTION_SCHEMA, BridgeResponse, errors::recovery_actions};
 
 pub(super) fn safe_bridge_error_code(code: &str) -> String {
     match code {
@@ -34,6 +34,7 @@ pub(super) fn safe_bridge_error_code(code: &str) -> String {
         | "ssh_connection_credential_required"
         | "ssh_password_credential_required"
         | "ssh_credential_target_mismatch"
+        | "telnet_not_explicitly_allowed"
         | "terminal_closed"
         | "terminal_spawn_failed"
         | "terminal_unsupported_shell"
@@ -116,7 +117,7 @@ impl BridgeResponse {
                 }))
             })
         } else {
-            None
+            recovery_actions(&code).map(|actions| serde_json::json!({ "next_actions": actions }))
         };
         Self {
             schema_version: BRIDGE_CONNECTION_SCHEMA,
