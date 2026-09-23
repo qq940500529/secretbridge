@@ -828,7 +828,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_approval",
-        description = "Create a pending approval request for one enabled action template. This cannot approve the request; the user must decide in the trusted Web console."
+        description = "Request approval for one enabled action template. The request may already be approved when the human previously enabled a matching conversation policy in the trusted Web console. This tool cannot change that policy or approve its own request."
     )]
     async fn request_approval(
         &self,
@@ -850,7 +850,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_command",
-        description = "Submit an exact non-shell command and opaque credential placeholders for execution in an existing secure terminal after human approval. A user-created template is not required. This never accepts secret values and cannot approve or execute the draft; read the eventual result only with secretbridge_terminal_read."
+        description = "Submit an exact non-shell command and opaque credential placeholders for an existing secure terminal. A user-created template is not required. The request may be approved by a prior human-controlled conversation policy; this tool cannot set that policy, accept secret values, or execute the draft. Read eventual terminal output with secretbridge_terminal_read."
     )]
     async fn request_command(
         &self,
@@ -861,7 +861,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_ssh",
-        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. Returns a pending approval, never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before asking the human to approve in Web or provide a current TOTP code."
+        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. A prior human-controlled conversation policy may approve the request; this tool never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before any new human decision."
     )]
     async fn request_ssh(
         &self,
