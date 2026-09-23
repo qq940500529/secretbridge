@@ -8,18 +8,30 @@
 
 use std::{
     ffi::c_void,
+    fs::File,
     io,
     mem::size_of,
+    os::windows::{ffi::OsStrExt, io::FromRawHandle},
+    path::Path,
     ptr::{self, NonNull},
 };
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, LocalFree},
+    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, LocalFree},
     Security::Authorization::{
         ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        SDDL_REVISION_1,
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
+        SetNamedSecurityInfoW,
     },
-    Security::{GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser},
+    Security::{
+        ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+        GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
+        PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_QUERY,
+        TOKEN_USER, TokenUser,
+    },
+    Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
+    },
     System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 
@@ -120,6 +132,187 @@ fn private_descriptor() -> io::Result<LocalAllocation> {
         ))
 }
 
+fn path_wide(path: &Path) -> io::Result<Vec<u16>> {
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.is_empty() || wide.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Windows path",
+        ));
+    }
+    wide.push(0);
+    Ok(wide)
+}
+
+fn sid_from_string(value: &str) -> io::Result<LocalAllocation> {
+    let wide: Vec<u16> = format!("{value}\0").encode_utf16().collect();
+    let mut sid = ptr::null_mut();
+    // SAFETY: The string is NUL-terminated and Windows writes one allocated SID pointer.
+    if unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    NonNull::new(sid)
+        .map(LocalAllocation)
+        .ok_or(io::Error::other("Windows returned a null SID"))
+}
+
+fn has_private_dacl(descriptor: *mut c_void) -> io::Result<bool> {
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    // SAFETY: The caller owns a live Windows security descriptor and output pointers are valid.
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if control & SE_DACL_PROTECTED == 0 {
+        return Ok(false);
+    }
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl: *mut ACL = ptr::null_mut();
+    // SAFETY: The descriptor and output pointers are live and valid.
+    if unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if present == 0 || acl.is_null() {
+        return Ok(false);
+    }
+    // SAFETY: Windows returned an ACL pointer inside the live descriptor.
+    if unsafe { (*acl).AceCount } != 2 {
+        return Ok(false);
+    }
+    let user_sid = sid_from_string(&current_user_sid()?)?;
+    let system_sid = sid_from_string("S-1-5-18")?;
+    let mut user_found = false;
+    let mut system_found = false;
+    for index in 0..2 {
+        let mut raw_ace = ptr::null_mut();
+        // SAFETY: The ACL contains two ACEs and Windows writes a pointer into raw_ace.
+        if unsafe { GetAce(acl, index, &mut raw_ace) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: The ACE pointer belongs to the live ACL and begins with the common header.
+        let ace = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
+        if ace.Header.AceType != 0 {
+            return Ok(false);
+        }
+        let sid: *mut c_void = (&raw const ace.SidStart).cast_mut().cast();
+        // SAFETY: SidStart is the SID stored within this standard access-allowed ACE.
+        user_found |= unsafe { EqualSid(sid, user_sid.0.as_ptr()) } != 0;
+        // SAFETY: Both pointers refer to live Windows SIDs.
+        system_found |= unsafe { EqualSid(sid, system_sid.0.as_ptr()) } != 0;
+    }
+    Ok(user_found && system_found)
+}
+
+/// Applies the protected current-user DACL to an existing data directory.
+///
+/// # Errors
+/// Returns an error when Windows cannot replace and verify its DACL.
+pub fn protect_directory(path: &Path) -> io::Result<()> {
+    let descriptor = private_descriptor()?;
+    let mut present = 0;
+    let mut defaulted = 0;
+    let mut acl: *mut ACL = ptr::null_mut();
+    // SAFETY: The owned descriptor and output pointers remain live for the call.
+    if unsafe {
+        GetSecurityDescriptorDacl(
+            descriptor.0.as_ptr(),
+            &mut present,
+            &mut acl,
+            &mut defaulted,
+        )
+    } == 0
+        || present == 0
+        || acl.is_null()
+    {
+        return Err(io::Error::other("Windows could not prepare a private DACL"));
+    }
+    let wide = path_wide(path)?;
+    // SAFETY: The path and ACL remain live for this synchronous security update.
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            acl,
+            ptr::null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    if !is_private_path(path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "data directory DACL is not private",
+        ));
+    }
+    Ok(())
+}
+
+/// Checks the on-disk object DACL before consuming a bridge connection document.
+///
+/// # Errors
+/// Returns an error when the descriptor cannot be queried.
+pub fn is_private_path(path: &Path) -> io::Result<bool> {
+    let wide = path_wide(path)?;
+    let mut raw = ptr::null_mut();
+    // SAFETY: The path is NUL-terminated and Windows writes one allocated descriptor pointer.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut raw,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::from_raw_os_error(status as i32));
+    }
+    let descriptor = LocalAllocation(NonNull::new(raw).ok_or(io::Error::other(
+        "Windows returned a null security descriptor",
+    ))?);
+    has_private_dacl(descriptor.0.as_ptr())
+}
+
+/// Atomically creates a bridge document with a protected current-user DACL.
+///
+/// # Errors
+/// Returns an error if the path exists or Windows cannot enforce the DACL.
+pub fn create_private_file(path: &Path) -> io::Result<File> {
+    let descriptor = private_descriptor()?;
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0.as_ptr(),
+        bInheritHandle: 0,
+    };
+    let wide = path_wide(path)?;
+    // SAFETY: The path and attributes remain live during CreateFileW; no handle inheritance is allowed.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_GENERIC_WRITE,
+            FILE_SHARE_NONE,
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateFileW returned a fresh owned handle, transferred to File exactly once.
+    Ok(unsafe { File::from_raw_handle(handle) })
+}
+
 /// Creates a local named pipe with a protected current-user-only DACL.
 ///
 /// # Errors
@@ -146,9 +339,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
     use windows_sys::Win32::Security::{
-        Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_KERNEL_OBJECT,
-        },
+        Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT},
         DACL_SECURITY_INFORMATION,
     };
 
@@ -183,34 +374,29 @@ mod tests {
         };
         assert_eq!(status, 0, "Windows could not read the pipe DACL");
         let descriptor = LocalAllocation(NonNull::new(raw).unwrap());
-        let mut text = ptr::null_mut();
-        let mut length = 0u32;
-        // SAFETY: Windows owns the queried descriptor and allocates the string returned here.
-        let converted = unsafe {
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                descriptor.0.as_ptr(),
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &mut text,
-                &mut length,
-            )
-        };
-        assert_ne!(converted, 0, "Windows could not format the pipe DACL");
-        let text = LocalAllocation(NonNull::new(text.cast()).unwrap());
-        // SAFETY: Windows reported the UTF-16 string length for this live allocation.
-        let sddl = String::from_utf16(unsafe {
-            std::slice::from_raw_parts(text.0.as_ptr().cast::<u16>(), length as usize)
-        })
-        .unwrap();
-        let sddl = sddl.trim_end_matches('\0');
-        assert!(sddl.starts_with("D:P"), "pipe DACL must be protected");
-        assert!(
-            sddl.contains(&current_user_sid().unwrap()),
-            "owner ACE missing"
-        );
-        assert!(sddl.contains(";;;SY)"), "LocalSystem ACE missing");
-        assert!(!sddl.contains(";;;WD)"), "Everyone must not read the pipe");
-        assert!(!sddl.contains(";;;AN)"), "Anonymous must not read the pipe");
-        assert_eq!(sddl.matches("(A;").count(), 2, "unexpected pipe ACE");
+        assert!(has_private_dacl(descriptor.0.as_ptr()).unwrap());
+    }
+
+    #[test]
+    fn native_directory_and_file_dacls_are_private() {
+        use std::io::Write;
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "secretbridge-acl-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        protect_directory(&directory).unwrap();
+        assert!(is_private_path(&directory).unwrap());
+        let path = directory.join("mcp-bridge.json");
+        let mut file = create_private_file(&path).unwrap();
+        file.write_all(b"synthetic test only").unwrap();
+        drop(file);
+        assert!(is_private_path(&path).unwrap());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 }

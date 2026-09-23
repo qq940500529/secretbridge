@@ -1513,11 +1513,15 @@ impl Drop for BridgeConnectionGuard {
 }
 
 fn write_private_file(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let mut options = fs::OpenOptions::new();
-    options.create_new(true).write(true);
+    #[cfg(windows)]
+    let mut file = secretbridge_windows_pipe_acl::create_private_file(path)?;
     #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path)?;
+    let mut file = {
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        options.mode(0o600);
+        options.open(path)?
+    };
     file.write_all(contents)?;
     file.sync_all()
 }
@@ -1532,6 +1536,13 @@ fn validate_bridge_data_directory(path: &Path) -> io::Result<()> {
     }
     #[cfg(unix)]
     if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the SecretBridge data directory permissions are too broad",
+        ));
+    }
+    #[cfg(windows)]
+    if !secretbridge_windows_pipe_acl::is_private_path(path)? {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "the SecretBridge data directory permissions are too broad",
@@ -1594,8 +1605,11 @@ fn valid_bridge_connection_metadata(metadata: &fs::Metadata, path: &Path) -> boo
 }
 
 #[cfg(windows)]
-fn valid_bridge_connection_metadata(_metadata: &fs::Metadata, _path: &Path) -> bool {
-    true
+fn valid_bridge_connection_metadata(_metadata: &fs::Metadata, path: &Path) -> bool {
+    path.parent().is_some_and(|parent| {
+        secretbridge_windows_pipe_acl::is_private_path(parent).unwrap_or(false)
+            && secretbridge_windows_pipe_acl::is_private_path(path).unwrap_or(false)
+    })
 }
 
 fn new_bridge_token() -> String {

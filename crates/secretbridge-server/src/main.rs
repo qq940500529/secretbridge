@@ -222,6 +222,17 @@ fn default_data_directory() -> Option<PathBuf> {
 
 fn create_private_data_directory(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)?;
+    #[cfg(windows)]
+    {
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid data directory",
+            ));
+        }
+        secretbridge_windows_pipe_acl::protect_directory(path)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
