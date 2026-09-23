@@ -305,19 +305,10 @@ def upstream_license(repository: str, commit: str) -> str:
     for name in names:
         url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit}/{name}"
         if shutil.which("gh"):
-            result = subprocess.run(
-                ["gh", "api", f"repos/{owner}/{repo}/contents/{name}?ref={commit}"],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=30,
-            )
-            if result.returncode != 0:
-                if "HTTP 404" in result.stderr:
-                    continue
-                raise ValueError(f"Pinned license fetch failed: {owner}/{repo}/{name}")
-            content = json.loads(result.stdout)
+            payload = download_upstream_license_with_gh(owner, repo, name, commit)
+            if payload is None:
+                continue
+            content = json.loads(payload)
             if content.get("encoding") != "base64":
                 raise ValueError("Unsupported upstream license encoding")
             raw = base64.b64decode(content["content"])
@@ -338,6 +329,29 @@ def upstream_license(repository: str, commit: str) -> str:
         text = raw.decode("utf-8")
         return f"\n--- {url} (SHA-256 {hashlib.sha256(raw).hexdigest()}) ---\n{text}\n"
     raise ValueError(f"Pinned upstream license unavailable: {owner}/{repo}@{commit}")
+
+
+def download_upstream_license_with_gh(owner: str, repo: str, name: str, commit: str) -> str | None:
+    """Keep transient GitHub CLI timeouts from failing otherwise valid packages."""
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                ["gh", "api", f"repos/{owner}/{repo}/contents/{name}?ref={commit}"],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            result = None
+        if result is not None and result.returncode == 0:
+            return result.stdout
+        if result is not None and "HTTP 404" in result.stderr:
+            return None
+        if attempt < 2:
+            time.sleep(0.25 * (attempt + 1))
+    raise ValueError(f"Pinned license fetch failed after 3 attempts: {owner}/{repo}/{name}")
 
 
 def download_upstream_license(url: str) -> bytes | None:

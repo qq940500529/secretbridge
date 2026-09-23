@@ -431,6 +431,9 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                CHECK (lifecycle IN ('saved', 'one_time'));
              CREATE INDEX action_templates_lifecycle_idx
                ON action_templates(lifecycle, created_at_unix_ms);
+             ALTER TABLE run_output
+               ADD COLUMN created_at_unix_ms INTEGER NOT NULL DEFAULT 0
+               CHECK (created_at_unix_ms >= 0);
              PRAGMA user_version = 20;
              COMMIT;",
         )?;

@@ -789,7 +789,10 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runs/{id}", get(get_synthetic_run))
         .route("/api/v1/runs/{id}/cancel", post(cancel_synthetic_run))
         .route("/api/v1/runs/{id}/events", get(list_run_safe_events))
-        .route("/api/v1/runs/{id}/output", post(get_run_output))
+        .route(
+            "/api/v1/runs/{id}/output",
+            post(get_run_output).delete(delete_run_output),
+        )
         .route("/api/v1/safe-events", get(list_safe_events))
         .route(
             "/api/v1/terminals",
@@ -839,6 +842,22 @@ async fn get_run_output(
         .await
         .map_err(map_catalog_error)?,
     ))
+}
+
+async fn delete_run_output(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(id): AxumPath<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    task::spawn_blocking(move || catalog.clear_output(id))
+        .await
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_catalog_error)?;
+    let _ = state.changes.send(());
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn now_unix_ms() -> u64 {

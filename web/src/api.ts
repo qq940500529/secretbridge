@@ -556,7 +556,12 @@ export interface ParameterDefinition {
   max_length: number | null;
 }
 export interface RunOutput {
-  items: Array<{ sequence: number; stream: string; text: string }>;
+  items: Array<{
+    sequence: number;
+    stream: string;
+    text: string;
+    created_at_unix_ms: number;
+  }>;
   next_cursor: number;
   oldest_cursor: number;
   truncated: boolean;
@@ -575,6 +580,18 @@ export async function readRunOutput(
       method: "POST",
       headers: sessionJsonHeaders(token),
       body: JSON.stringify({ cursor, wait_ms: 0 }),
+    }),
+  );
+}
+
+export async function deleteRunOutput(
+  token: string,
+  id: string,
+): Promise<void> {
+  await requireOk(
+    await fetch(`/api/v1/runs/${encodeURIComponent(id)}/output`, {
+      method: "DELETE",
+      headers: sessionHeaders(token),
     }),
   );
 }

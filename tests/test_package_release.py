@@ -4,6 +4,7 @@
 
 import importlib.util
 import json
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -127,6 +128,25 @@ class PackageReleaseTests(unittest.TestCase):
         self.assertIn("license fixture", notice)
         self.assertIn("Readme.markdown", download.call_args.args[0])
         package_release.upstream_license.cache_clear()
+
+    def test_gh_license_download_retries_timeout(self):
+        result = subprocess.CompletedProcess(
+            args=["gh", "api"], returncode=0, stdout="license fixture", stderr=""
+        )
+        with (
+            patch.object(
+                package_release.subprocess,
+                "run",
+                side_effect=[subprocess.TimeoutExpired(["gh", "api"], 30), result],
+            ) as request,
+            patch.object(package_release.time, "sleep") as sleep,
+        ):
+            payload = package_release.download_upstream_license_with_gh(
+                "example", "project", "LICENSE", "a" * 40
+            )
+        self.assertEqual(payload, "license fixture")
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(0.25)
 
     def test_sbom_contains_native_and_web_runtime_components(self):
         with tempfile.TemporaryDirectory() as temporary:

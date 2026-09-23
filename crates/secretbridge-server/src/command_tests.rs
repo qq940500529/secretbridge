@@ -180,6 +180,7 @@ async fn approved_command_reuses_secure_terminal_and_only_exposes_redacted_outpu
             .any(|item| item.text.contains("stdout-marker")),
         "terminal-backed output is retained for run history"
     );
+    assert!(page.items.iter().all(|item| item.created_at_unix_ms > 0));
     assert!(
         !serde_json::to_string(&page)
             .unwrap()
@@ -688,6 +689,11 @@ fn retained_output_reports_gaps_and_rotation_invalidates_approval() {
     assert!(page.truncated && page.has_more);
     assert_eq!(page.oldest_cursor, 63);
     assert_eq!(page.items.len(), 16);
+    assert!(page.items.iter().all(|item| item.created_at_unix_ms > 0));
+    assert!(matches!(
+        state.catalog.clear_output(outcome.run.id),
+        Err(CatalogError::ResourceInUse)
+    ));
     assert!(state.catalog.output(outcome.run.id, 2111).is_err());
     assert!(
         !state
@@ -844,8 +850,10 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
         .run;
     state
         .catalog
-        .append_output(run.id, "stdout", "[REDACTED]")
+        .append_output(run.id, "stdout", "[REDACTED]\u{001b}safe")
         .unwrap();
+    let stored = state.catalog.output(run.id, 0).unwrap();
+    assert_eq!(stored.items[0].text, "[REDACTED]safe");
     let (token, _) = state.issue_session().await.expect("issue session");
     let mut changes = state.changes.subscribe();
     for (provided_origin, provided_token, body, expected) in [
@@ -895,6 +903,73 @@ async fn output_api_is_authenticated_origin_checked_and_does_not_notify_on_read(
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn output_deletion_requires_session_origin_and_finished_run() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let origin = "http://127.0.0.1:8787";
+    let (state, _) = AppState::new([origin.to_owned()]);
+    let (approval, _) = configure(&state, "stdin", 10);
+    let run = state
+        .catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    state
+        .catalog
+        .append_output(run.id, "stdout", "[REDACTED]")
+        .unwrap();
+    let (token, _) = state.issue_session().await.expect("issue session");
+    for (provided_origin, provided_token, expected) in [
+        (origin, "invalid", StatusCode::UNAUTHORIZED),
+        (
+            "http://untrusted.invalid",
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (origin, token.as_str(), StatusCode::CONFLICT),
+    ] {
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/runs/{}/output", run.id))
+                    .header("origin", provided_origin)
+                    .header("authorization", format!("Bearer {provided_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    state.catalog.start_run(run.id).unwrap();
+    state
+        .catalog
+        .complete_command_run(run.id, "command_ok", Some(0))
+        .unwrap();
+    let response = crate::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/runs/{}/output", run.id))
+                .header("origin", origin)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(state.catalog.output(run.id, 0).unwrap().items.is_empty());
 }
 
 #[test]

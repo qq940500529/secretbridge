@@ -220,6 +220,7 @@ pub struct OutputChunk {
     pub sequence: u64,
     pub stream: String,
     pub text: String,
+    pub created_at_unix_ms: u64,
 }
 
 impl Catalog {
@@ -227,15 +228,22 @@ impl Catalog {
         if text.is_empty() {
             return Ok(());
         }
+        let safe_text: String = text
+            .chars()
+            .filter(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'))
+            .collect();
+        if safe_text.is_empty() {
+            return Ok(());
+        }
         let connection = self.lock();
         let transaction = connection
             .unchecked_transaction()
             .map_err(|_| CatalogError::Storage)?;
-        let mut remaining = text;
+        let mut remaining = safe_text.as_str();
         while !remaining.is_empty() {
             let end = remaining.floor_char_boundary(4096);
             let (chunk, tail) = remaining.split_at(end);
-            transaction.execute("INSERT INTO run_output(run_id, sequence, stream, text) SELECT ?1, COALESCE(MAX(sequence),0)+1, ?2, ?3 FROM run_output WHERE run_id=?1", rusqlite::params![id.to_string(),stream,chunk]).map_err(|_| CatalogError::Storage)?;
+            transaction.execute("INSERT INTO run_output(run_id, sequence, stream, text, created_at_unix_ms) SELECT ?1, COALESCE(MAX(sequence),0)+1, ?2, ?3, ?4 FROM run_output WHERE run_id=?1", rusqlite::params![id.to_string(),stream,chunk,i64::try_from(crate::now_unix_ms()).map_err(|_| CatalogError::Storage)?]).map_err(|_| CatalogError::Storage)?;
             remaining = tail;
         }
         // A bounded 8 MiB history survives terminal closure and service restart.
@@ -253,7 +261,7 @@ impl Catalog {
         if cursor > last {
             return Err(CatalogError::Invalid);
         }
-        let mut statement = connection.prepare("SELECT sequence,stream,text FROM run_output WHERE run_id=?1 AND sequence>?2 ORDER BY sequence LIMIT 16").map_err(|_| CatalogError::Storage)?;
+        let mut statement = connection.prepare("SELECT sequence,stream,text,created_at_unix_ms FROM run_output WHERE run_id=?1 AND sequence>?2 ORDER BY sequence LIMIT 16").map_err(|_| CatalogError::Storage)?;
         let items = statement
             .query_map(
                 rusqlite::params![
@@ -265,6 +273,8 @@ impl Catalog {
                         sequence: u64::from(r.get::<_, u32>(0)?),
                         stream: r.get(1)?,
                         text: r.get(2)?,
+                        created_at_unix_ms: u64::try_from(r.get::<_, i64>(3)?)
+                            .map_err(|_| rusqlite::Error::InvalidQuery)?,
                     })
                 },
             )
@@ -288,6 +298,17 @@ impl Catalog {
             exit_code,
             state: run.state,
         })
+    }
+
+    pub fn clear_output(&self, id: Uuid) -> Result<(), CatalogError> {
+        let run = self.get_synthetic_run(id)?;
+        if matches!(run.state, RunState::Queued | RunState::Running) {
+            return Err(CatalogError::ResourceInUse);
+        }
+        self.lock()
+            .execute("DELETE FROM run_output WHERE run_id = ?1", [id.to_string()])
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(())
     }
 }
 
