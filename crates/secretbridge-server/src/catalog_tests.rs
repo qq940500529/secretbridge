@@ -2151,6 +2151,26 @@ fn create_approved_workflow(catalog: &Catalog) -> super::Approval {
 }
 
 #[test]
+fn cancelled_command_run_has_a_cancelled_safe_event() {
+    let catalog = Catalog::in_memory().unwrap();
+    let approval = create_approved_workflow(&catalog);
+    let run = catalog
+        .create_synthetic_run(&CreateSyntheticRun {
+            approval_id: approval.id,
+            idempotency_key: Uuid::new_v4().to_string(),
+        })
+        .unwrap()
+        .run;
+    catalog.start_run(run.id).unwrap();
+    catalog
+        .complete_command_run(run.id, "cancelled", None)
+        .unwrap();
+    let events = catalog.list_safe_events(Some(run.id)).unwrap();
+    assert_eq!(events.last().unwrap().kind, SafeEventKind::Cancelled);
+    assert_eq!(events.last().unwrap().message, "run cancelled");
+}
+
+#[test]
 fn sanitized_output_survives_catalog_reopen_with_sequence_and_stream() {
     let database = TemporaryDatabase::new();
     let catalog = Catalog::open(&database.path).unwrap();

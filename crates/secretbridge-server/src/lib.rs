@@ -18,6 +18,7 @@ mod maintenance_api;
 mod mcp;
 mod parameters;
 mod postgres;
+mod postgres_run;
 mod redaction;
 mod runtime;
 mod secret_store;
@@ -78,13 +79,13 @@ use catalog::{
     ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEventKind, BrowserAuthMode,
     CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError, CreateActionTemplate,
     CreateApproval, CreateCredentialReference, CreateRunOutcome, CreateSyntheticRun, CreateTarget,
-    CredentialReference, DecideApproval, PolicyEvaluation, PostgresRunResult, SafeEvent,
-    SecretState, SyntheticRun, Target, UpdateActionTemplate, UpdateCredentialReference,
-    UpdateTarget,
+    CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent, SecretState, SyntheticRun,
+    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
 };
 use credential_service::{CredentialService, CredentialServiceError};
-use postgres::{PostgresCheckOutcome, PostgresExecutor};
-use secret_store::{SecretStore, SecretStoreError};
+use postgres::PostgresExecutor;
+use postgres_run::drive_postgres_check;
+use secret_store::{SecretReadGate, SecretStore, SecretStoreError};
 use terminal::{
     CreateTerminal, TerminalCapabilities, TerminalConnection, TerminalError, TerminalEvent,
     TerminalManager, TerminalShell, TerminalStatus, TerminalSummary,
@@ -111,6 +112,7 @@ pub struct AppState {
     postgres_executor: Arc<dyn PostgresExecutor>,
     run_cancellations: RunCancellations,
     secret_store: Arc<dyn SecretStore>,
+    secret_reads: SecretReadGate,
     terminals: TerminalManager,
     terminal_controls: terminal_control::TerminalControls,
     command_directory: Arc<PathBuf>,
@@ -222,6 +224,7 @@ impl AppState {
             postgres_executor,
             run_cancellations: RunCancellations::default(),
             secret_store,
+            secret_reads: SecretReadGate::new(),
             changes: terminals.change_notifier(),
             runtime_control: None,
             terminals,
@@ -1839,83 +1842,6 @@ async fn drive_run(state: AppState, run_id: Uuid, cancellation: CancellationToke
         ) {
             invalidate_synthetic_run(state.catalog.clone(), run_id).await;
         }
-    }
-}
-
-async fn drive_postgres_check(state: &AppState, run_id: Uuid, cancellation: &CancellationToken) {
-    let _configuration = state.configuration_gate.read().await;
-    let context_catalog = state.catalog.clone();
-    let context = task::spawn_blocking(move || context_catalog.run_execution_context(run_id)).await;
-    let context = match context {
-        Ok(Ok(context)) => context,
-        Ok(Err(CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied)) => {
-            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
-            return;
-        }
-        _ => return,
-    };
-    let Some(postgres_target) = context.target.postgres.as_ref() else {
-        finish_postgres_check(state, run_id, PostgresRunResult::ConfigurationInvalid).await;
-        return;
-    };
-    let Some(credential) = context.credential.as_ref() else {
-        finish_postgres_check(state, run_id, PostgresRunResult::CredentialUnavailable).await;
-        return;
-    };
-    let credential_id = credential.id;
-    let store = state.secret_store.clone();
-    let password = task::spawn_blocking(move || store.get(credential_id)).await;
-    let Ok(Ok(password)) = password else {
-        finish_postgres_check(state, run_id, PostgresRunResult::CredentialUnavailable).await;
-        return;
-    };
-    let now_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX);
-    let approval_remaining = Duration::from_millis(
-        context
-            .approval
-            .expires_at_unix_ms
-            .saturating_sub(now_unix_ms),
-    );
-    let operation_timeout = Duration::from_secs(context.template.timeout_seconds);
-    let effective_timeout = operation_timeout.min(approval_remaining);
-    if effective_timeout.is_zero() {
-        invalidate_synthetic_run(state.catalog.clone(), run_id).await;
-        return;
-    }
-    let check = state
-        .postgres_executor
-        .connection_check(postgres_target, &password);
-    let result = tokio::select! {
-        () = cancellation.cancelled() => {
-            invalidate_synthetic_run(state.catalog.clone(), run_id).await;
-            return;
-        },
-        result = timeout(effective_timeout, check) => match result {
-            Ok(PostgresCheckOutcome::ConnectionOk) => PostgresRunResult::ConnectionOk,
-            Ok(PostgresCheckOutcome::ConnectionFailed) => PostgresRunResult::ConnectionFailed,
-            Ok(PostgresCheckOutcome::ConfigurationInvalid) => PostgresRunResult::ConfigurationInvalid,
-            Err(_) => PostgresRunResult::TimedOut,
-        }
-    };
-    finish_postgres_check(state, run_id, result).await;
-}
-
-async fn finish_postgres_check(state: &AppState, run_id: Uuid, result: PostgresRunResult) {
-    let complete_catalog = state.catalog.clone();
-    let completed =
-        task::spawn_blocking(move || complete_catalog.complete_postgres_run(run_id, result)).await;
-    if matches!(
-        completed,
-        Ok(Err(
-            CatalogError::ApprovalNotUsable | CatalogError::PolicyDenied
-        ))
-    ) {
-        invalidate_synthetic_run(state.catalog.clone(), run_id).await;
     }
 }
 

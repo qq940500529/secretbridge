@@ -5,6 +5,7 @@ use crate::{
     AppState,
     catalog::{Catalog, CatalogError, RunState},
     redaction::{Redactor, Utf8Decoder},
+    secret_store::{SECRET_READ_TIMEOUT, SecretReadError},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -373,15 +374,21 @@ pub async fn drive(state: &AppState, id: Uuid, cancellation: &CancellationToken)
         return;
     };
     let parameters = context.approval.parameters;
-    let Some(secrets) = load_command_secrets(state, id, &config).await else {
-        return;
-    };
     let remaining = context
         .approval
         .expires_at_unix_ms
         .saturating_sub(super::now_unix_ms());
     let limit =
         Duration::from_secs(context.template.timeout_seconds).min(Duration::from_millis(remaining));
+    let started = Instant::now();
+    let Some(secrets) = load_command_secrets(state, id, &config, cancellation, limit).await else {
+        return;
+    };
+    let limit = limit.saturating_sub(started.elapsed());
+    if limit.is_zero() {
+        let _ = state.catalog.complete_command_run(id, "timed_out", None);
+        return;
+    }
     if drive_protocol(&ProtocolExecution {
         state,
         id,
@@ -504,17 +511,35 @@ async fn load_command_secrets(
     state: &AppState,
     run_id: Uuid,
     config: &CommandConfig,
+    cancellation: &CancellationToken,
+    limit: Duration,
 ) -> Option<Vec<Zeroizing<String>>> {
+    let started = Instant::now();
     let mut secrets = Vec::new();
     for slot in &config.slots {
-        let store = state.secret_store.clone();
-        let credential_id = slot.credential_id;
-        let Ok(Ok(secret)) = tokio::task::spawn_blocking(move || store.get(credential_id)).await
-        else {
-            let _ = state
-                .catalog
-                .complete_command_run(run_id, "credential_unavailable", None);
-            return None;
+        let read_limit = limit
+            .saturating_sub(started.elapsed())
+            .min(SECRET_READ_TIMEOUT);
+        let secret = state
+            .secret_reads
+            .get(
+                state.secret_store.clone(),
+                slot.credential_id,
+                read_limit,
+                Some(cancellation),
+            )
+            .await;
+        let secret = match secret {
+            Ok(secret) => secret,
+            Err(error) => {
+                let status = match error {
+                    SecretReadError::Cancelled => "cancelled",
+                    SecretReadError::TimedOut => "timed_out",
+                    SecretReadError::Store(_) | SecretReadError::Worker => "credential_unavailable",
+                };
+                let _ = state.catalog.complete_command_run(run_id, status, None);
+                return None;
+            }
         };
         if secret.is_empty() {
             let _ = state

@@ -6,6 +6,27 @@ use crate::catalog::{
     CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
     CreateTarget, DecideApproval,
 };
+use std::sync::Arc;
+
+struct SlowReadStore {
+    started: Arc<tokio::sync::Notify>,
+}
+
+impl crate::secret_store::SecretStore for SlowReadStore {
+    fn set(&self, _: Uuid, _: &str) -> Result<(), crate::secret_store::SecretStoreError> {
+        unreachable!("slow read fixture does not write")
+    }
+
+    fn get(&self, _: Uuid) -> Result<Zeroizing<String>, crate::secret_store::SecretStoreError> {
+        self.started.notify_one();
+        std::thread::sleep(Duration::from_secs(2));
+        Ok(Zeroizing::new("synthetic-only".to_owned()))
+    }
+
+    fn delete(&self, _: Uuid) -> Result<(), crate::secret_store::SecretStoreError> {
+        unreachable!("slow read fixture does not delete")
+    }
+}
 
 // Starting Windows PowerShell can take more than ten seconds on a contended CI
 // runner. Keep successful integration fixtures comfortably above that startup
@@ -431,6 +452,77 @@ async fn command_timeout_and_explicit_cancellation_stop_real_processes() {
         .await
         .unwrap();
     }
+}
+
+#[tokio::test]
+async fn blocked_secret_read_times_out_before_command_execution() {
+    let (mut state, _) = AppState::new([]);
+    let (approval, _) = configure(&state, "environment", 1);
+    state.secret_store = Arc::new(SlowReadStore {
+        started: Arc::new(tokio::sync::Notify::new()),
+    });
+    let started = Instant::now();
+    let run = crate::create_run_for_state(
+        &state,
+        CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+    .unwrap()
+    .run;
+    let page = wait(&state, run.id).await;
+    assert_eq!(page.state, RunState::Failed);
+    assert_eq!(
+        state
+            .catalog
+            .get_synthetic_run(run.id)
+            .unwrap()
+            .result_status
+            .as_deref(),
+        Some("timed_out")
+    );
+    assert!(page.items.is_empty());
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn cancellation_during_secret_read_stops_the_run() {
+    let (mut state, _) = AppState::new([]);
+    let (approval, _) = configure(&state, "environment", 10);
+    let started_read = Arc::new(tokio::sync::Notify::new());
+    state.secret_store = Arc::new(SlowReadStore {
+        started: started_read.clone(),
+    });
+    let run = crate::create_run_for_state(
+        &state,
+        CreateSyntheticRun {
+            approval_id: approval,
+            idempotency_key: Uuid::new_v4().to_string(),
+        },
+    )
+    .await
+    .unwrap()
+    .run;
+    tokio::time::timeout(Duration::from_secs(2), started_read.notified())
+        .await
+        .expect("native read started before cancellation");
+    let started = Instant::now();
+    let current = state.catalog.get_synthetic_run(run.id).unwrap();
+    crate::cancel_run_for_state(
+        &state,
+        run.id,
+        crate::catalog::CancelSyntheticRun {
+            expected_version: current.version,
+        },
+    )
+    .await
+    .unwrap();
+    let page = wait(&state, run.id).await;
+    assert_eq!(page.state, RunState::Cancelled);
+    assert!(page.items.is_empty());
+    assert!(started.elapsed() < Duration::from_secs(2));
 }
 
 #[tokio::test]
