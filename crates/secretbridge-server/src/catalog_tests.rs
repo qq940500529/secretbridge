@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Instant};
 
 use uuid::Uuid;
 
@@ -2206,4 +2206,165 @@ impl Drop for TemporaryDatabase {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
+}
+
+#[test]
+#[ignore = "run explicitly in the scheduled same-directory stability soak"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the two-phase history and backup acceptance remains auditable as one scenario"
+)]
+fn same_directory_soak_records_resource_trend_and_restores_history() {
+    struct SoakDirectory {
+        path: PathBuf,
+        remove_on_drop: bool,
+    }
+    impl Drop for SoakDirectory {
+        fn drop(&mut self) {
+            if self.remove_on_drop {
+                let _ = fs::remove_dir_all(&self.path);
+            }
+        }
+    }
+
+    let root = if let Some(path) = std::env::var_os("SECRETBRIDGE_SOAK_OWNED_DIR") {
+        let path = PathBuf::from(path);
+        assert_eq!(
+            fs::read_to_string(path.join(".secretbridge-soak-owned")).unwrap(),
+            "secretbridge-owned-soak\n",
+            "external soak directory must be created by the harness"
+        );
+        SoakDirectory {
+            path,
+            remove_on_drop: false,
+        }
+    } else {
+        let path = std::env::temp_dir().join(format!("secretbridge-soak-{}", Uuid::new_v4()));
+        fs::create_dir(&path).expect("create owned soak directory");
+        SoakDirectory {
+            path,
+            remove_on_drop: true,
+        }
+    };
+    let database = root.path.join("catalog.sqlite3");
+    let mut first_run = None;
+    let mut last_run = None;
+    let initial = Catalog::open(&database).expect("open same directory before repeated run");
+    let base_count = initial.list_synthetic_runs().unwrap().len();
+    assert!(matches!(base_count, 0 | 2_000));
+    let mut template_id = initial
+        .list_action_templates()
+        .unwrap()
+        .first()
+        .map(|item| item.id);
+    drop(initial);
+
+    for phase in 1..=2 {
+        let started = Instant::now();
+        let catalog = Catalog::open(&database).expect("open the same catalog directory");
+        let template = if let Some(id) = template_id {
+            id
+        } else {
+            let credential = create_credential(&catalog);
+            let target = create_target(&catalog, credential.id);
+            let id = create_action_template(&catalog, target.id).id;
+            template_id = Some(id);
+            id
+        };
+        assert_eq!(
+            catalog.list_synthetic_runs().unwrap().len(),
+            base_count + (phase - 1) * 1_000
+        );
+
+        for _ in 0..1_000 {
+            let approval = catalog
+                .create_approval(&CreateApproval {
+                    authorization_mode: crate::parameters::AuthorizationMode::default(),
+                    parameters: crate::parameters::ParameterValues::default(),
+                    action_template_id: template,
+                    conversation_id: None,
+                    reason: None,
+                    expires_in_seconds: 3_600,
+                })
+                .expect("create synthetic approval");
+            catalog
+                .approve_approval(
+                    approval.id,
+                    &DecideApproval {
+                        expected_version: approval.version,
+                        note: None,
+                    },
+                )
+                .expect("approve synthetic request");
+            let run = catalog
+                .create_synthetic_run(&CreateSyntheticRun {
+                    approval_id: approval.id,
+                    idempotency_key: Uuid::new_v4().to_string(),
+                })
+                .expect("create synthetic run")
+                .run;
+            catalog.start_run(run.id).expect("start synthetic run");
+            catalog
+                .append_output(run.id, "stdout", "synthetic result\n")
+                .expect("retain safe output");
+            catalog
+                .complete_synthetic_run(run.id)
+                .expect("complete synthetic run");
+            first_run.get_or_insert(run.id);
+            last_run = Some(run.id);
+        }
+
+        let expected = base_count + phase * 1_000;
+        assert_eq!(catalog.list_approvals().unwrap().len(), expected);
+        assert_eq!(catalog.list_synthetic_runs().unwrap().len(), expected);
+        assert!(catalog.list_safe_events(None).unwrap().len() >= expected * 3);
+        assert_eq!(
+            catalog.output(first_run.unwrap(), 0).unwrap().items.len(),
+            1
+        );
+        assert_eq!(catalog.output(last_run.unwrap(), 0).unwrap().items.len(), 1);
+
+        let mut bytes = fs::metadata(&database).unwrap().len();
+        for suffix in ["-wal", "-shm"] {
+            if let Ok(metadata) = fs::metadata(format!("{}{}", database.display(), suffix)) {
+                bytes += metadata.len();
+            }
+        }
+        let resident_pages = fs::read_to_string("/proc/self/statm")
+            .ok()
+            .and_then(|value| value.split_whitespace().nth(1)?.parse::<u64>().ok());
+        println!(
+            "SOAK_METRIC {}",
+            serde_json::json!({
+                "phase": base_count / 1_000 + phase,
+                "authorizations": expected,
+                "runs": expected,
+                "duration_seconds": started.elapsed().as_secs_f64(),
+                "catalog_bytes": bytes,
+                "resident_pages": resident_pages,
+            })
+        );
+        drop(catalog);
+    }
+
+    let catalog = Catalog::open(&database).expect("reopen after second phase");
+    let backup = catalog.backup_bytes().expect("backup complete history");
+    let (report, restored) = super::maintenance::inspect_backup(&backup).expect("inspect backup");
+    assert_eq!(report.runs, base_count + 2_000);
+    assert_eq!(
+        restored.list_synthetic_runs().unwrap().len(),
+        base_count + 2_000
+    );
+    assert_eq!(
+        restored.output(first_run.unwrap(), 0).unwrap().items.len(),
+        1
+    );
+    assert_eq!(
+        restored.output(last_run.unwrap(), 0).unwrap().items.len(),
+        1
+    );
+    println!(
+        "SOAK_METRIC {}",
+        serde_json::json!({"phase":"backup_restore","runs":report.runs,"backup_bytes":backup.len()})
+    );
 }
