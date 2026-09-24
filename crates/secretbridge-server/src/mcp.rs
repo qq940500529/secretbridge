@@ -146,7 +146,7 @@ impl SecretBridgeMcp {
     #[cfg(test)]
     fn new_local(state: AppState) -> Self {
         Self {
-            backend: McpBackend::Local(state),
+            backend: McpBackend::Local(Box::new(state)),
             tool_router: Self::tool_router(),
             actor: Uuid::new_v4(),
         }
@@ -177,7 +177,7 @@ impl SecretBridgeMcp {
 
 #[derive(Clone)]
 enum McpBackend {
-    Local(AppState),
+    Local(Box<AppState>),
     Remote(BridgeClient),
 }
 
@@ -1616,7 +1616,7 @@ async fn dispatch_bridge_request(
         );
     }
     ensure_bridge_ready(&state, operation)?;
-    let backend = McpBackend::Local(state);
+    let backend = McpBackend::Local(Box::new(state));
     match operation {
         OP_HEALTH => {
             parse_bridge_payload::<BridgeEmpty>(payload)?;

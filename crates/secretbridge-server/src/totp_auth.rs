@@ -5,11 +5,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     ApiError, AppState, BROWSER_TOTP_CREDENTIAL_ID, BrowserAuthChannel, BrowserAuthEventKind,
-    BrowserAuthMode, CatalogError, CurrentBrowserAuthProof, HeaderMap, Json, PairResponse, State,
-    StatusCode, TotpCodeRequest, TotpSetupResponse, Uuid, authentication_attempt_allowed,
-    map_catalog_error, map_secret_store_error, record_authentication_failure, require_session,
-    reset_authentication_attempts, task, validate_origin, verify_current_browser_auth,
+    BrowserAuthMode, CatalogError, CurrentBrowserAuthProof, HeaderMap, Json, PairResponse,
+    SecretStoreError, State, StatusCode, TotpCodeRequest, TotpSetupResponse, Uuid,
+    authentication_attempt_allowed, map_catalog_error, map_secret_store_error,
+    record_authentication_failure, require_session, reset_authentication_attempts, task,
+    validate_origin, verify_current_browser_auth,
 };
+use crate::secret_store::{SECRET_READ_TIMEOUT, SecretReadError};
 use base64::Engine as _;
 use qrcodegen::{QrCode, QrCodeEcc};
 use subtle::ConstantTimeEq;
@@ -29,6 +31,15 @@ pub struct PendingSetup {
 pub struct SetupMaterial {
     pub secret: Zeroizing<String>,
     pub qr_code_base64: Zeroizing<String>,
+}
+
+fn map_secret_read_error(error: SecretReadError) -> ApiError {
+    match error {
+        SecretReadError::Store(error) => map_secret_store_error(error),
+        SecretReadError::TimedOut | SecretReadError::Cancelled | SecretReadError::Worker => {
+            ApiError::SecretStoreUnavailable
+        }
+    }
 }
 
 fn build(secret: impl Into<Secret>) -> Result<Totp, ()> {
@@ -167,11 +178,16 @@ impl AppState {
                 .map_err(map_catalog_error)?;
             return Err(ApiError::Unauthorized);
         }
-        let store = self.secret_store.clone();
-        let secret = task::spawn_blocking(move || store.get(BROWSER_TOTP_CREDENTIAL_ID))
+        let secret = self
+            .secret_reads
+            .get(
+                self.secret_store.clone(),
+                BROWSER_TOTP_CREDENTIAL_ID,
+                SECRET_READ_TIMEOUT,
+                None,
+            )
             .await
-            .map_err(|_| ApiError::Internal)?
-            .map_err(map_secret_store_error)?;
+            .map_err(map_secret_read_error)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| ApiError::Internal)?
@@ -321,21 +337,27 @@ pub(super) async fn confirm_setup(
             .map_err(map_catalog_error)?;
         return Err(ApiError::Unauthorized);
     };
-    if state
+    let mode = state
         .catalog
         .browser_auth_mode()
-        .map_err(map_catalog_error)?
-        == BrowserAuthMode::PairingLink
-    {
+        .map_err(map_catalog_error)?;
+    if mode == BrowserAuthMode::PairingLink {
         return Err(ApiError::BadRequest);
     }
     let store = state.secret_store.clone();
-    let previous_secret = {
-        let store = store.clone();
-        task::spawn_blocking(move || store.get(BROWSER_TOTP_CREDENTIAL_ID))
-            .await
-            .map_err(|_| ApiError::Internal)?
-            .ok()
+    let previous_secret = match state
+        .secret_reads
+        .get(
+            store.clone(),
+            BROWSER_TOTP_CREDENTIAL_ID,
+            SECRET_READ_TIMEOUT,
+            None,
+        )
+        .await
+    {
+        Ok(secret) => Some(secret),
+        Err(SecretReadError::Store(SecretStoreError::NotFound)) => None,
+        Err(error) => return Err(map_secret_read_error(error)),
     };
     let secret = pending.secret;
     let store_for_write = store.clone();

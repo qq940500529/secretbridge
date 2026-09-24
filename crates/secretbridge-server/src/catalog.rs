@@ -1688,12 +1688,16 @@ impl Catalog {
                 RunState::Failed
             },
             Some(status),
-            if succeeded {
+            if status == "cancelled" {
+                SafeEventKind::Cancelled
+            } else if succeeded {
                 SafeEventKind::Succeeded
             } else {
                 SafeEventKind::Failed
             },
-            if succeeded {
+            if status == "cancelled" {
+                "run cancelled"
+            } else if succeeded {
                 "command run succeeded"
             } else {
                 "command run failed"
