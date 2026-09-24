@@ -108,6 +108,7 @@ pub struct AppState {
     catalog: Catalog,
     configuration_storage: ConfigurationStorage,
     credential_mutations: Arc<Mutex<()>>,
+    native_secret_mutations: Arc<Mutex<()>>,
     configuration_gate: Arc<RwLock<()>>,
     postgres_executor: Arc<dyn PostgresExecutor>,
     run_cancellations: RunCancellations,
@@ -220,6 +221,7 @@ impl AppState {
             catalog,
             configuration_storage,
             credential_mutations: Arc::new(Mutex::new(())),
+            native_secret_mutations: Arc::new(Mutex::new(())),
             configuration_gate: Arc::new(RwLock::new(())),
             postgres_executor,
             run_cancellations: RunCancellations::default(),
@@ -595,12 +597,17 @@ enum ApiError {
     SecretEntryNotFound,
     SecretStoreLocked,
     SecretStoreUnavailable,
+    SecretStoreTimedOut,
     TerminalCapacity,
     Unauthorized,
     VersionConflict,
 }
 
 impl IntoResponse for ApiError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "fixed public error codes remain auditable in one response mapping"
+    )]
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
             Self::ApprovalConsumed => (
@@ -688,6 +695,11 @@ impl IntoResponse for ApiError {
                 "secret_store_unavailable",
                 "The operating-system credential store is unavailable.",
             ),
+            Self::SecretStoreTimedOut => (
+                StatusCode::GATEWAY_TIMEOUT,
+                "secret_store_timed_out",
+                "The operating-system credential store did not respond in time.",
+            ),
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
@@ -716,6 +728,7 @@ fn map_credential_service_error(error: CredentialServiceError) -> ApiError {
         CredentialServiceError::Catalog(error) => map_catalog_error(error),
         CredentialServiceError::NotConfigured => ApiError::BadRequest,
         CredentialServiceError::Store(error) => map_secret_store_error(error),
+        CredentialServiceError::TimedOut => ApiError::SecretStoreTimedOut,
         CredentialServiceError::Worker => ApiError::Internal,
     }
 }
@@ -1347,10 +1360,14 @@ async fn delete_credential_reference(
     require_session(&state, &headers).await?;
     let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
-    CredentialService::new(state.catalog.clone(), state.secret_store.clone())
-        .delete(id)
-        .await
-        .map_err(map_credential_service_error)?;
+    CredentialService::new(
+        state.catalog.clone(),
+        state.secret_store.clone(),
+        state.native_secret_mutations.clone(),
+    )
+    .delete(id)
+    .await
+    .map_err(map_credential_service_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1369,10 +1386,14 @@ async fn set_credential_secret(
     let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
     let secret = zeroize::Zeroizing::new(request.secret);
-    let updated = CredentialService::new(state.catalog.clone(), state.secret_store.clone())
-        .set(id, request.expected_version, secret)
-        .await
-        .map_err(map_credential_service_error)?;
+    let updated = CredentialService::new(
+        state.catalog.clone(),
+        state.secret_store.clone(),
+        state.native_secret_mutations.clone(),
+    )
+    .set(id, request.expected_version, secret)
+    .await
+    .map_err(map_credential_service_error)?;
     Ok(Json(updated))
 }
 
@@ -1386,10 +1407,14 @@ async fn clear_credential_secret(
     require_session(&state, &headers).await?;
     let _configuration = state.configuration_gate.write().await;
     let _mutation = state.credential_mutations.lock().await;
-    let updated = CredentialService::new(state.catalog.clone(), state.secret_store.clone())
-        .clear(id, request.expected_version)
-        .await
-        .map_err(map_credential_service_error)?;
+    let updated = CredentialService::new(
+        state.catalog.clone(),
+        state.secret_store.clone(),
+        state.native_secret_mutations.clone(),
+    )
+    .clear(id, request.expected_version)
+    .await
+    .map_err(map_credential_service_error)?;
     Ok(Json(updated))
 }
 
