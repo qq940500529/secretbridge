@@ -1544,7 +1544,12 @@ fn valid_bridge_connection_metadata(metadata: &fs::Metadata, path: &Path) -> boo
         return false;
     };
     metadata.permissions().mode() & 0o077 == 0
-        && fs::metadata(parent).is_ok_and(|parent_metadata| parent_metadata.uid() == metadata.uid())
+        && fs::symlink_metadata(parent).is_ok_and(|parent_metadata| {
+            parent_metadata.is_dir()
+                && !parent_metadata.file_type().is_symlink()
+                && parent_metadata.permissions().mode() & 0o077 == 0
+                && parent_metadata.uid() == metadata.uid()
+        })
 }
 
 #[cfg(windows)]
@@ -1757,8 +1762,25 @@ fn bind_bridge_listener(
     let identifier = instance_id.simple().to_string();
     let socket_path = data_directory.join(format!("sb-{}", &identifier[..16]));
     let listener = UnixListener::bind(&socket_path)?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    let owner_uid = fs::metadata(data_directory)?.uid();
+    let private_socket = (|| -> io::Result<u32> {
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+        let owner_uid = fs::metadata(data_directory)?.uid();
+        if fs::symlink_metadata(&socket_path)?.uid() != owner_uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the SecretBridge socket owner is invalid",
+            ));
+        }
+        Ok(owner_uid)
+    })();
+    let owner_uid = match private_socket {
+        Ok(owner_uid) => owner_uid,
+        Err(error) => {
+            drop(listener);
+            let _ = fs::remove_file(&socket_path);
+            return Err(error);
+        }
+    };
     Ok((
         BridgeListener::Unix {
             listener,
@@ -1888,6 +1910,10 @@ async fn connect_bridge(
 }
 
 #[cfg(unix)]
+#[allow(
+    clippy::verbose_bit_mask,
+    reason = "the security check intentionally names the group/other permission-bit mask"
+)]
 fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, connection_file: &Path) -> bool {
     let BridgeEndpoint::UnixSocket { path } = endpoint;
     path.is_absolute()
@@ -1899,7 +1925,12 @@ fn valid_bridge_endpoint(endpoint: &BridgeEndpoint, connection_file: &Path) -> b
             .is_some_and(|identifier| {
                 identifier.len() == 16 && identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
-        && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+        && fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.file_type().is_socket()
+                && metadata.permissions().mode() & 0o077 == 0
+                && fs::metadata(connection_file)
+                    .is_ok_and(|connection| metadata.uid() == connection.uid())
+        })
 }
 
 #[cfg(windows)]
