@@ -690,6 +690,35 @@ fn invalid_placeholder_and_duplicate_stdin_are_rejected() {
 }
 
 #[test]
+fn command_paths_are_checked_without_probing_the_filesystem() {
+    let mut command = fixture("environment", Uuid::new_v4());
+    command.program = PathBuf::from(&command.working_directory)
+        .join(format!("synthetic-missing-{}", Uuid::new_v4()))
+        .to_string_lossy()
+        .into_owned();
+    assert!(command.validate().is_ok());
+
+    let valid_program = command.program.clone();
+    command.program = "relative-program".into();
+    assert!(command.validate().is_err());
+    command.program = format!("{valid_program}\0suffix");
+    assert!(command.validate().is_err());
+    command.program = valid_program;
+
+    let valid_directory = command.working_directory.clone();
+    command.working_directory = PathBuf::from(&valid_directory)
+        .join("..")
+        .join("synthetic")
+        .to_string_lossy()
+        .into_owned();
+    assert!(command.validate().is_err());
+    command.working_directory = format!("{valid_directory}\0suffix");
+    assert!(command.validate().is_err());
+    command.working_directory = valid_directory;
+    assert!(command.validate().is_ok());
+}
+
+#[test]
 fn stdin_content_has_a_strict_budget_and_cannot_share_secret_stdin() {
     let mut command = fixture("environment", Uuid::new_v4());
     command.stdin_content = Some("echo synthetic\n".into());

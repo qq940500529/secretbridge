@@ -2,7 +2,7 @@
 
 [项目首页](../README.zh-CN.md) / 文档
 
-这里按读者要完成的事情组织文档。当前公开 Beta 面向个人、单机使用；请优先使用 [Release 安装包](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.8)，并先以合成凭据完成环境评估。
+这里按读者要完成的事情组织文档。当前公开 Beta 面向个人、单机使用；请优先使用 [Release 安装包](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.9)，并先以合成凭据完成环境评估。
 
 ```mermaid
 flowchart TD

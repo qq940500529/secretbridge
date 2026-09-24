@@ -13,7 +13,7 @@ use std::{
     collections::HashSet,
     fmt::Write as _,
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
@@ -79,6 +79,15 @@ fn is_credential_placeholder(argument: &str, name: &str) -> bool {
     argument == credential_placeholder(name)
 }
 
+fn valid_command_path(value: &str) -> bool {
+    let path = Path::new(value);
+    path.is_absolute()
+        && !value.contains('\0')
+        && !path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+}
+
 impl CommandConfig {
     #[allow(
         clippy::too_many_lines,
@@ -132,10 +141,8 @@ impl CommandConfig {
         if let Some(http) = &self.http {
             return http.validate(self);
         }
-        if !Path::new(&self.program).is_absolute()
-            || !Path::new(&self.program).is_file()
-            || !Path::new(&self.working_directory).is_absolute()
-            || !Path::new(&self.working_directory).is_dir()
+        if !valid_command_path(&self.program)
+            || !valid_command_path(&self.working_directory)
             || self.program.len() > 1024
             || self.working_directory.len() > 1024
             || self.arguments.len() > 32

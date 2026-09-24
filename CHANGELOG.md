@@ -6,6 +6,14 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.2.0-beta.9 — 2026-09-24
+
+- Require a PIN during first-time initialization and keep it when an optional authenticator is bound. Encrypt detailed diagnostic records continuously; the user unlocks and selects export fields with the same PIN. Advance SQLite to schema 23.
+- Bound operating-system credential reads and writes, including TOTP enrollment and disablement, so stalled native prompts do not leave a usable late secret; strengthened private Unix IPC metadata checks.
+- Verify 4,000 synthetic approvals and runs across persistent catalog processes, with backup and resource trends; pin Linux and macOS native package runners to the Beta validation targets.
+- Retain bounded, sanitized run output and safe failure details for later inspection and export, including after a terminal closes.
+- Stop probing user-supplied command paths before approval; reject malformed paths and let the approved launch report missing files. Generate database test credentials at runtime and keep synthetic scanner markers off disk.
+
 - Advertise concrete output schemas for every MCP tool and document the response paths used by AI clients. Advance the diagnostic export to format 3 with aggregated, fixed-code non-MCP run failure stages and first/last occurrence times; add a cross-resource state and cleanup contract for approvals, runs, terminals and input leases.
 - Advance SQLite to schema 22. Group AI requests and runs by conversation ID and summary; let the human choose per-task, identical-task or one-hour conversation-wide approval in Web. Conversation-wide authorization requires a high-risk acknowledgement, displays a persistent warning and can be revoked. Keep the in-page approval dialog visible regardless of notification setting; offer separate browser and native OS notification channels with generic, non-sensitive messages. Track real-desktop and cross-platform verification in a community backlog without treating it as an implementation-issue closure gate.
 - Advance SQLite to schema 21 and diagnostic format 2. Record only fixed MCP failure classes with counts and first/last times, and summarize terminal state, stale terminal references, browser authentication mode and bridge protocol version. Complete the README deployment handoff through opening the local management page and a final health check.
