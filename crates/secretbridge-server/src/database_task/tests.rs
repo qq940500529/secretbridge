@@ -4,8 +4,12 @@ use super::*;
 use crate::catalog::{CreateSyntheticRun, DecideApproval, RunState};
 
 pub(crate) fn test_password() -> &'static str {
-    static VALUE: std::sync::LazyLock<Zeroizing<String>> =
-        std::sync::LazyLock::new(|| Zeroizing::new(format!("synthetic-db-{}", Uuid::new_v4())));
+    static VALUE: std::sync::LazyLock<Zeroizing<String>> = std::sync::LazyLock::new(|| {
+        Zeroizing::new(
+            std::env::var("SECRETBRIDGE_TEST_DB_PASSWORD")
+                .unwrap_or_else(|_| format!("Synthetic-db-{}", Uuid::new_v4())),
+        )
+    });
     VALUE.as_str()
 }
 pub(crate) fn config(engine: DatabaseEngine, port: u16, credential: Uuid) -> CommandConfig {
@@ -285,7 +289,7 @@ async fn roundtrip(engine: DatabaseEngine) {
         RunState::Succeeded,
         "{value}"
     );
-    assert_eq!(value["rows"][0][0], "[REDACTED]");
+    assert_eq!(value["rows"][0][0], "[REDACTED]", "{value}");
     assert_eq!(value["rows"][0][1], "7");
     assert_eq!(value["rows"][0][3], Value::Null);
     assert_eq!(value["rows"][0][4], "12345678901234567890.123456");
@@ -936,7 +940,8 @@ async fn real_database_web_configuration_approval_execute_and_read() {
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let id = Uuid::parse_str(run["run"]["id"].as_str().unwrap()).unwrap();
-        assert_eq!(wait(&state, id).await["rows"][0][0], "100");
+        let result = wait(&state, id).await;
+        assert_eq!(result["rows"][0][0], "100", "{result}");
         let (status, output) = web_request(
             &state,
             &token,
