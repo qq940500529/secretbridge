@@ -80,9 +80,9 @@ Detailed engineering documents are currently in Simplified Chinese. Start with t
 |---|---|---|
 | Windows | Windows 11 x64 | PowerShell / CMD |
 | Linux | Ubuntu 24.04 x64 | Bash |
-| macOS | macOS 14+ arm64/x64 | Zsh |
+| macOS | macOS 14+ arm64 | Zsh |
 
-Other versions and architectures are experimental until separately validated. Beta packages are unsigned; each public release states its supported environments and known limitations.
+These are Beta validation targets, not verified minimum OS guarantees. macOS Intel and other versions or architectures are experimental until separately validated. The [platform evidence matrix](docs/支持矩阵与性能基线.md) records automated and real-device evidence separately, with review dates. Beta packages are unsigned; each public release states only its verified environments and known limitations.
 
 ## Help test the Beta
 
