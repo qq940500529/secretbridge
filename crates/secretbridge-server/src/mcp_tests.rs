@@ -1952,8 +1952,44 @@ async fn native_bridge_reclaims_a_well_formed_stale_connection_document() {
         .expect("serialize stale connection document"),
     )
     .expect("write stale connection document");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let socket_path = directory.join("sb-0000000000000000");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o666))
+            .expect("simulate broad stale socket");
+        assert!(super::read_bridge_connection(&connection_file).is_err());
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+            .expect("restore private stale socket");
+        fs::set_permissions(&connection_file, fs::Permissions::from_mode(0o644))
+            .expect("simulate broad connection document");
+        assert!(super::read_bridge_connection(&connection_file).is_err());
+        fs::set_permissions(&connection_file, fs::Permissions::from_mode(0o600))
+            .expect("restore private connection document");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755))
+            .expect("simulate broad bridge directory");
+        assert!(super::read_bridge_connection(&connection_file).is_err());
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .expect("restore private bridge directory");
+        let owner = fs::metadata(&directory).unwrap().uid();
+        assert_eq!(fs::metadata(&socket_path).unwrap().uid(), owner);
+        assert_eq!(fs::metadata(&connection_file).unwrap().uid(), owner);
+    }
     let (state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
     let bridge = LocalMcpBridge::bind(&directory, state).expect("replace stale bridge");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let owner = fs::metadata(&directory).unwrap().uid();
+        let connection = super::read_bridge_connection(&connection_file).unwrap();
+        let super::BridgeEndpoint::UnixSocket { path } = connection.endpoint;
+        let socket = fs::symlink_metadata(path).unwrap();
+        assert_eq!(socket.uid(), owner);
+        assert_eq!(socket.permissions().mode() & 0o077, 0);
+        assert_eq!(fs::metadata(&connection_file).unwrap().uid(), owner);
+    }
     drop(bridge);
     assert!(!connection_file.exists());
     fs::remove_dir(directory).expect("remove stale bridge test directory");
