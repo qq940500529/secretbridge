@@ -34,7 +34,7 @@ pub(crate) enum CredentialServiceError {
     Worker,
 }
 
-const NATIVE_MUTATION_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const NATIVE_MUTATION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub(crate) struct CredentialService {
