@@ -31,7 +31,7 @@
 | 子进程回收 | Job Object及受限令牌 | 进程组＋可用的cgroup/systemd管理 | 进程组＋launchd管理，单独验证逃逸子进程 |
 | 发布目标 | 未签名ZIP＋校验值＋本机Web管理端 | 未签名tar.gz＋校验值＋本机Web管理端 | 未签名tar.gz＋校验值＋本机Web管理端 |
 
-以上为开源版首轮正式支持目标，不是各组件最低版本或完整兼容保证。Windows/Linux arm64、macOS Intel 与其他发行版标记实验性，直到获得独立设备证据。不能把 GitHub 托管 runner 测试当作原生凭据库与浏览器交互验收。
+以上为开源版 Beta 首轮验证目标，不是已证实的最低 OS 版本或完整兼容保证。Windows/Linux arm64、macOS Intel 与其他发行版标记实验性，直到获得独立设备证据。不能把 GitHub 托管 runner 测试当作原生凭据库与浏览器交互验收。最低版本与架构的证据、复核日期和失效规则见[支持矩阵](支持矩阵与性能基线.md)。
 
 <a name="section-2"></a>
 
