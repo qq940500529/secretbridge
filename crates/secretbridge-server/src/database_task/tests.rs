@@ -3,7 +3,15 @@
 use super::*;
 use crate::catalog::{CreateSyntheticRun, DecideApproval, RunState};
 
-pub(crate) const PASSWORD: &str = "Synthetic_db_password_30";
+pub(crate) fn test_password() -> &'static str {
+    static VALUE: std::sync::LazyLock<Zeroizing<String>> = std::sync::LazyLock::new(|| {
+        Zeroizing::new(
+            std::env::var("SECRETBRIDGE_TEST_DB_PASSWORD")
+                .unwrap_or_else(|_| format!("Synthetic-db-{}", Uuid::new_v4())),
+        )
+    });
+    VALUE.as_str()
+}
 pub(crate) fn config(engine: DatabaseEngine, port: u16, credential: Uuid) -> CommandConfig {
     serde_json::from_value(json!({"program":"","working_directory":"","arguments":[],
         "slots":[{"name":"password","credential_id":credential,"injection":"protocol","environment_variable":null}],
@@ -23,7 +31,10 @@ pub(crate) fn configured(state: &AppState, command: &mut CommandConfig, timeout:
             &serde_json::from_value(json!({"name":"Database fixture", "kind":"password"})).unwrap(),
         )
         .unwrap();
-    state.secret_store.set(credential.id, PASSWORD).unwrap();
+    state
+        .secret_store
+        .set(credential.id, test_password())
+        .unwrap();
     state
         .catalog
         .set_credential_secret_state(credential.id, credential.version, true)
@@ -72,7 +83,7 @@ pub(crate) async fn wait(state: &AppState, id: Uuid) -> Value {
                     .iter()
                     .map(|c| c.text.as_str())
                     .collect::<String>();
-                assert!(!text.contains(PASSWORD));
+                assert!(!text.contains(test_password()));
                 return serde_json::from_str(&text).unwrap();
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -233,7 +244,7 @@ async fn refused_loopback_database_connections_have_fixed_bounded_errors() {
                 command.database.as_ref().unwrap(),
                 &command,
                 &ParameterValues::new(),
-                &[Zeroizing::new(PASSWORD.into())],
+                &[Zeroizing::new(test_password().into())],
                 &mut sessions,
                 Duration::from_secs(2),
             ),
@@ -245,7 +256,7 @@ async fn refused_loopback_database_connections_have_fixed_bounded_errors() {
             cleanup(
                 &mut sessions,
                 command.database.as_ref().unwrap(),
-                &[Zeroizing::new(PASSWORD.into())],
+                &[Zeroizing::new(test_password().into())],
                 true
             )
             .await
@@ -260,7 +271,7 @@ async fn roundtrip(engine: DatabaseEngine) {
     let approval = approve(
         &state,
         template,
-        &ParameterValues::from([("company".into(), json!(PASSWORD))]),
+        &ParameterValues::from([("company".into(), json!(test_password()))]),
     );
     let key = Uuid::new_v4().to_string();
     let run = crate::create_run_for_state(
@@ -278,7 +289,7 @@ async fn roundtrip(engine: DatabaseEngine) {
         RunState::Succeeded,
         "{value}"
     );
-    assert_eq!(value["rows"][0][0], "[REDACTED]");
+    assert_eq!(value["rows"][0][0], "[REDACTED]", "{value}");
     assert_eq!(value["rows"][0][1], "7");
     assert_eq!(value["rows"][0][3], Value::Null);
     assert_eq!(value["rows"][0][4], "12345678901234567890.123456");
@@ -306,7 +317,7 @@ async fn roundtrip(engine: DatabaseEngine) {
         command.database.as_ref().unwrap(),
         &command,
         &params,
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         &mut sessions,
         Duration::from_secs(5),
     )
@@ -317,7 +328,7 @@ async fn roundtrip(engine: DatabaseEngine) {
         cleanup(
             &mut sessions,
             command.database.as_ref().unwrap(),
-            &[Zeroizing::new(PASSWORD.into())],
+            &[Zeroizing::new(test_password().into())],
             false
         )
         .await
@@ -333,7 +344,7 @@ async fn roundtrip(engine: DatabaseEngine) {
             command.database.as_ref().unwrap(),
             &command,
             &ParameterValues::new(),
-            &[Zeroizing::new(PASSWORD.into())],
+            &[Zeroizing::new(test_password().into())],
             &mut sessions,
             Duration::from_secs(5),
         )
@@ -343,7 +354,7 @@ async fn roundtrip(engine: DatabaseEngine) {
         cleanup(
             &mut sessions,
             command.database.as_ref().unwrap(),
-            &[Zeroizing::new(PASSWORD.into())],
+            &[Zeroizing::new(test_password().into())],
             false,
         )
         .await;
@@ -361,7 +372,7 @@ async fn failures_limits_and_cancel(engine: DatabaseEngine) {
     db.query = "SELECT 1 AS n UNION ALL SELECT 2 AS n UNION ALL SELECT 3 AS n".into();
     db.columns = vec!["n".into()];
     db.max_rows = 2;
-    let secrets = [Zeroizing::new(PASSWORD.into())];
+    let secrets = [Zeroizing::new(test_password().into())];
     let mut sessions = Sessions::default();
     let result = request(
         command.database.as_ref().unwrap(),
@@ -571,7 +582,7 @@ async fn service_restart(engine: DatabaseEngine) {
         "{output}"
     );
     assert_eq!(output["error_code"], "query_failed");
-    assert!(!output.to_string().contains(PASSWORD));
+    assert!(!output.to_string().contains(test_password()));
 
     let mut probe = config(engine, port(engine), Uuid::new_v4());
     probe.parameters.clear();
@@ -586,7 +597,7 @@ async fn service_restart(engine: DatabaseEngine) {
                 probe.database.as_ref().unwrap(),
                 &probe,
                 &ParameterValues::new(),
-                &[Zeroizing::new(PASSWORD.into())],
+                &[Zeroizing::new(test_password().into())],
                 &mut sessions,
                 Duration::from_secs(3),
             )
@@ -597,7 +608,7 @@ async fn service_restart(engine: DatabaseEngine) {
                     cleanup(
                         &mut sessions,
                         probe.database.as_ref().unwrap(),
-                        &[Zeroizing::new(PASSWORD.into())],
+                        &[Zeroizing::new(test_password().into())],
                         false,
                     )
                     .await
@@ -607,7 +618,7 @@ async fn service_restart(engine: DatabaseEngine) {
             let _ = cleanup(
                 &mut sessions,
                 probe.database.as_ref().unwrap(),
-                &[Zeroizing::new(PASSWORD.into())],
+                &[Zeroizing::new(test_password().into())],
                 true,
             )
             .await;
@@ -634,7 +645,7 @@ async fn real_mysql_service_restart_returns_a_bounded_failure_and_recovers() {
 #[test]
 fn bounded_rows_and_configuration_reopen_preserve_no_secret_values() {
     let mut rows = ResultRows::new();
-    let secrets = [Zeroizing::new(PASSWORD.into())];
+    let secrets = [Zeroizing::new(test_password().into())];
     assert!(
         rows.add(json!(["x".repeat(100_000)]), 1000, &secrets)
             .unwrap()
@@ -676,8 +687,8 @@ fn bounded_rows_and_configuration_reopen_preserve_no_secret_values() {
     assert!(
         !std::fs::read(&path)
             .unwrap()
-            .windows(PASSWORD.len())
-            .any(|b| b == PASSWORD.as_bytes())
+            .windows(test_password().len())
+            .any(|b| b == test_password().as_bytes())
     );
     std::fs::remove_file(path).unwrap();
 }
@@ -705,7 +716,7 @@ async fn read_only(engine: DatabaseEngine) {
         command.database.as_ref().unwrap(),
         &command,
         &ParameterValues::new(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         &mut sessions,
         Duration::from_secs(5),
     )
@@ -728,7 +739,7 @@ async fn read_only(engine: DatabaseEngine) {
     cleanup(
         &mut sessions,
         command.database.as_ref().unwrap(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         false,
     )
     .await;
@@ -738,7 +749,7 @@ async fn read_only(engine: DatabaseEngine) {
         command.database.as_ref().unwrap(),
         &command,
         &ParameterValues::new(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         &mut sessions,
         Duration::from_secs(5),
     )
@@ -746,7 +757,7 @@ async fn read_only(engine: DatabaseEngine) {
     cleanup(
         &mut sessions,
         command.database.as_ref().unwrap(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         true,
     )
     .await;
@@ -756,7 +767,7 @@ async fn read_only(engine: DatabaseEngine) {
         command.database.as_ref().unwrap(),
         &command,
         &ParameterValues::new(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         &mut sessions,
         Duration::from_secs(5),
     )
@@ -781,7 +792,7 @@ async fn read_only(engine: DatabaseEngine) {
     cleanup(
         &mut sessions,
         command.database.as_ref().unwrap(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         false,
     )
     .await;
@@ -810,7 +821,7 @@ async fn tls_validation(engine: DatabaseEngine) {
     database.ca_certificate =
         Some(std::env::var("SECRETBRIDGE_TEST_DB_CA").expect("private CA fixture is required"));
     if engine == DatabaseEngine::Mysql {
-        let probe = Conn::new(mysql_options(database, PASSWORD).unwrap())
+        let probe = Conn::new(mysql_options(database, test_password()).unwrap())
             .await
             .expect("native TLS fixture must authenticate");
         probe.disconnect().await.unwrap();
@@ -820,7 +831,7 @@ async fn tls_validation(engine: DatabaseEngine) {
         command.database.as_ref().unwrap(),
         &command,
         &ParameterValues::new(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         &mut sessions,
         Duration::from_secs(5),
     )
@@ -829,7 +840,7 @@ async fn tls_validation(engine: DatabaseEngine) {
     cleanup(
         &mut sessions,
         command.database.as_ref().unwrap(),
-        &[Zeroizing::new(PASSWORD.into())],
+        &[Zeroizing::new(test_password().into())],
         false,
     )
     .await;
@@ -841,7 +852,7 @@ async fn tls_validation(engine: DatabaseEngine) {
             command.database.as_ref().unwrap(),
             &command,
             &ParameterValues::new(),
-            &[Zeroizing::new(PASSWORD.into())],
+            &[Zeroizing::new(test_password().into())],
             &mut sessions,
             Duration::from_secs(5)
         )
@@ -856,7 +867,7 @@ async fn tls_validation(engine: DatabaseEngine) {
             command.database.as_ref().unwrap(),
             &command,
             &ParameterValues::new(),
-            &[Zeroizing::new(PASSWORD.into())],
+            &[Zeroizing::new(test_password().into())],
             &mut sessions,
             Duration::from_secs(5)
         )
@@ -929,7 +940,8 @@ async fn real_database_web_configuration_approval_execute_and_read() {
         .await;
         assert_eq!(status, StatusCode::CREATED);
         let id = Uuid::parse_str(run["run"]["id"].as_str().unwrap()).unwrap();
-        assert_eq!(wait(&state, id).await["rows"][0][0], "100");
+        let result = wait(&state, id).await;
+        assert_eq!(result["rows"][0][0], "100", "{result}");
         let (status, output) = web_request(
             &state,
             &token,

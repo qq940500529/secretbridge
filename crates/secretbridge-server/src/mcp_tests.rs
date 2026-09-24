@@ -1495,7 +1495,7 @@ async fn native_mcp_executes_real_databases_without_exposing_authentication() {
             terminal_tool(&client, "secretbridge_list_action_templates", json!({})).await;
         assert_eq!(templates["items"][0]["execution_kind"], "database");
         assert!(!templates.to_string().contains("127.0.0.1"));
-        let approval = terminal_tool(&client, "secretbridge_request_approval", json!({"action_template_id":template,"expires_in_seconds":60,"parameters":{"company":db::PASSWORD}})).await;
+        let approval = terminal_tool(&client, "secretbridge_request_approval", json!({"action_template_id":template,"expires_in_seconds":60,"parameters":{"company":db::test_password()}})).await;
         let id = Uuid::parse_str(approval["id"].as_str().unwrap()).unwrap();
         let current = state.catalog.get_approval(id).unwrap();
         state
@@ -1523,7 +1523,7 @@ async fn native_mcp_executes_real_databases_without_exposing_authentication() {
         )
         .await;
         assert!(page.to_string().contains("[REDACTED]"));
-        assert!(!page.to_string().contains(db::PASSWORD));
+        assert!(!page.to_string().contains(db::test_password()));
         assert!(page["exit_code"].is_null());
         client.cancel().await.unwrap();
         server.await.unwrap();

@@ -4,7 +4,7 @@
 
 **Keep credentials local. Let a human set the approval policy.**
 
-[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.8) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
+[简体中文](README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.9) · [Docs](docs/README.md) · [Deploy](docs/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> SecretBridge `0.2.0-beta.8` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> SecretBridge `0.2.0-beta.9` is public prerelease software for individual, single-machine use. Start with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Why SecretBridge
 

@@ -5,6 +5,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.check_repository import (
     PATTERNS,
@@ -72,12 +73,13 @@ class RepositoryChecks(unittest.TestCase):
     def test_detects_synthetic_token_without_returning_value(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            secret = "ghp_" + "x" * 36
+            synthetic_token = "ghp_" + "x" * 36
             path = root / "sample.md"
-            path.write_text(secret, encoding="utf-8")
-            errors = inspect_file(root, path)
+            path.touch()
+            with patch.object(Path, "read_text", return_value=synthetic_token):
+                errors = inspect_file(root, path)
             self.assertTrue(any("github-token" in item for item in errors))
-            self.assertNotIn(secret, "\n".join(errors))
+            self.assertNotIn(synthetic_token, "\n".join(errors))
 
     def test_missing_document_link(self):
         with tempfile.TemporaryDirectory() as directory:
