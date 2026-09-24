@@ -522,6 +522,19 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
     assert_eq!(methods["pin_enabled"], true);
     assert!(!methods.to_string().contains(manual_key));
 
+    let rebind_without_disable = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "POST",
+            "/api/v1/session/totp/setup",
+            &token,
+            ORIGIN,
+            r#"{"current_pin":"synthetic-local-pin"}"#,
+        ))
+        .await
+        .expect("active TOTP rebind response");
+    assert_eq!(rebind_without_disable.status(), StatusCode::BAD_REQUEST);
+
     let replay = app
         .clone()
         .oneshot(

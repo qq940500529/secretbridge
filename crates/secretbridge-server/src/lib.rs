@@ -1203,36 +1203,18 @@ async fn set_browser_auth_method(
                 return Err(ApiError::BadRequest);
             }
             verify_pin_proof(&state, request.current_pin.as_deref()).await?;
-            let store = state.secret_store.clone();
-            let previous_secret = task::spawn_blocking(move || {
-                let previous = store.get(BROWSER_TOTP_CREDENTIAL_ID)?;
-                store.delete(BROWSER_TOTP_CREDENTIAL_ID)?;
-                Ok::<_, SecretStoreError>(previous)
-            })
-            .await
-            .map_err(|_| ApiError::Internal)?
-            .map_err(map_secret_store_error)?;
-            if let Err(error) = state.catalog.deactivate_totp() {
-                let store = state.secret_store.clone();
-                let _ = task::spawn_blocking(move || {
-                    store.set(BROWSER_TOTP_CREDENTIAL_ID, previous_secret.as_str())
-                })
-                .await;
-                return Err(map_catalog_error(error));
-            }
+            let native_guard = state.lock_native_secret_mutation().await?;
+            totp_auth::disable_totp_secret(
+                &state,
+                native_guard,
+                credential_service::NATIVE_MUTATION_TIMEOUT,
+            )
+            .await?;
         }
     }
-    reset_authentication_attempts(&state).await;
-    state.pin_attempts.lock().await.pending_totp_setup = None;
-    if matches!(request.method, BrowserAuthMethod::DisableTotp) {
-        state
-            .catalog
-            .record_browser_auth_event(
-                BrowserAuthEventKind::Disabled,
-                BrowserAuthChannel::Settings,
-                None,
-            )
-            .map_err(map_catalog_error)?;
+    if matches!(request.method, BrowserAuthMethod::Pin) {
+        reset_authentication_attempts(&state).await;
+        state.pin_attempts.lock().await.pending_totp_setup = None;
     }
     Ok(StatusCode::NO_CONTENT)
 }

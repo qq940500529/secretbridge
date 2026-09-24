@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    sync::mpsc,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use super::{
     ApiError, AppState, BROWSER_TOTP_CREDENTIAL_ID, BrowserAuthChannel, BrowserAuthEventKind,
@@ -15,8 +18,14 @@ use crate::secret_store::{SECRET_READ_TIMEOUT, SecretReadError};
 use base64::Engine as _;
 use qrcodegen::{QrCode, QrCodeEcc};
 use subtle::ConstantTimeEq;
+use tokio::{
+    sync::{OwnedMutexGuard, oneshot},
+    time::timeout,
+};
 use totp_rs::{Algorithm, Builder, Secret, Totp};
 use zeroize::Zeroizing;
+
+use crate::credential_service::NATIVE_MUTATION_TIMEOUT;
 
 pub const STEP_SECONDS: u64 = 30;
 pub const ACCEPTED_PAST_STEPS: u64 = 4;
@@ -150,6 +159,17 @@ fn valid_code(code: &str) -> bool {
 }
 
 impl AppState {
+    pub(super) async fn lock_native_secret_mutation(
+        &self,
+    ) -> Result<OwnedMutexGuard<()>, ApiError> {
+        timeout(
+            NATIVE_MUTATION_TIMEOUT,
+            self.native_secret_mutations.clone().lock_owned(),
+        )
+        .await
+        .map_err(|_| ApiError::SecretStoreTimedOut)
+    }
+
     pub(super) async fn verify_and_consume_totp(
         &self,
         code: String,
@@ -162,6 +182,7 @@ impl AppState {
                 .map_err(map_catalog_error)?;
             return Err(ApiError::Unauthorized);
         }
+        let _native_guard = self.lock_native_secret_mutation().await?;
         if !valid_code(&code)
             || self
                 .catalog
@@ -257,7 +278,7 @@ pub(super) async fn start_setup(
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?;
-    if previous_mode == BrowserAuthMode::PairingLink {
+    if previous_mode != BrowserAuthMode::Pin {
         return Err(ApiError::BadRequest);
     }
     verify_current_browser_auth(&state, previous_mode, proof).await?;
@@ -337,42 +358,22 @@ pub(super) async fn confirm_setup(
             .map_err(map_catalog_error)?;
         return Err(ApiError::Unauthorized);
     };
+    let native_guard = state.lock_native_secret_mutation().await?;
     let mode = state
         .catalog
         .browser_auth_mode()
         .map_err(map_catalog_error)?;
-    if mode == BrowserAuthMode::PairingLink {
+    if mode != BrowserAuthMode::Pin {
         return Err(ApiError::BadRequest);
     }
-    let store = state.secret_store.clone();
-    let previous_secret = match state
-        .secret_reads
-        .get(
-            store.clone(),
-            BROWSER_TOTP_CREDENTIAL_ID,
-            SECRET_READ_TIMEOUT,
-            None,
-        )
-        .await
-    {
-        Ok(secret) => Some(secret),
-        Err(SecretReadError::Store(SecretStoreError::NotFound)) => None,
-        Err(error) => return Err(map_secret_read_error(error)),
-    };
-    let secret = pending.secret;
-    let store_for_write = store.clone();
-    task::spawn_blocking(move || store_for_write.set(BROWSER_TOTP_CREDENTIAL_ID, secret.as_str()))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_secret_store_error)?;
-    if let Err(error) = state.catalog.activate_totp(step) {
-        let _ = task::spawn_blocking(move || match previous_secret {
-            Some(previous) => store.set(BROWSER_TOTP_CREDENTIAL_ID, previous.as_str()),
-            None => store.delete(BROWSER_TOTP_CREDENTIAL_ID),
-        })
-        .await;
-        return Err(map_catalog_error(error));
-    }
+    publish_totp_secret(
+        &state,
+        native_guard,
+        pending.secret,
+        step,
+        NATIVE_MUTATION_TIMEOUT,
+    )
+    .await?;
     reset_authentication_attempts(&state).await;
     state
         .catalog
@@ -385,16 +386,322 @@ pub(super) async fn confirm_setup(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn publish_totp_secret(
+    state: &AppState,
+    native_guard: OwnedMutexGuard<()>,
+    secret: Zeroizing<String>,
+    step: u64,
+    limit: Duration,
+) -> Result<(), ApiError> {
+    let store = state.secret_store.clone();
+    let catalog = state.catalog.clone();
+    let (ready_sender, ready_receiver) = oneshot::channel();
+    let (commit_sender, commit_receiver) = mpsc::channel();
+    let (finished_sender, finished_receiver) = oneshot::channel();
+    task::spawn_blocking(move || {
+        let _native_guard = native_guard;
+        match store.set(BROWSER_TOTP_CREDENTIAL_ID, secret.as_str()) {
+            Ok(()) => {
+                if ready_sender.send(Ok(())).is_err() || commit_receiver.recv().is_err() {
+                    cleanup_uncommitted_totp(store.as_ref());
+                    return;
+                }
+                let result = catalog.activate_totp(step).map_err(map_catalog_error);
+                if result.is_err() {
+                    cleanup_uncommitted_totp(store.as_ref());
+                }
+                let _ = finished_sender.send(result);
+            }
+            Err(error) => {
+                cleanup_uncommitted_totp(store.as_ref());
+                let _ = ready_sender.send(Err(error));
+            }
+        }
+    });
+    timeout(limit, ready_receiver)
+        .await
+        .map_err(|_| ApiError::SecretStoreTimedOut)?
+        .map_err(|_| ApiError::Internal)?
+        .map_err(map_secret_store_error)?;
+    commit_sender.send(()).map_err(|_| ApiError::Internal)?;
+    finished_receiver.await.map_err(|_| ApiError::Internal)??;
+    Ok(())
+}
+
+pub(super) async fn disable_totp_secret(
+    state: &AppState,
+    native_guard: OwnedMutexGuard<()>,
+    limit: Duration,
+) -> Result<(), ApiError> {
+    if state
+        .catalog
+        .browser_auth_mode()
+        .map_err(map_catalog_error)?
+        != BrowserAuthMode::Totp
+    {
+        return Err(ApiError::BadRequest);
+    }
+    // PIN remains valid independently of TOTP. Disable the seed in SQLite
+    // first so a late native deletion cannot leave an active mode without it.
+    state.catalog.deactivate_totp().map_err(map_catalog_error)?;
+    reset_authentication_attempts(state).await;
+    state.pin_attempts.lock().await.pending_totp_setup = None;
+    let event_result = state.catalog.record_browser_auth_event(
+        BrowserAuthEventKind::Disabled,
+        BrowserAuthChannel::Settings,
+        None,
+    );
+    let store = state.secret_store.clone();
+    let deletion = match timeout(
+        limit,
+        task::spawn_blocking(move || {
+            let _native_guard = native_guard;
+            store.delete(BROWSER_TOTP_CREDENTIAL_ID)
+        }),
+    )
+    .await
+    .map_err(|_| ApiError::SecretStoreTimedOut)?
+    .map_err(|_| ApiError::Internal)?
+    {
+        Ok(()) | Err(SecretStoreError::NotFound) => Ok(()),
+        Err(error) => Err(map_secret_store_error(error)),
+    };
+    event_result.map_err(map_catalog_error)?;
+    deletion
+}
+
+fn cleanup_uncommitted_totp(store: &dyn crate::secret_store::SecretStore) {
+    if !matches!(
+        store.delete(BROWSER_TOTP_CREDENTIAL_ID),
+        Ok(()) | Err(SecretStoreError::NotFound)
+    ) {
+        tracing::warn!(code = "native_totp_cleanup_failed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{
+        io::Cursor,
+        sync::{
+            Arc, Condvar, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use base64::Engine as _;
+    use tokio::sync::Notify;
 
-    use super::{ACCEPTED_PAST_STEPS, STEP_SECONDS, build, generate_setup, verify};
+    use super::{
+        ACCEPTED_PAST_STEPS, ApiError, AppState, BROWSER_TOTP_CREDENTIAL_ID, BrowserAuthMode,
+        Duration, STEP_SECONDS, SecretStoreError, Uuid, Zeroizing, build, disable_totp_secret,
+        generate_setup, publish_totp_secret, verify,
+    };
+    use crate::secret_store::SecretStore;
     use totp_rs::Secret;
 
     const RFC_SECRET: &[u8] = b"12345678901234567890";
+
+    struct PausedTotpStore {
+        write_released: (Mutex<bool>, Condvar),
+        delete_released: (Mutex<bool>, Condvar),
+        write_started: Notify,
+        delete_started: Notify,
+        value: Mutex<Option<Zeroizing<String>>>,
+        deletions: AtomicUsize,
+    }
+
+    impl PausedTotpStore {
+        fn new(write_released: bool, delete_released: bool) -> Self {
+            Self {
+                write_released: (Mutex::new(write_released), Condvar::new()),
+                delete_released: (Mutex::new(delete_released), Condvar::new()),
+                write_started: Notify::new(),
+                delete_started: Notify::new(),
+                value: Mutex::new(None),
+                deletions: AtomicUsize::new(0),
+            }
+        }
+
+        fn release(gate: &(Mutex<bool>, Condvar)) {
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+        }
+    }
+
+    impl SecretStore for PausedTotpStore {
+        fn set(&self, _: Uuid, secret: &str) -> Result<(), SecretStoreError> {
+            self.write_started.notify_one();
+            let mut released = self.write_released.0.lock().unwrap();
+            while !*released {
+                let (guard, wait) = self
+                    .write_released
+                    .1
+                    .wait_timeout(released, Duration::from_secs(5))
+                    .unwrap();
+                released = guard;
+                if wait.timed_out() {
+                    return Err(SecretStoreError::Unavailable);
+                }
+            }
+            *self.value.lock().unwrap() = Some(Zeroizing::new(secret.to_owned()));
+            Ok(())
+        }
+
+        fn get(&self, _: Uuid) -> Result<Zeroizing<String>, SecretStoreError> {
+            self.value
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(SecretStoreError::NotFound)
+        }
+
+        fn delete(&self, _: Uuid) -> Result<(), SecretStoreError> {
+            self.delete_started.notify_one();
+            let mut released = self.delete_released.0.lock().unwrap();
+            while !*released {
+                let (guard, wait) = self
+                    .delete_released
+                    .1
+                    .wait_timeout(released, Duration::from_secs(5))
+                    .unwrap();
+                released = guard;
+                if wait.timed_out() {
+                    return Err(SecretStoreError::Unavailable);
+                }
+            }
+            self.deletions.fetch_add(1, Ordering::SeqCst);
+            self.value
+                .lock()
+                .unwrap()
+                .take()
+                .map(|_| ())
+                .ok_or(SecretStoreError::NotFound)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn timed_out_enrollment_cleans_late_seed_before_retry() {
+        let (mut state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        state
+            .catalog
+            .set_browser_auth_mode(BrowserAuthMode::Pin)
+            .unwrap();
+        let store = Arc::new(PausedTotpStore::new(false, true));
+        state.secret_store = store.clone();
+        let gate = state.lock_native_secret_mutation().await.unwrap();
+        let pending = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                publish_totp_secret(
+                    &state,
+                    gate,
+                    Zeroizing::new("synthetic-first".to_owned()),
+                    1,
+                    Duration::from_millis(100),
+                )
+                .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(2), store.write_started.notified())
+            .await
+            .unwrap();
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(ApiError::SecretStoreTimedOut)
+        ));
+        assert_eq!(
+            state.catalog.browser_auth_mode().unwrap(),
+            BrowserAuthMode::Pin
+        );
+        PausedTotpStore::release(&store.write_released);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while store.deletions.load(Ordering::SeqCst) != 1
+                || store.get(BROWSER_TOTP_CREDENTIAL_ID).is_ok()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            store.get(BROWSER_TOTP_CREDENTIAL_ID),
+            Err(SecretStoreError::NotFound)
+        ));
+        let gate = state.lock_native_secret_mutation().await.unwrap();
+        publish_totp_secret(
+            &state,
+            gate,
+            Zeroizing::new("synthetic-retry".to_owned()),
+            2,
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.catalog.browser_auth_mode().unwrap(),
+            BrowserAuthMode::Totp
+        );
+        assert_eq!(
+            store.get(BROWSER_TOTP_CREDENTIAL_ID).unwrap().as_str(),
+            "synthetic-retry"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn timed_out_disable_keeps_pin_mode_and_late_delete_cannot_erase_retry() {
+        let (mut state, _) = AppState::new(["http://127.0.0.1:8787".to_owned()]);
+        state
+            .catalog
+            .set_browser_auth_mode(BrowserAuthMode::Pin)
+            .unwrap();
+        let store = Arc::new(PausedTotpStore::new(true, false));
+        state.secret_store = store.clone();
+        store
+            .set(BROWSER_TOTP_CREDENTIAL_ID, "synthetic-old")
+            .unwrap();
+        state.catalog.activate_totp(1).unwrap();
+        let gate = state.lock_native_secret_mutation().await.unwrap();
+        let pending = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                disable_totp_secret(&state, gate, Duration::from_millis(100)).await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(2), store.delete_started.notified())
+            .await
+            .unwrap();
+        assert!(matches!(
+            pending.await.unwrap(),
+            Err(ApiError::SecretStoreTimedOut)
+        ));
+        assert_eq!(
+            state.catalog.browser_auth_mode().unwrap(),
+            BrowserAuthMode::Pin
+        );
+        PausedTotpStore::release(&store.delete_released);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while store.deletions.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let gate = state.lock_native_secret_mutation().await.unwrap();
+        publish_totp_secret(
+            &state,
+            gate,
+            Zeroizing::new("synthetic-new".to_owned()),
+            2,
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            store.get(BROWSER_TOTP_CREDENTIAL_ID).unwrap().as_str(),
+            "synthetic-new"
+        );
+    }
 
     #[test]
     fn accepts_delayed_code_and_rejects_outside_grace_window() {
