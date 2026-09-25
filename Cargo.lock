@@ -3295,15 +3295,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "secretbridge-core"
-version = "0.2.0-beta.9"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "secretbridge-server"
-version = "0.2.0-beta.9"
+name = "secretbridge"
+version = "0.3.0-beta.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3328,8 +3321,7 @@ dependencies = [
  "russh-sftp",
  "rustls-tokio-postgres",
  "schemars",
- "secretbridge-core",
- "secretbridge-windows-pipe-acl",
+ "secretbridge-local-access",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -3349,8 +3341,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "secretbridge-windows-pipe-acl"
-version = "0.2.0-beta.9"
+name = "secretbridge-local-access"
+version = "0.3.0-beta.1"
 dependencies = [
  "tokio",
  "windows-sys 0.61.2",

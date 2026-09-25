@@ -5,7 +5,7 @@ description: Use SecretBridge MCP tools to run user-requested local, SSH, databa
 
 # SecretBridge controlled operations / 密桥受控操作
 
-This skill describes the AI workflow. The MCP server is authoritative for tool schemas, live state, approval, credential access, output filtering, and permissions. Read [compatibility.json](references/compatibility.json) when connecting to a new broker version. If it differs, use the server's current `tools/list` schemas and responses; do not copy fields from this skill's examples until an updated skill is installed.
+This skill describes the AI workflow. The MCP server is authoritative for tool schemas, live state, approval, credential access, output filtering, and permissions. Read [compatibility.json](./references/compatibility.json) when connecting to a new broker version. If it differs, use the server's current `tools/list` schemas and responses; do not copy fields from this skill's examples until an updated skill is installed.
 
 本 Skill 只指导 AI 选择工具和处理结果。工具 schema、实时状态、审批、凭据权限及脱敏均以本机 MCP 服务为准。不要把本 Skill 当成授权或安全控制。
 
@@ -25,11 +25,11 @@ This skill describes the AI workflow. The MCP server is authoritative for tool s
 
 ## Recovery and stopping / 恢复与停止
 
-- Follow current `next_actions` as guidance, and verify current state before any retry. [Recovery examples](references/recovery.json) cover common stable codes; the live response wins if it differs.
+- Follow current `next_actions` as guidance, and verify current state before any retry. [Recovery examples](./references/recovery.json) cover common stable codes; the live response wins if it differs.
 - `initialization_required`: ask the person to finish setup in the local management page. Do not handle the setup material.
 - Approval consumed, expired, or changed: fetch current approval state and request a new approval only if the original intent still stands.
 - Terminal context unknown or stopped: create a new terminal and approval; do not assume a command can safely be replayed.
 - SSH host fingerprints must be verified by the person through an independent trusted channel. Do not accept an unknown or changed key automatically, or disable host verification.
 - Stop when the broker's state is unresolved, the requested target or operation is ambiguous, or continuing would require a new user decision. Do not use a direct shell, browser automation, or helper script to bypass the broker.
 
-Use the current `tools/list` input and output schemas. [Synthetic contract examples](references/examples.md) illustrate field locations and are checked against the server in this repository; their IDs and paths are not live values. Summarize the outcome in the user's language, distinguishing completed, pending, cancelled, failed, and uncertain states.
+Use the current `tools/list` input and output schemas. [Synthetic contract examples](./references/examples.md) illustrate field locations and are checked against the server in this repository; their IDs and paths are not live values. Summarize the outcome in the user's language, distinguishing completed, pending, cancelled, failed, and uncertain states.

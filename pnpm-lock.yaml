@@ -18,7 +18,7 @@ importers:
         specifier: 3.9.8
         version: 3.9.8
 
-  web:
+  frontend:
     dependencies:
       '@radix-ui/react-tooltip':
         specifier: 1.2.16

@@ -1,6 +1,6 @@
 # 商业授权 / Commercial licensing
 
-[许可选择](LICENSING.md) / 商业授权
+[许可选择](./LICENSING.md) / 商业授权
 
 **授权主体：数链创元（天津）信息技术有限责任公司**
 
@@ -24,7 +24,7 @@
 
 1. 通过[项目Issues](https://github.com/qq940500529/secretbridge/issues/new)提出不含敏感信息的“商业授权联系”请求；项目维护者安排后续沟通。
 2. 在经核验的沟通渠道确认双方身份、联系人授权及拟使用版本。公共Issue中不上传合同、客户资料、身份证明或内部架构。
-3. 公司核验目标版本的版权链、外部贡献再许可权限与[第三方风险](docs/依赖许可风险评估.md)。
+3. 公司核验目标版本的版权链、外部贡献再许可权限与[第三方风险](./docs/governance/依赖许可风险评估.md)。
 4. 双方明确并签署书面商业协议，按协议的生效条件执行。
 5. 交付时附版本标识、适用授权、第三方声明及应提供的源码材料。
 
@@ -60,4 +60,4 @@ Start with a non-confidential licensing inquiry in the repository's Issues. Thir
 
 ---
 
-[许可选择](LICENSING.md) · [版权声明](COPYRIGHT.md) · [贡献与再许可](docs/贡献与再许可.md)
+[许可选择](./LICENSING.md) · [版权声明](./COPYRIGHT.md) · [贡献与再许可](./docs/governance/贡献与再许可.md)

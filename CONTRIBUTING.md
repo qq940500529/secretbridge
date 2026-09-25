@@ -1,6 +1,6 @@
 # Contributing
 
-[Home](README.md) / Contributing
+[Home](./README.md) / Contributing
 
 Thank you for helping build SecretBridge. Contributions to documentation, accessibility, platform validation, security design and repository tooling are welcome.
 
@@ -19,18 +19,18 @@ Thank you for helping build SecretBridge. Contributions to documentation, access
 
 Start with an [issue](https://github.com/qq940500529/secretbridge/issues) for substantial work. Small corrections can go directly to a PR.
 
-Real desktop, native credential-store and cross-platform checks that still need community evidence are listed in the [community verification backlog](docs/社区验证待办.md). They can be contributed independently after an implementation issue is closed.
+Real desktop, native credential-store and cross-platform checks that still need community evidence are listed in the [community verification backlog](./docs/community/社区验证待办.md). They can be contributed independently after an implementation issue is closed.
 
 ## Prepare a change
 
-1. Read the [development guide](docs/开发者入门.md) and relevant design specification.
+1. Read the [development guide](./docs/development/开发者入门.md) and relevant design specification.
 2. Create a focused branch; avoid mixing unrelated cleanup with behavior changes.
 3. Update documentation and tests alongside the change.
 4. Run the local checks:
 
    ```sh
-   python tools/check_repository.py
-   python tools/check_project_metadata.py
+   python tools/checks/check_repository.py
+   python tools/checks/check_project_metadata.py
    python -m ruff format --check tools tests
    python -m ruff check tools tests
    python -m unittest discover -s tests -v
@@ -63,9 +63,9 @@ These commands validate repository content, not the desktop application.
 
 Contribute only material you have the right to submit under `AGPL-3.0-or-later` or documented compatible third-party terms. Read the [Developer Certificate of Origin 1.1](https://developercertificate.org/) before using `git commit -s`. Sign-off is a contributor assertion, not a copyright transfer; never sign for another person without authority.
 
-SecretBridge also offers [separate commercial licensing](COMMERCIAL_LICENSE.md) for rights controlled by 数链创元（天津）信息技术有限责任公司. A DCO sign-off or PR merge **does not grant proprietary relicensing rights or transfer copyright**. Commercial inclusion of externally owned contributions requires sufficient separate written authorization; see the [contribution and relicensing policy](docs/贡献与再许可.md). No such agreement is implied by submitting a contribution.
+SecretBridge also offers [separate commercial licensing](./COMMERCIAL_LICENSE.md) for rights controlled by 数链创元（天津）信息技术有限责任公司. A DCO sign-off or PR merge **does not grant proprietary relicensing rights or transfer copyright**. Commercial inclusion of externally owned contributions requires sufficient separate written authorization; see the [contribution and relicensing policy](./docs/governance/贡献与再许可.md). No such agreement is implied by submitting a contribution.
 
-Use an appropriate public or noreply email. Do not submit employer-owned or client material without the necessary rights. Dependency and asset obligations are described in [the maintenance policy](docs/开源治理与发布.md).
+Use an appropriate public or noreply email. Do not submit employer-owned or client material without the necessary rights. Dependency and asset obligations are described in [the maintenance policy](./docs/governance/开源治理.md).
 
 ## Review and merge
 
@@ -73,11 +73,11 @@ PRs must satisfy required repository checks and resolve review discussions. A ma
 
 ## Need help?
 
-- Setup and check failures: [development guide](docs/开发者入门.md).
-- Terminology: [glossary](docs/术语表.md).
-- Vulnerabilities: [private security reporting](SECURITY.md).
-- Community expectations: [code of conduct](CODE_OF_CONDUCT.md).
+- Setup and check failures: [development guide](./docs/development/开发者入门.md).
+- Terminology: [glossary](./docs/user-guide/术语表.md).
+- Vulnerabilities: [private security reporting](./SECURITY.md).
+- Community expectations: [code of conduct](./CODE_OF_CONDUCT.md).
 
 ---
 
-[Documentation](docs/README.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
+[Documentation](./docs/README.md) · [Roadmap](./ROADMAP.md) · [Security](./SECURITY.md)

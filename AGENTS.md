@@ -5,7 +5,7 @@ SecretBridge is a local credential-use broker. Preserve its trust boundary while
 ## Before work
 
 - Read `README.md`, `SECURITY.md`, `CONTRIBUTING.md` and the task-relevant document under `docs/`.
-- For deployment, follow `docs/AI部署执行指南.md` and `docs/后台运行与安装交付.md`.
+- For deployment, follow `docs/getting-started/自动化部署运行手册.md` and `docs/getting-started/安装与服务管理.md`.
 - Inspect the current branch, commit and working tree. Preserve unrelated user changes.
 
 ## Security
@@ -19,5 +19,5 @@ SecretBridge is a local credential-use broker. Preserve its trust boundary while
 
 - Use the pinned tool versions and lock files. Do not skip failing assertions.
 - Update tests and reader-facing documentation with behavior changes.
-- Run the repository, Python, Web and Rust gates listed in `docs/开发者入门.md`; run package/database/browser/platform acceptance when the change touches those areas.
+- Run the repository, Python, Web and Rust gates listed in `docs/development/开发者入门.md`; run package/database/browser/platform acceptance when the change touches those areas.
 - Report unexecuted platform checks as limited. Do not present fixtures, headless browsers or process restarts as real desktop, native credential-store or full reboot evidence.

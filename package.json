@@ -1,7 +1,7 @@
 {
   "name": "secretbridge-workspace",
   "private": true,
-  "version": "0.2.0-beta.9",
+  "version": "0.3.0-beta.1",
   "license": "AGPL-3.0-or-later",
   "packageManager": "pnpm@11.23.0",
   "engines": {
@@ -9,14 +9,14 @@
     "pnpm": ">=11.23 <12"
   },
   "scripts": {
-    "build": "pnpm --dir web build",
-    "dev:web": "pnpm --dir web dev",
-    "format:web": "prettier --write \"web/src/**/*.{ts,tsx,css}\" \"tools/*.mjs\"",
-    "format:web:check": "prettier --check \"web/src/**/*.{ts,tsx,css}\" \"tools/*.mjs\"",
-    "test": "pnpm --dir web test",
-    "test:browser": "python tools/test_browser_acceptance.py",
-    "test:personal-scale": "python tools/test_personal_scale.py",
-    "typecheck": "pnpm --dir web typecheck"
+    "build": "pnpm --dir frontend build",
+    "dev:web": "pnpm --dir frontend dev",
+    "format:web": "prettier --write \"frontend/src/**/*.{ts,tsx,css}\" \"tools/acceptance/*.mjs\"",
+    "format:web:check": "prettier --check \"frontend/src/**/*.{ts,tsx,css}\" \"tools/acceptance/*.mjs\"",
+    "test": "pnpm --dir frontend test",
+    "test:browser": "python tools/acceptance/test_browser_acceptance.py",
+    "test:personal-scale": "python tools/acceptance/test_personal_scale.py",
+    "typecheck": "pnpm --dir frontend typecheck"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
