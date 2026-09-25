@@ -74,6 +74,8 @@ You do not need to determine whether SecretBridge is already installed, choose a
 
 Detailed engineering documents are currently in Simplified Chinese. Start with the [documentation hub](docs/README.md) and [user guide](docs/使用指南.md).
 
+AI clients with Skill support can install the versioned [SecretBridge operations Skill](skills/secretbridge-operations/SKILL.md) after connecting MCP. It guides tool choice, approval handoff, output cursors and recovery; the broker continues to enforce authorization. See the [installation and responsibility guide](docs/AI操作Skill.md) (Chinese). MCP-only clients continue to use the advertised tool schemas and minimal server instructions.
+
 ## Validation targets
 
 | Platform | Current baseline | Default shell |

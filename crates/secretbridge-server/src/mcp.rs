@@ -700,7 +700,7 @@ async fn open_console_for_human(state: &AppState) {
 impl SecretBridgeMcp {
     #[tool(
         name = "secretbridge_read_run_output",
-        description = "Read retained, bounded, sanitized output for an approved run, including controlled commands sent to a secure terminal. cursor is the last chunk sequence; continue with next_cursor. Use secretbridge_terminal_read for live terminal interaction. Never re-execute a command to recover output.",
+        description = "Read retained, bounded, sanitized output for an approved run. cursor is the last chunk sequence; next_cursor continues the stream. Use secretbridge_terminal_read for live terminal interaction.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::command::OutputPage>()
     )]
     async fn read_run_output(
@@ -858,7 +858,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_begin_conversation",
-        description = "Create a local AI-conversation ID and short non-secret summary. Call once per AI chat and pass the returned ID to every request tool. This cannot change approval policy; the human controls that in the Web console.",
+        description = "Create a local AI-conversation ID from a short non-secret summary. The ID scopes subsequent requests to this conversation; this tool cannot change human approval policy.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<AiConversation>()
     )]
     async fn begin_conversation(
@@ -894,7 +894,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_command",
-        description = "Submit an exact non-shell command and opaque credential placeholders for an existing secure terminal. A user-created template is not required. The request may be approved by a prior human-controlled conversation policy; this tool cannot set that policy, accept secret values, or execute the draft. Read eventual terminal output with secretbridge_terminal_read.",
+        description = "Request an exact non-shell command for an existing secure terminal. Accepts opaque credential references, not secret values. A template is not required; this tool cannot set approval policy or execute the draft.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn request_command(
@@ -906,7 +906,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_request_ssh",
-        description = "Request a one-time structured SSH command using a saved SSH connection and its opaque password reference. The supplied SHA-256 host fingerprint must be confirmed by the local human through a trusted channel; no TOFU or host-key bypass. A prior human-controlled conversation policy may approve the request; this tool never executes immediately or saves a reusable template. Show target, command, fingerprint, expiry and risk before any new human decision.",
+        description = "Request a one-time structured SSH command on a saved connection. The human must verify the SHA-256 host fingerprint through a trusted channel; no automatic trust or host-key bypass. This tool does not execute or save a template.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<ApprovalSummary>()
     )]
     async fn request_ssh(

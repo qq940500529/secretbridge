@@ -1,0 +1,22 @@
+{
+  "version_conflict": [
+    "get_current_approval_state",
+    "request_new_approval_if_still_intended"
+  ],
+  "idempotency_conflict": [
+    "check_existing_run",
+    "use_new_key_for_new_intent"
+  ],
+  "terminal_context_unknown": [
+    "create_new_terminal",
+    "request_new_approval_if_still_intended"
+  ],
+  "credential_reference_not_found": [
+    "refresh_catalog",
+    "select_valid_credential_reference"
+  ],
+  "ssh_credential_target_mismatch": [
+    "ask_human_to_correct_connection_metadata",
+    "retry_request"
+  ]
+}

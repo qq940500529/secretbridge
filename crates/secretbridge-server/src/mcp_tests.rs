@@ -857,22 +857,12 @@ async fn advertises_only_the_bounded_tool_surface() {
 }
 
 #[tokio::test]
-async fn server_guidance_examples_follow_advertised_contracts() {
+async fn skill_examples_follow_advertised_contracts() {
     let (state, _) = AppState::new([]);
     let (client, server_handle) = connect(state).await;
     let tools = client.list_all_tools().await.expect("list MCP tools");
     let mut examples = BTreeMap::new();
-    for section in super::SERVER_INSTRUCTIONS.split("### ").skip(1) {
-        let heading = section.lines().next().expect("example heading");
-        let (name, direction) = heading.rsplit_once(' ').expect("example direction");
-        let json = section
-            .split("```json\n")
-            .nth(1)
-            .expect("JSON example")
-            .split("\n```")
-            .next()
-            .expect("JSON end");
-        let value: Value = serde_json::from_str(json).expect("valid example JSON");
+    for (name, direction, value) in skill_contract_examples() {
         let tool = tools
             .iter()
             .find(|tool| tool.name == name)
@@ -897,11 +887,7 @@ async fn server_guidance_examples_follow_advertised_contracts() {
                 );
             }
         }
-        assert!(
-            examples
-                .insert((name.to_owned(), direction.to_owned()), value)
-                .is_none()
-        );
+        assert!(examples.insert((name, direction), value).is_none());
     }
     for name in [
         "secretbridge_begin_conversation",
@@ -957,6 +943,52 @@ async fn server_guidance_examples_follow_advertised_contracts() {
     );
     client.cancel().await.expect("stop MCP client");
     server_handle.await.expect("join MCP server");
+}
+
+fn skill_contract_examples() -> Vec<(String, String, Value)> {
+    let skill_examples =
+        include_str!("../../../skills/secretbridge-operations/references/examples.md");
+    skill_examples
+        .split("### ")
+        .skip(1)
+        .map(|section| {
+            let heading = section.lines().next().expect("example heading");
+            let (name, direction) = heading.rsplit_once(' ').expect("example direction");
+            let json = section
+                .split("```json\n")
+                .nth(1)
+                .expect("JSON example")
+                .split("\n```")
+                .next()
+                .expect("JSON end");
+            let value: Value = serde_json::from_str(json).expect("valid example JSON");
+            (name.to_owned(), direction.to_owned(), value)
+        })
+        .collect()
+}
+
+#[test]
+fn skill_compatibility_and_recovery_examples_follow_server() {
+    let compatibility: Value = serde_json::from_str(include_str!(
+        "../../../skills/secretbridge-operations/references/compatibility.json"
+    ))
+    .expect("skill compatibility JSON");
+    assert_eq!(compatibility["broker_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(compatibility["api_version"], secretbridge_core::API_VERSION);
+
+    let recovery: BTreeMap<String, Vec<String>> = serde_json::from_str(include_str!(
+        "../../../skills/secretbridge-operations/references/recovery.json"
+    ))
+    .expect("skill recovery JSON");
+    assert!(!recovery.is_empty());
+    for (code, documented_actions) in recovery {
+        let live_actions = super::errors::recovery_actions(&code)
+            .unwrap_or_else(|| panic!("unknown recovery code: {code}"));
+        assert_eq!(
+            documented_actions, live_actions,
+            "skill recovery actions drifted for {code}"
+        );
+    }
 }
 
 #[tokio::test]
