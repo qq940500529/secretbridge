@@ -13,7 +13,17 @@
 </div>
 
 > [!IMPORTANT]
-> The `0.3.0-beta.1` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> The `0.3.0-beta.2` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+
+## Start here: deploy with a local AI assistant
+
+Paste this prompt into an AI assistant that **can run commands on this computer and ask for your approval**. It checks for an existing installation first, prefers a verified release package, and then connects your current MCP client. You do not need to clone the repository in advance. The [AI-assisted deployment guide](./docs/getting-started/AI辅助部署.md#自动执行提示词) contains the full checklist and failure handling.
+
+```text
+Install or reuse SecretBridge on this computer. Repository: https://github.com/qq940500529/secretbridge . Read docs/getting-started/AI辅助部署.md and docs/getting-started/安装与服务管理.md in the repository, then follow the full “自动执行提示词” checklist. First check the current MCP configuration, PATH and documented install locations; reuse a healthy installation. Otherwise, prefer the latest suitable GitHub Release and verify its checksum and package metadata. Build from main only if no suitable package exists. Show me the target and command before changing the system or AI-client configuration and wait for approval. Do not read, print or retain real credentials or pairing tokens. Configure and verify the MCP connection, then open the local management page. I will accept the agreement, set the PIN and save the recovery key myself. Stop on failure; do not bypass checks or expose the service to the network.
+```
+
+If your assistant cannot run commands locally, use the [guided prompt](./docs/getting-started/AI辅助部署.md#逐步指导提示词). For a fully manual path, see [installation and service management](./docs/getting-started/安装与服务管理.md).
 
 ## Why SecretBridge
 
@@ -45,7 +55,7 @@ The open-source edition focuses on individual local use. Organizational identity
 
 ## Quick start
 
-Use the [installation guide](./docs/getting-started/安装与服务管理.md) to select a package, verify its checksum, start the local broker and open the management page. The [AI-assisted deployment guide](./docs/getting-started/AI辅助部署.md) documents the additional checks when a local assistant carries out these steps. The broker accepts loopback addresses only; `open` creates a one-time pairing link before initial PIN setup and opens the ordinary sign-in page thereafter.
+Start with the [AI-assisted deployment prompt](#start-here-deploy-with-a-local-ai-assistant) above. The broker accepts loopback addresses only; `open` creates a one-time pairing link before initial PIN setup and opens the ordinary sign-in page thereafter.
 
 This version is not an in-place upgrade for an earlier installation. Keep existing data untouched and use a separate, empty data directory when evaluating it. Follow the published release instructions for an installed version.
 

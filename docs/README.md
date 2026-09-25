@@ -2,7 +2,13 @@
 
 [项目首页](../README.zh-CN.md) / 文档
 
-这里按读者要完成的事情组织文档。当前仓库为未发布的 `0.3.0-beta.1` 开发源码，不支持覆盖旧版安装；[已发布的 Beta 安装包](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.9)仍是 `0.2.0-beta.9`。请以合成凭据完成环境评估。
+这里按读者要完成的事情组织文档。`0.3.0-beta.2` 不支持覆盖旧版安装；请使用独立的空白数据目录与合成凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
+
+## 首先部署：把提示词交给本机 AI 助手
+
+打开[AI 辅助部署：自动执行提示词](./getting-started/AI辅助部署.md#自动执行提示词)，复制提示词给能在当前电脑执行命令的 AI 助手。它会先复用健康的已有安装，再优先选择适配的发行包，最后接入当前 MCP 客户端。安装命令、客户端配置改动需要你确认；首次配对由程序打开浏览器完成，PIN 和恢复密钥由你本人设置与保存。
+
+如果 AI 只能提供说明而不能操作电脑，改用[逐步指导提示词](./getting-started/AI辅助部署.md#逐步指导提示词)；不使用 AI 时再进入[人工安装与后台运行](./getting-started/安装与服务管理.md)。
 
 ```mermaid
 flowchart TD
@@ -53,6 +59,7 @@ flowchart TD
 | 任务 | 文档 |
 |---|---|
 | 建立开发环境 | [开发者入门](./development/开发者入门.md) |
+| 了解 CI 如何按变更选择检查 | [持续集成检查范围](./development/持续集成检查范围.md) |
 | 理解模块与数据边界 | [开发设计](./development/架构设计.md) |
 | 核对结构重构的公开契约 | [结构重构契约核对](./development/issue-133-architecture/契约核对.md) |
 | 维护 Skill 与 MCP 契约 | [AI 操作 Skill 与 MCP 职责](./user-guide/AI客户端接入.md) |

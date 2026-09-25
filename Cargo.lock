@@ -3296,7 +3296,7 @@ dependencies = [
 
 [[package]]
 name = "secretbridge"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -3342,7 +3342,7 @@ dependencies = [
 
 [[package]]
 name = "secretbridge-local-access"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "tokio",
  "windows-sys 0.61.2",

@@ -18,8 +18,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  change-scope:
+    name: Change scope
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      dependency: ${{ steps.scope.outputs.dependency }}
+      database: ${{ steps.scope.outputs.database }}
+      python: ${{ steps.scope.outputs.python }}
+      web: ${{ steps.scope.outputs.web }}
+      rust: ${{ steps.scope.outputs.rust }}
+      package: ${{ steps.scope.outputs.package }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, pinned
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify changed files
+        id: scope
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python tools/checks/change_scope.py --base "$BASE_SHA" --head "$HEAD_SHA" --github-output "$GITHUB_OUTPUT"
+  documentation:
+    name: Documentation and repository hygiene
+    needs: change-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, pinned
+        with:
+          persist-credentials: false
+      - name: Check public repository contents
+        run: python tools/checks/check_repository.py
+      - name: Check project metadata
+        run: python tools/checks/check_project_metadata.py
+      - name: Test change scope policy
+        run: python -m unittest tests.repository.test_change_scope -v
   dependency-vulnerability-gate:
     name: Locked dependency vulnerability gate
+    needs: change-scope
+    if: needs.change-scope.outputs.dependency == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -50,6 +90,8 @@ jobs:
         run: python tools/checks/check_dependency_vulnerabilities.py
   database-connectors:
     name: Real databases (${{ matrix.postgresql }}, ${{ matrix.mysql }})
+    needs: change-scope
+    if: needs.change-scope.outputs.database == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -71,6 +113,8 @@ jobs:
         run: bash tools/acceptance/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
+    needs: change-scope
+    if: needs.change-scope.outputs.python == 'true' || needs.change-scope.outputs.web == 'true' || needs.change-scope.outputs.rust == 'true' || needs.change-scope.outputs.dependency == 'true'
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
@@ -86,45 +130,56 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Node.js
+        if: needs.change-scope.outputs.web == 'true' || needs.change-scope.outputs.dependency == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7, pinned
         with:
           node-version-file: .node-version
       - name: Enable pnpm
+        if: needs.change-scope.outputs.web == 'true' || needs.change-scope.outputs.dependency == 'true'
         run: corepack enable
       - name: Install Web dependencies
+        if: needs.change-scope.outputs.web == 'true' || needs.change-scope.outputs.dependency == 'true'
         run: pnpm install --frozen-lockfile
-      - name: Check public repository contents
-        run: python tools/checks/check_repository.py
-      - name: Check project metadata
-        run: python tools/checks/check_project_metadata.py
       - name: Install pinned Python development tools
+        if: needs.change-scope.outputs.python == 'true'
         run: python -m pip install --disable-pip-version-check -r tools/requirements-dev.txt
       - name: Check Python formatting
+        if: needs.change-scope.outputs.python == 'true'
         run: python -m ruff format --check tools tests
       - name: Lint Python tools and tests
+        if: needs.change-scope.outputs.python == 'true'
         run: python -m ruff check tools tests
       - name: Check Web formatting
+        if: needs.change-scope.outputs.web == 'true'
         run: pnpm format:web:check
       - name: Test repository checker
+        if: needs.change-scope.outputs.python == 'true'
         run: python -m unittest discover -s tests -v
       - name: Check Web types
+        if: needs.change-scope.outputs.web == 'true'
         run: pnpm typecheck
       - name: Test Web application
+        if: needs.change-scope.outputs.web == 'true'
         run: pnpm test
       - name: Build Web application
+        if: needs.change-scope.outputs.web == 'true'
         run: pnpm build
       - name: Check Rust formatting
+        if: needs.change-scope.outputs.rust == 'true'
         run: cargo fmt --all -- --check
       - name: Test Rust workspace
+        if: needs.change-scope.outputs.rust == 'true'
         env:
           RUST_TEST_THREADS: 2
         run: cargo test --workspace --all-targets
       - name: Test native credential store with a disposable entry
-        if: runner.os == 'Windows' || runner.os == 'macOS'
+        if: needs.change-scope.outputs.rust == 'true' && (runner.os == 'Windows' || runner.os == 'macOS')
         run: cargo test -p secretbridge native_store_round_trip_uses_a_disposable_entry -- --ignored --nocapture
       - name: Lint Rust workspace
+        if: needs.change-scope.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check locked dependency licenses
+        if: needs.change-scope.outputs.dependency == 'true'
         run: python tools/checks/check_dependency_licenses.py
       - name: Record toolchain metadata
         if: always()
@@ -139,6 +194,8 @@ jobs:
           retention-days: 14
   package-delivery:
     name: package-delivery (${{ matrix.os }})
+    needs: change-scope
+    if: needs.change-scope.outputs.package == 'true'
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
