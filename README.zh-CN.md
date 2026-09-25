@@ -4,7 +4,7 @@
 
 **让凭据留在本机，让授权决定操作。**
 
-[English](./README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.9) · [文档](./docs/README.md) · [部署](./docs/getting-started/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](./SECURITY.md)
+[English](./README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases) · [文档](./docs/README.md) · [部署](./docs/getting-started/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](./SECURITY.md)
 
 [![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> 当前仓库源码为尚未发布的 `0.3.0-beta.1` 开发版本，不兼容旧版安装目录、数据库或二进制；请勿用它直接覆盖已有安装。上方下载链接仍指向已发布的 `0.2.0-beta.9`。评估时请先使用合成凭据、保留独立备份，并阅读[许可协议与免责协议](./docs/最终用户许可与免责声明.md)。本产品不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
+> `0.3.0-beta.1` 源码版本不兼容旧版安装目录、数据库或二进制；请勿用它直接覆盖已有安装。评估时请使用独立的空白数据目录和合成凭据，保留独立备份，并阅读[许可协议与免责协议](./docs/最终用户许可与免责声明.md)。本产品不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
 
 ## 它解决什么问题
 
@@ -45,9 +45,9 @@ flowchart LR
 
 ## 快速开始
 
-首次部署请按[安装与后台运行](./docs/getting-started/安装与服务管理.md)选择并校验安装包、启动本机代理、打开管理页面。委托本机 AI 助手部署时，另读[AI 辅助部署](./docs/getting-started/AI辅助部署.md)及其执行指南，运行命令前仍须审查。服务只接受回环地址，`open` 会生成一次性浏览器配对链接。
+首次部署请按[安装与后台运行](./docs/getting-started/安装与服务管理.md)选择并校验安装包、启动本机代理、打开管理页面。委托本机 AI 助手部署时，另读[AI 辅助部署](./docs/getting-started/AI辅助部署.md)及其执行指南，运行命令前仍须审查。服务只接受回环地址；首次设置 PIN 前 `open` 会生成一次性配对链接，设置后则打开普通登录页。
 
-本次架构重构源码不作为既有安装的升级包：不承诺与旧版二进制、安装目录或数据库兼容。评估本分支构建时应保持现有数据不动，使用独立的空白数据目录；已安装的公开发行版仍按对应 Release 文档操作。
+此版本不能作为既有安装的原地升级包。请保持原有数据不动，在独立的空白数据目录中评估；已安装版本应按对应 Release 文档操作。
 
 支持 Skill 的 AI 客户端可在接通 MCP 后安装版本化的 [SecretBridge AI 操作 Skill](./skills/secretbridge-operations/SKILL.md)，用于工具选择、审批交接、游标读取和错误恢复。安装与职责说明见 [AI 操作 Skill 与 MCP 职责](./docs/user-guide/AI客户端接入.md)。仅支持 MCP 的客户端仍可使用工具 schema 和服务端的最小指引。
 

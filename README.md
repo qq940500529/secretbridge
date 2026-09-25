@@ -4,7 +4,7 @@
 
 **Keep credentials local. Let a human set the approval policy.**
 
-[简体中文](./README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases/tag/v0.2.0-beta.9) · [Docs](./docs/README.md) · [Deploy](./docs/getting-started/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](./SECURITY.md)
+[简体中文](./README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases) · [Docs](./docs/README.md) · [Deploy](./docs/getting-started/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](./SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> The repository now contains unreleased `0.3.0-beta.1` development source. It is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. The download link above still points to the published `0.2.0-beta.9` release. Start evaluations with synthetic credentials, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> The `0.3.0-beta.1` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Why SecretBridge
 
@@ -45,9 +45,9 @@ The open-source edition focuses on individual local use. Organizational identity
 
 ## Quick start
 
-Use the [installation guide](./docs/getting-started/安装与服务管理.md) to select a package, verify its checksum, start the local broker and open the management page. The [AI-assisted deployment guide](./docs/getting-started/AI辅助部署.md) documents the additional checks when a local assistant carries out these steps. The broker accepts loopback addresses only, and `open` creates a one-time browser pairing link.
+Use the [installation guide](./docs/getting-started/安装与服务管理.md) to select a package, verify its checksum, start the local broker and open the management page. The [AI-assisted deployment guide](./docs/getting-started/AI辅助部署.md) documents the additional checks when a local assistant carries out these steps. The broker accepts loopback addresses only; `open` creates a one-time pairing link before initial PIN setup and opens the ordinary sign-in page thereafter.
 
-The architecture-refactor source branch is not an upgrade for an existing installation. It does not promise compatibility with earlier binaries, installation layouts or databases. Keep existing data untouched and use a separate, empty data directory when evaluating a build from this branch. Follow the published Release instructions for an installed release.
+This version is not an in-place upgrade for an earlier installation. Keep existing data untouched and use a separate, empty data directory when evaluating it. Follow the published release instructions for an installed version.
 
 ## Typical workflow
 
