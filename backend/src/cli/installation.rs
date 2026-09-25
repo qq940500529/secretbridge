@@ -212,6 +212,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
     for file in &manifest.files {
         if !seen.insert(file.path.clone())
             || !(file.path.starts_with("frontend/")
+                || file.path.starts_with("skills/secretbridge-operations/")
                 || [
                     binary_name(),
                     "LICENSE",
@@ -250,6 +251,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
         binary_name(),
         "frontend/index.html",
         "frontend/secretbridge-build.json",
+        "skills/secretbridge-operations/SKILL.md",
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
         "COPYRIGHT.md",
