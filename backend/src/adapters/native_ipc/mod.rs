@@ -23,7 +23,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 #[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 #[cfg(windows)]
 use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOptions};
 #[cfg(unix)]
