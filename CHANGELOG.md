@@ -4,15 +4,18 @@
 
 This file records public release behavior rather than preserving a development diary for every internal build. Pull requests and Git history remain the source for implementation history.
 
-## Unreleased
+## 0.3.0-beta.1 — 2026-09-26
 
-- Prepare the incompatible `0.3.0-beta.1` source line; prior installations and databases are not migration targets for this refactor.
+- Introduce a new installation line; earlier installation layouts and databases are not supported as in-place upgrade inputs.
 - Reorganize the source tree around `frontend/` and `backend/`, with the primary Rust binary named `secretbridge` and a cross-platform local-access helper package inside the backend.
 - Separate Web API requests by resource and Rust code by domain, application, transport, persistence, executor and runtime responsibilities. Move documentation into task-oriented sections and remove deployment prompts from the README.
 - Treat builds from this refactor as a new installation line. Compatibility with earlier binaries, installation layouts and databases is not promised; existing local data is neither read nor modified by the refactor work.
 - Allow a local PIN/passphrase of 6–64 characters; repeated incorrect PIN or recovery attempts now have persistent exponentially increasing wait times (30 seconds initially, capped at one hour).
 - Generate a one-time-display recovery key when the PIN is first set. A correct recovery key can reset a forgotten PIN without losing encrypted diagnostics and is rotated after use; existing users can replace it with their current PIN.
 - Place PIN setup immediately after the legal agreement in the same first-run dialog, with explicit recovery-key safekeeping confirmation.
+- Require a paired local session before presenting PIN enrollment; keep validation messages within a stable-sized dialog and explain when a fresh one-time pairing link is needed.
+- Ship the versioned SecretBridge AI operations Skill with native packages, documenting tool selection and the human approval handoff without granting the Skill new broker privileges.
+- Advance the configuration schema to 24. Real-device checks remain tracked separately in community issue #139; automated checks do not stand in for human desktop validation.
 
 ## 0.2.0-beta.9 — 2026-09-24
 
