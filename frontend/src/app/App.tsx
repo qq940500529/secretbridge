@@ -116,7 +116,7 @@ export function App() {
   const [notificationChannel, setNotificationChannel] =
     useState<ApprovalNotificationChannel>(initialApprovalNotificationChannel);
   const [legalAccepted, setLegalAccepted] = useState(hasCurrentLegalConsent);
-  const [legalOpen, setLegalOpen] = useState(() => !hasCurrentLegalConsent());
+  const [legalOpen, setLegalOpen] = useState(false);
   const [connection, setConnection] = useState<Connection>("checking");
   const [authentication, setAuthentication] =
     useState<Authentication>("unpaired");
@@ -143,10 +143,8 @@ export function App() {
 
   useEffect(() => {
     if (
-      legalAccepted &&
       sessionToken &&
-      authMethodStatus === "ready" &&
-      !pinEnabled
+      (!legalAccepted || (authMethodStatus === "ready" && !pinEnabled))
     ) {
       setLegalOpen(true);
     }
@@ -670,7 +668,7 @@ export function App() {
             )}
           </main>
         </div>
-        {legalOpen && (
+        {legalOpen && sessionToken && (
           <LegalConsent
             language={language}
             canClose={legalAccepted}

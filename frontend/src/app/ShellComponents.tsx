@@ -106,9 +106,19 @@ export function PairingRequired({
           {page}
         </p>
         <h1 className="mb-0 mt-2 text-2xl font-bold text-slate-950">
-          {text.futureModule}
+          {pinEnabled || totpEnabled
+            ? zh
+              ? "登录本机管理页"
+              : "Sign in to the local console"
+            : text.futureModule}
         </h1>
-        <p className="mb-0 mt-3 leading-7 text-slate-600">{text.futureBody}</p>
+        <p className="mb-0 mt-3 leading-7 text-slate-600">
+          {pinEnabled || totpEnabled
+            ? zh
+              ? "使用你设置的 PIN 或身份验证器登录，无需再次使用首次配对链接。"
+              : "Sign in with your PIN or authenticator. The initial pairing link is no longer needed."
+            : text.futureBody}
+        </p>
         {authMethodStatus === "loading" && (
           <p role="status" className="mt-5 text-sm text-slate-600">
             {zh ? "正在检查身份验证方式…" : "Checking verification methods…"}

@@ -100,6 +100,39 @@ async function openCase({
 }
 
 try {
+  const unpairedContext = await browser.newContext({ locale: "zh-CN" });
+  const unpairedPage = await unpairedContext.newPage();
+  await unpairedPage.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    await route.fulfill({
+      json:
+        path === "/api/v1/session/methods"
+          ? {
+              pin_enabled: false,
+              totp_enabled: false,
+              pairing_link_enabled: true,
+            }
+          : {
+              product: "SecretBridge",
+              api_version: "v1",
+              mode: "controlled_operations",
+              configuration_storage: "sqlite",
+              paired: false,
+              real_credentials_enabled: true,
+            },
+    });
+  });
+  await unpairedPage.goto(baseUrl);
+  await unpairedPage
+    .getByRole("heading", { name: "请先配对本机服务" })
+    .waitFor();
+  assert.equal(
+    await unpairedPage.getByRole("dialog").count(),
+    0,
+    "unpaired browsers cannot be stranded in PIN enrollment",
+  );
+  await unpairedContext.close();
+
   const restored = await openCase({ savedSession: true });
   await restored.page.getByText("已设置 PIN，并绑定身份验证器").waitFor();
   await restored.page.getByRole("button", { name: "更换身份验证器" }).waitFor();
@@ -147,7 +180,17 @@ try {
     initialMethod: "pairing_link",
   });
   await initial.page.getByRole("heading", { name: "设置本机 PIN" }).waitFor();
+  const setupDialog = initial.page.getByRole("dialog");
+  const boundsBeforeMismatch = await setupDialog.boundingBox();
   await initial.page.getByLabel("PIN / 口令").fill("123456");
+  await initial.page.getByLabel("再次输入 PIN").fill("654321");
+  await initial.page.getByText("两次输入不一致，请核对后重试。").waitFor();
+  const boundsAfterMismatch = await setupDialog.boundingBox();
+  assert.ok(boundsBeforeMismatch && boundsAfterMismatch);
+  assert.ok(
+    Math.abs(boundsBeforeMismatch.height - boundsAfterMismatch.height) <= 1,
+    "PIN validation must not resize the dialog",
+  );
   await initial.page.getByLabel("再次输入 PIN").fill("123456");
   await initial.page
     .getByRole("button", { name: "设置 PIN 并生成恢复密钥" })

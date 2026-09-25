@@ -36,4 +36,12 @@ describe("first-run agreement and PIN wizard", () => {
     expect(html).toContain("设置 PIN 并生成恢复密钥");
     expect(html).not.toContain("synthetic-session-token");
   });
+
+  it("never presents PIN enrollment without a paired session", () => {
+    const html = renderToStaticMarkup(
+      <LegalConsent {...props} sessionToken={null} canClose requiresPinSetup />,
+    );
+    expect(html).toContain("许可协议与免责协议");
+    expect(html).not.toContain("设置 PIN 并生成恢复密钥");
+  });
 });

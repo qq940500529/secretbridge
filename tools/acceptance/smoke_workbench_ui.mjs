@@ -714,7 +714,7 @@ try {
     .getByRole("button", { name: "解除当前页面配对", exact: true })
     .click();
   await nav("凭据").click();
-  await page.getByRole("heading", { name: "请先配对本机服务" }).waitFor();
+  await page.getByRole("heading", { name: "登录本机管理页" }).waitFor();
   assert.deepEqual(errors, []);
   console.log(
     `Workbench UI smoke passed (${browserName}): six sections, credential/connection/task/authorization/run/result workflow, retry, focus, search, language, narrow layouts and unpairing.`,

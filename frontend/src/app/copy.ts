@@ -83,7 +83,7 @@ export const copy: Record<Language, Copy> = {
     enabled: "已启用",
     futureModule: "请先配对本机服务",
     futureBody:
-      "请使用后台服务启动时提供的一次性配对链接打开控制台。如果配对失败，请获取新的链接重试；刷新当前链接不会恢复已消费的令牌。",
+      "请在这台电脑上运行已安装程序的 open 命令，程序会打开一次性配对页面，无需复制或手动输入配对码。若配对失败，请重新运行 open；刷新旧页面不能恢复已使用的链接。",
     collapse: "收起导航",
     expand: "展开导航",
     skipContent: "跳到主要内容",
@@ -128,7 +128,7 @@ export const copy: Record<Language, Copy> = {
     enabled: "Enabled",
     futureModule: "Pair with the local service",
     futureBody:
-      "Open the console using the one-time pairing link from the running broker. If pairing fails, request a fresh link; reloading a consumed link cannot restore its token.",
+      "Run the installed program's open command on this computer. It opens the one-time pairing page; no code needs to be copied or entered. If pairing fails, run open again. Reloading an old page cannot restore a used link.",
     collapse: "Collapse navigation",
     expand: "Expand navigation",
     skipContent: "Skip to main content",

@@ -65,7 +65,7 @@ export function LegalConsent({
 }: LegalConsentProps) {
   const [acknowledged, setAcknowledged] = useState(false);
   const [step, setStep] = useState<"legal" | "pin">(
-    canClose && requiresPinSetup ? "pin" : "legal",
+    canClose && requiresPinSetup && sessionToken ? "pin" : "legal",
   );
   const [pin, setPin] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -75,6 +75,7 @@ export function LegalConsent({
   const [error, setError] = useState(false);
   const text = legalCopy[language];
   const zh = language === "zh-CN";
+  const confirmationMismatch = confirmation.length > 0 && pin !== confirmation;
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -92,8 +93,14 @@ export function LegalConsent({
       aria-labelledby="legal-consent-title"
       aria-describedby="legal-consent-introduction"
     >
-      <div className="flex max-h-dvh w-full max-w-5xl flex-col overflow-hidden bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)] sm:rounded-2xl">
-        <header className="border-b border-slate-200 bg-gradient-to-r from-slate-950 to-cyan-950 px-5 py-5 text-white sm:px-8">
+      <div
+        className={`flex max-h-dvh w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-h-[calc(100dvh-3rem)] sm:rounded-2xl ${
+          step === "pin"
+            ? "h-dvh max-w-2xl sm:h-[min(42rem,calc(100dvh-3rem))]"
+            : "max-w-5xl"
+        }`}
+      >
+        <header className="shrink-0 border-b border-slate-200 bg-gradient-to-r from-slate-950 to-cyan-950 px-5 py-5 text-white sm:px-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">
@@ -158,7 +165,7 @@ export function LegalConsent({
           </div>
         </header>
 
-        <div className="overflow-y-auto px-5 py-6 sm:px-8">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8">
           {step === "legal" ? (
             <>
               <div className="mb-6 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
@@ -220,8 +227,8 @@ export function LegalConsent({
               </div>
             </>
           ) : (
-            <div className="mx-auto max-w-2xl py-3 sm:py-8">
-              <div className="mb-6 flex items-center gap-3 text-sm font-semibold text-cyan-800">
+            <div className="mx-auto max-w-xl py-1">
+              <div className="mb-5 flex items-center gap-3 text-sm font-semibold text-cyan-800">
                 <span className="grid size-10 place-items-center rounded-xl bg-cyan-50">
                   <KeyRound className="size-5" />
                 </span>
@@ -229,7 +236,7 @@ export function LegalConsent({
               </div>
               {!recoveryKey ? (
                 <form
-                  className="space-y-5"
+                  className="space-y-4"
                   onSubmit={async (event) => {
                     event.preventDefault();
                     if (
@@ -259,7 +266,7 @@ export function LegalConsent({
                     }
                   }}
                 >
-                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-5">
+                  <div className="rounded-xl border border-cyan-200 bg-cyan-50/70 px-5 py-4">
                     <h2 className="m-0 text-lg font-bold text-slate-950">
                       {zh ? "创建 PIN" : "Create your PIN"}
                     </h2>
@@ -278,7 +285,10 @@ export function LegalConsent({
                       maxLength={64}
                       required
                       value={pin}
-                      onChange={(event) => setPin(event.target.value)}
+                      onChange={(event) => {
+                        setPin(event.target.value);
+                        setError(false);
+                      }}
                       className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-100"
                     />
                   </label>
@@ -291,30 +301,30 @@ export function LegalConsent({
                       maxLength={64}
                       required
                       value={confirmation}
-                      onChange={(event) => setConfirmation(event.target.value)}
+                      aria-invalid={confirmationMismatch}
+                      aria-describedby="pin-confirmation-feedback"
+                      onChange={(event) => {
+                        setConfirmation(event.target.value);
+                        setError(false);
+                      }}
                       className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-100"
                     />
                   </label>
-                  {confirmation && pin !== confirmation && (
-                    <p role="alert" className="text-sm text-rose-700">
-                      {zh ? "两次输入不一致。" : "The PINs do not match."}
-                    </p>
-                  )}
-                  {!sessionToken && (
-                    <p
-                      role="status"
-                      className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900"
-                    >
-                      {zh
-                        ? "请先通过本机配对链接进入管理页，再继续设置。"
-                        : "Open the local pairing link before continuing setup."}
-                    </p>
-                  )}
-                  {error && (
-                    <p role="alert" className="text-sm text-rose-700">
-                      {zh ? "设置失败，请重试。" : "Setup failed. Try again."}
-                    </p>
-                  )}
+                  <div
+                    id="pin-confirmation-feedback"
+                    aria-live="polite"
+                    className="min-h-6 text-sm leading-6 text-rose-700"
+                  >
+                    {confirmationMismatch
+                      ? zh
+                        ? "两次输入不一致，请核对后重试。"
+                        : "The PINs do not match. Please check and try again."
+                      : error
+                        ? zh
+                          ? "设置失败，请检查本机服务后重试。"
+                          : "Setup failed. Check the local service and try again."
+                        : null}
+                  </div>
                   <button
                     type="submit"
                     disabled={
@@ -415,7 +425,7 @@ export function LegalConsent({
                   disabled={!acknowledged}
                   onClick={() => {
                     onAccept();
-                    if (requiresPinSetup) setStep("pin");
+                    if (requiresPinSetup && sessionToken) setStep("pin");
                     else onClose();
                   }}
                 >
