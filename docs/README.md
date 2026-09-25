@@ -2,7 +2,7 @@
 
 [项目首页](../README.zh-CN.md) / 文档
 
-这里按读者要完成的事情组织文档。`0.3.0-beta.1` 不支持覆盖旧版安装；请使用独立的空白数据目录与合成凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
+这里按读者要完成的事情组织文档。`0.3.0-beta.2` 不支持覆盖旧版安装；请使用独立的空白数据目录与合成凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
 
 ## 首先部署：把提示词交给本机 AI 助手
 
@@ -59,6 +59,7 @@ flowchart TD
 | 任务 | 文档 |
 |---|---|
 | 建立开发环境 | [开发者入门](./development/开发者入门.md) |
+| 了解 CI 如何按变更选择检查 | [持续集成检查范围](./development/持续集成检查范围.md) |
 | 理解模块与数据边界 | [开发设计](./development/架构设计.md) |
 | 核对结构重构的公开契约 | [结构重构契约核对](./development/issue-133-architecture/契约核对.md) |
 | 维护 Skill 与 MCP 契约 | [AI 操作 Skill 与 MCP 职责](./user-guide/AI客户端接入.md) |

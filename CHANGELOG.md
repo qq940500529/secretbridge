@@ -4,7 +4,7 @@
 
 This file records public release behavior rather than preserving a development diary for every internal build. Pull requests and Git history remain the source for implementation history.
 
-## 0.3.0-beta.1 — 2026-09-26
+## 0.3.0-beta.2 — 2026-09-26
 
 - Introduce a new installation line; earlier installation layouts and databases are not supported as in-place upgrade inputs.
 - Reorganize the source tree around `frontend/` and `backend/`, with the primary Rust binary named `secretbridge` and a cross-platform local-access helper package inside the backend.
@@ -16,6 +16,8 @@ This file records public release behavior rather than preserving a development d
 - Require a paired local session before presenting PIN enrollment; keep validation messages within a stable-sized dialog and explain when a fresh one-time pairing link is needed.
 - Ship the versioned SecretBridge AI operations Skill with native packages, documenting tool selection and the human approval handoff without granting the Skill new broker privileges.
 - Advance the configuration schema to 24. Real-device checks remain tracked separately in community issue #139; automated checks do not stand in for human desktop validation.
+- Lead new readers through the AI-assisted deployment prompt; documentation-only commits retain repository checks while bypassing unrelated browser, database, Rust and package suites.
+- Validate Windows ACL and ACE structures before inspecting private local-access permissions, addressing the pointer-validation findings reported by Code Scanning.
 
 ## 0.2.0-beta.9 — 2026-09-24
 

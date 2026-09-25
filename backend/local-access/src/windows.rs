@@ -24,10 +24,11 @@ use windows_sys::Win32::{
         SetNamedSecurityInfoW,
     },
     Security::{
-        ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
-        GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation,
-        PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, TOKEN_QUERY,
-        TOKEN_USER, TokenUser,
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation,
+        DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetAclInformation,
+        GetSecurityDescriptorControl, GetSecurityDescriptorDacl, GetTokenInformation, IsValidAcl,
+        IsValidSid, PROTECTED_DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+        TOKEN_QUERY, TOKEN_USER, TokenUser,
     },
     Storage::FileSystem::{
         CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_NONE,
@@ -157,10 +158,14 @@ fn sid_from_string(value: &str) -> io::Result<LocalAllocation> {
 }
 
 fn has_private_dacl(descriptor: *mut c_void) -> io::Result<bool> {
+    let descriptor = NonNull::new(descriptor)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "null security descriptor"))?;
     let mut control = 0u16;
     let mut revision = 0u32;
     // SAFETY: The caller owns a live Windows security descriptor and output pointers are valid.
-    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0 {
+    if unsafe { GetSecurityDescriptorControl(descriptor.as_ptr(), &mut control, &mut revision) }
+        == 0
+    {
         return Err(io::Error::last_os_error());
     }
     if control & SE_DACL_PROTECTED == 0 {
@@ -170,15 +175,37 @@ fn has_private_dacl(descriptor: *mut c_void) -> io::Result<bool> {
     let mut defaulted = 0;
     let mut acl: *mut ACL = ptr::null_mut();
     // SAFETY: The descriptor and output pointers are live and valid.
-    if unsafe { GetSecurityDescriptorDacl(descriptor, &mut present, &mut acl, &mut defaulted) } == 0
+    if unsafe {
+        GetSecurityDescriptorDacl(descriptor.as_ptr(), &mut present, &mut acl, &mut defaulted)
+    } == 0
     {
         return Err(io::Error::last_os_error());
     }
-    if present == 0 || acl.is_null() {
+    if present == 0 {
         return Ok(false);
     }
-    // SAFETY: Windows returned an ACL pointer inside the live descriptor.
-    if unsafe { (*acl).AceCount } != 2 {
+    // A present but null DACL grants unrestricted access. Never treat it as private.
+    let Some(acl) = NonNull::new(acl) else {
+        return Ok(false);
+    };
+    // SAFETY: The ACL belongs to the live descriptor and the pointer is non-null.
+    if unsafe { IsValidAcl(acl.as_ptr()) } == 0 {
+        return Ok(false);
+    }
+    let mut size_info = ACL_SIZE_INFORMATION::default();
+    // SAFETY: The validated ACL and the stack-allocated output structure remain live.
+    if unsafe {
+        GetAclInformation(
+            acl.as_ptr(),
+            (&raw mut size_info).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if size_info.AceCount != 2 {
         return Ok(false);
     }
     let user_sid = sid_from_string(&current_user_sid()?)?;
@@ -188,18 +215,35 @@ fn has_private_dacl(descriptor: *mut c_void) -> io::Result<bool> {
     for index in 0..2 {
         let mut raw_ace = ptr::null_mut();
         // SAFETY: The ACL contains two ACEs and Windows writes a pointer into raw_ace.
-        if unsafe { GetAce(acl, index, &mut raw_ace) } == 0 {
+        if unsafe { GetAce(acl.as_ptr(), index, &mut raw_ace) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: The ACE pointer belongs to the live ACL and begins with the common header.
-        let ace = unsafe { &*raw_ace.cast::<ACCESS_ALLOWED_ACE>() };
-        if ace.Header.AceType != 0 {
+        let ace_header = NonNull::new(raw_ace.cast::<ACE_HEADER>())
+            .ok_or_else(|| io::Error::other("Windows returned a null ACE"))?;
+        // SAFETY: GetAce succeeded against a validated ACL, so this ACE header is live.
+        let header = unsafe { ace_header.as_ref() };
+        const SID_OFFSET: usize = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+        const MIN_SID_SIZE: usize = 8;
+        if header.AceType != 0 || usize::from(header.AceSize) < SID_OFFSET + MIN_SID_SIZE {
             return Ok(false);
         }
+        // SAFETY: The validated ACE has enough bytes for the header, mask and minimum SID.
+        let ace = unsafe { ace_header.cast::<ACCESS_ALLOWED_ACE>().as_ref() };
         let sid: *mut c_void = (&raw const ace.SidStart).cast_mut().cast();
-        // SAFETY: SidStart is the SID stored within this standard access-allowed ACE.
+        // SAFETY: The first eight SID bytes fit inside this ACE; the second byte is its
+        // subauthority count. Check the complete length before passing it to Windows.
+        let sid_prefix = unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), MIN_SID_SIZE) };
+        let sid_size = MIN_SID_SIZE + usize::from(sid_prefix[1]) * size_of::<u32>();
+        if sid_size > usize::from(header.AceSize) - SID_OFFSET {
+            return Ok(false);
+        }
+        // SAFETY: The entire SID fits within the validated ACE.
+        if unsafe { IsValidSid(sid) } == 0 {
+            return Ok(false);
+        }
+        // SAFETY: Both pointers refer to live, validated Windows SIDs.
         user_found |= unsafe { EqualSid(sid, user_sid.0.as_ptr()) } != 0;
-        // SAFETY: Both pointers refer to live Windows SIDs.
+        // SAFETY: Both pointers refer to live, validated Windows SIDs.
         system_found |= unsafe { EqualSid(sid, system_sid.0.as_ptr()) } != 0;
     }
     Ok(user_found && system_found)
@@ -351,6 +395,12 @@ mod tests {
         Authorization::{GetSecurityInfo, SE_KERNEL_OBJECT},
         DACL_SECURITY_INFORMATION,
     };
+
+    #[test]
+    fn null_security_descriptor_is_rejected_before_ffi() {
+        let error = has_private_dacl(ptr::null_mut()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
 
     #[tokio::test]
     async fn native_pipe_dacl_excludes_everyone_and_anonymous() {

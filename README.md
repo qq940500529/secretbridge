@@ -13,7 +13,7 @@
 </div>
 
 > [!IMPORTANT]
-> The `0.3.0-beta.1` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> The `0.3.0-beta.2` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Start here: deploy with a local AI assistant
 
