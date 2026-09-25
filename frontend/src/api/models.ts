@@ -142,6 +142,13 @@ export interface PairResponse {
   expires_in_seconds: number;
 }
 
+export interface RecoveryKeyResponse {
+  recovery_key: string;
+}
+
+export interface RecoveredSessionResponse
+  extends PairResponse, RecoveryKeyResponse {}
+
 export interface BrowserAuthMethods {
   pin_enabled: boolean;
   totp_enabled: boolean;

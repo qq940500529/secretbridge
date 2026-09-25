@@ -1,10 +1,20 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { ExternalLink, Languages, Scale, ShieldAlert, X } from "lucide-react";
+import {
+  ArrowRight,
+  CheckCircle2,
+  ExternalLink,
+  KeyRound,
+  Languages,
+  Scale,
+  ShieldAlert,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { legalCopy, type LegalSection } from "./legal-copy";
+import { setBrowserAuthMethod } from "../../api";
 import type { Language } from "../../app/preferences";
 
 export const ISSUE_URL =
@@ -17,9 +27,12 @@ export const LICENSING_URL =
 interface LegalConsentProps {
   language: Language;
   canClose: boolean;
+  requiresPinSetup: boolean;
+  sessionToken: string | null;
   onLanguageChange: (language: Language) => void;
   onAccept: () => void;
   onClose: () => void;
+  onInitialized: () => Promise<void>;
 }
 
 function Sections({ sections }: { sections: LegalSection[] }) {
@@ -43,12 +56,25 @@ function Sections({ sections }: { sections: LegalSection[] }) {
 export function LegalConsent({
   language,
   canClose,
+  requiresPinSetup,
+  sessionToken,
   onLanguageChange,
   onAccept,
   onClose,
+  onInitialized,
 }: LegalConsentProps) {
   const [acknowledged, setAcknowledged] = useState(false);
+  const [step, setStep] = useState<"legal" | "pin">(
+    canClose && requiresPinSetup ? "pin" : "legal",
+  );
+  const [pin, setPin] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
+  const [recoverySaved, setRecoverySaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
   const text = legalCopy[language];
+  const zh = language === "zh-CN";
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -78,25 +104,34 @@ export function LegalConsent({
                 id="legal-consent-title"
                 className="m-0 text-2xl font-bold tracking-tight sm:text-3xl"
               >
-                {text.title}
+                {step === "legal"
+                  ? text.title
+                  : zh
+                    ? "设置本机 PIN"
+                    : "Set a local PIN"}
               </h1>
               <p
                 id="legal-consent-introduction"
                 className="mb-0 mt-3 max-w-3xl text-sm leading-6 text-slate-200"
               >
-                {text.introduction}
+                {step === "legal"
+                  ? text.introduction
+                  : zh
+                    ? "完成初始化后，PIN 用于本机登录和解锁加密诊断。恢复密钥仅显示一次。"
+                    : "The PIN signs you in locally and unlocks encrypted diagnostics. Your recovery key is shown only once."}
               </p>
             </div>
-            {canClose && (
-              <button
-                type="button"
-                onClick={onClose}
-                className="grid size-10 shrink-0 place-items-center rounded-lg border border-white/20 text-slate-200 hover:bg-white/10 hover:text-white"
-                aria-label={text.close}
-              >
-                <X className="size-5" aria-hidden="true" />
-              </button>
-            )}
+            {canClose &&
+              (step === "legal" || (!sessionToken && !recoveryKey)) && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="grid size-10 shrink-0 place-items-center rounded-lg border border-white/20 text-slate-200 hover:bg-white/10 hover:text-white"
+                  aria-label={text.close}
+                >
+                  <X className="size-5" aria-hidden="true" />
+                </button>
+              )}
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-200">
@@ -124,99 +159,272 @@ export function LegalConsent({
         </header>
 
         <div className="overflow-y-auto px-5 py-6 sm:px-8">
-          <div className="mb-6 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
-            <ShieldAlert
-              className="mt-0.5 size-5 shrink-0"
-              aria-hidden="true"
-            />
-            <p className="m-0 text-sm font-medium leading-6">
-              {text.prerelease}
-            </p>
-          </div>
+          {step === "legal" ? (
+            <>
+              <div className="mb-6 flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950">
+                <ShieldAlert
+                  className="mt-0.5 size-5 shrink-0"
+                  aria-hidden="true"
+                />
+                <p className="m-0 text-sm font-medium leading-6">
+                  {text.prerelease}
+                </p>
+              </div>
 
-          <article>
-            <h2 className="mb-2 mt-0 text-xl font-bold text-slate-950">
-              {text.licenseHeading}
-            </h2>
-            <Sections sections={text.licenseSections} />
-          </article>
-          <article className="mt-7">
-            <h2 className="mb-2 mt-0 text-xl font-bold text-slate-950">
-              {text.disclaimerHeading}
-            </h2>
-            <Sections sections={text.disclaimerSections} />
-          </article>
+              <article>
+                <h2 className="mb-2 mt-0 text-xl font-bold text-slate-950">
+                  {text.licenseHeading}
+                </h2>
+                <Sections sections={text.licenseSections} />
+              </article>
+              <article className="mt-7">
+                <h2 className="mb-2 mt-0 text-xl font-bold text-slate-950">
+                  {text.disclaimerHeading}
+                </h2>
+                <Sections sections={text.disclaimerSections} />
+              </article>
 
-          <div className="mt-7 rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-wrap gap-x-5 gap-y-3 text-sm font-semibold">
-              <a
-                href={LICENSING_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
-              >
-                {text.sourceLicense}
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
-              <a
-                href={ISSUE_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
-              >
-                {text.feedback}
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
-              <a
-                href={SECURITY_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
-              >
-                {text.security}
-                <ExternalLink className="size-3.5" aria-hidden="true" />
-              </a>
+              <div className="mt-7 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap gap-x-5 gap-y-3 text-sm font-semibold">
+                  <a
+                    href={LICENSING_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
+                  >
+                    {text.sourceLicense}
+                    <ExternalLink className="size-3.5" aria-hidden="true" />
+                  </a>
+                  <a
+                    href={ISSUE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
+                  >
+                    {text.feedback}
+                    <ExternalLink className="size-3.5" aria-hidden="true" />
+                  </a>
+                  <a
+                    href={SECURITY_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-cyan-800 hover:text-cyan-950"
+                  >
+                    {text.security}
+                    <ExternalLink className="size-3.5" aria-hidden="true" />
+                  </a>
+                </div>
+                <p className="mb-0 mt-3 text-xs leading-5 text-slate-500">
+                  {text.privacyNote}
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="mx-auto max-w-2xl py-3 sm:py-8">
+              <div className="mb-6 flex items-center gap-3 text-sm font-semibold text-cyan-800">
+                <span className="grid size-10 place-items-center rounded-xl bg-cyan-50">
+                  <KeyRound className="size-5" />
+                </span>
+                {zh ? "首次运行 · 身份保护" : "First run · Identity protection"}
+              </div>
+              {!recoveryKey ? (
+                <form
+                  className="space-y-5"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    if (
+                      !sessionToken ||
+                      pin.length < 6 ||
+                      pin.length > 64 ||
+                      pin !== confirmation
+                    )
+                      return;
+                    setBusy(true);
+                    setError(false);
+                    try {
+                      const result = await setBrowserAuthMethod(
+                        sessionToken,
+                        "pin",
+                        pin,
+                      );
+                      if (!result?.recovery_key)
+                        throw new Error("missing_recovery_key");
+                      setRecoveryKey(result.recovery_key);
+                      setPin("");
+                      setConfirmation("");
+                    } catch {
+                      setError(true);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-5">
+                    <h2 className="m-0 text-lg font-bold text-slate-950">
+                      {zh ? "创建 PIN" : "Create your PIN"}
+                    </h2>
+                    <p className="mb-0 mt-2 text-sm leading-6 text-slate-600">
+                      {zh
+                        ? "至少 6 位，最多 64 位；可以使用数字、字母和符号。较长的口令更能抵御设备数据被复制后的离线猜测。"
+                        : "Use 6–64 characters: digits, letters and symbols are allowed. A longer passphrase better resists offline guessing if device data is copied."}
+                    </p>
+                  </div>
+                  <label className="block text-sm font-semibold text-slate-800">
+                    {zh ? "PIN / 口令" : "PIN / passphrase"}
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={6}
+                      maxLength={64}
+                      required
+                      value={pin}
+                      onChange={(event) => setPin(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    />
+                  </label>
+                  <label className="block text-sm font-semibold text-slate-800">
+                    {zh ? "再次输入 PIN" : "Confirm PIN"}
+                    <input
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={6}
+                      maxLength={64}
+                      required
+                      value={confirmation}
+                      onChange={(event) => setConfirmation(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 focus:border-cyan-600 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                    />
+                  </label>
+                  {confirmation && pin !== confirmation && (
+                    <p role="alert" className="text-sm text-rose-700">
+                      {zh ? "两次输入不一致。" : "The PINs do not match."}
+                    </p>
+                  )}
+                  {!sessionToken && (
+                    <p
+                      role="status"
+                      className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900"
+                    >
+                      {zh
+                        ? "请先通过本机配对链接进入管理页，再继续设置。"
+                        : "Open the local pairing link before continuing setup."}
+                    </p>
+                  )}
+                  {error && (
+                    <p role="alert" className="text-sm text-rose-700">
+                      {zh ? "设置失败，请重试。" : "Setup failed. Try again."}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={
+                      busy ||
+                      !sessionToken ||
+                      pin.length < 6 ||
+                      pin !== confirmation
+                    }
+                    className="workbench-primary inline-flex items-center gap-2"
+                  >
+                    {busy
+                      ? zh
+                        ? "正在设置…"
+                        : "Setting up…"
+                      : zh
+                        ? "设置 PIN 并生成恢复密钥"
+                        : "Set PIN and create recovery key"}
+                    {!busy && <ArrowRight className="size-4" />}
+                  </button>
+                </form>
+              ) : (
+                <div className="space-y-5">
+                  <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5">
+                    <h2 className="m-0 text-lg font-bold text-amber-950">
+                      {zh ? "立即保存恢复密钥" : "Save your recovery key now"}
+                    </h2>
+                    <p className="mb-0 mt-2 text-sm leading-6 text-amber-900">
+                      {zh
+                        ? "它只显示这一次。请存入可信密码管理器或离线安全位置；不要发给 AI，也不要保存在普通聊天或截图中。遗失 PIN 时可用它重置，重置后会生成新的恢复密钥。"
+                        : "This key is shown only once. Keep it in a trusted password manager or secure offline place; never send it to an AI or ordinary chat. It resets a lost PIN and is rotated after use."}
+                    </p>
+                  </div>
+                  <code
+                    aria-label={zh ? "恢复密钥" : "Recovery key"}
+                    className="block break-all rounded-2xl border border-slate-200 bg-slate-950 p-5 font-mono text-base leading-7 tracking-widest text-cyan-100 select-all"
+                  >
+                    {recoveryKey}
+                  </code>
+                  <label className="flex items-start gap-3 text-sm leading-6 text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={recoverySaved}
+                      onChange={(event) =>
+                        setRecoverySaved(event.target.checked)
+                      }
+                      className="mt-1 size-4 accent-cyan-700"
+                    />
+                    {zh
+                      ? "我已将恢复密钥保存到安全位置，并理解关闭后无法再次查看。"
+                      : "I saved the recovery key securely and understand it cannot be viewed again."}
+                  </label>
+                  <button
+                    type="button"
+                    disabled={!recoverySaved || busy}
+                    className="workbench-primary inline-flex items-center gap-2"
+                    onClick={async () => {
+                      setBusy(true);
+                      await onInitialized();
+                      setBusy(false);
+                    }}
+                  >
+                    <CheckCircle2 className="size-4" />
+                    {zh ? "完成初始化" : "Finish setup"}
+                  </button>
+                </div>
+              )}
             </div>
-            <p className="mb-0 mt-3 text-xs leading-5 text-slate-500">
-              {text.privacyNote}
-            </p>
-          </div>
+          )}
         </div>
 
-        <footer className="border-t border-slate-200 bg-white px-5 py-4 sm:px-8">
-          {!canClose && (
-            <label className="mb-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-slate-700">
-              <input
-                autoFocus
-                type="checkbox"
-                checked={acknowledged}
-                onChange={(event) => setAcknowledged(event.target.checked)}
-                className="mt-1 size-4 shrink-0 accent-cyan-700"
-              />
-              <span>{text.acknowledgement}</span>
-            </label>
-          )}
-          <div className="flex justify-end gap-3">
-            {canClose ? (
-              <button
-                type="button"
-                className="workbench-primary"
-                onClick={onClose}
-              >
-                {text.close}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="workbench-primary"
-                disabled={!acknowledged}
-                onClick={onAccept}
-              >
-                {text.accept}
-              </button>
+        {step === "legal" && (
+          <footer className="border-t border-slate-200 bg-white px-5 py-4 sm:px-8">
+            {!canClose && (
+              <label className="mb-4 flex cursor-pointer items-start gap-3 text-sm leading-6 text-slate-700">
+                <input
+                  autoFocus
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(event) => setAcknowledged(event.target.checked)}
+                  className="mt-1 size-4 shrink-0 accent-cyan-700"
+                />
+                <span>{text.acknowledgement}</span>
+              </label>
             )}
-          </div>
-        </footer>
+            <div className="flex justify-end gap-3">
+              {canClose ? (
+                <button
+                  type="button"
+                  className="workbench-primary"
+                  onClick={onClose}
+                >
+                  {text.close}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="workbench-primary"
+                  disabled={!acknowledged}
+                  onClick={() => {
+                    onAccept();
+                    if (requiresPinSetup) setStep("pin");
+                    else onClose();
+                  }}
+                >
+                  {text.accept}
+                </button>
+              )}
+            </div>
+          </footer>
+        )}
       </div>
     </div>
   );

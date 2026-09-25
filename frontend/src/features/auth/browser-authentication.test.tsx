@@ -20,8 +20,8 @@ describe("browser authentication settings", () => {
       />,
     );
     expect(html).toContain("初始化待完成：请先设置 PIN");
-    expect(html).toContain("设置完成后可选择绑定身份验证器验证码");
-    expect(html).toContain("请勿向 AI 提供 PIN、二维码或手动密钥");
+    expect(html).toContain("PIN/口令至少 6 位");
+    expect(html).toContain("请勿向 AI 提供 PIN、恢复密钥或身份验证器密钥");
     expect(html).toContain("诊断记录");
     expect(html).not.toContain("synthetic-session-token");
   });

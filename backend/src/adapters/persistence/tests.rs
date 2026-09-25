@@ -2033,12 +2033,44 @@ fn diagnostic_failures_only_keep_fixed_codes_and_time_bounds() {
 }
 
 #[test]
+fn pin_failures_have_persistent_exponential_waits() {
+    let database = TemporaryDatabase::new();
+    let catalog = Catalog::open(&database.path).unwrap();
+    for _ in 0..4 {
+        assert_eq!(catalog.record_failed_pin_attempt().unwrap(), 0);
+    }
+    assert_eq!(catalog.record_failed_pin_attempt().unwrap(), 30);
+    drop(catalog);
+    let reopened = Catalog::open(&database.path).unwrap();
+    assert!(reopened.pin_retry_after_seconds().unwrap() > 0);
+    reopened
+        .lock()
+        .execute(
+            "UPDATE browser_auth_settings SET pin_blocked_until_unix_ms = 0 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    assert_eq!(reopened.record_failed_pin_attempt().unwrap(), 60);
+    reopened
+        .lock()
+        .execute(
+            "UPDATE browser_auth_settings SET pin_blocked_until_unix_ms = 0 WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    assert_eq!(reopened.record_failed_pin_attempt().unwrap(), 120);
+    reopened.reset_failed_pin_attempts().unwrap();
+    assert_eq!(reopened.pin_retry_after_seconds().unwrap(), 0);
+    assert_eq!(reopened.record_failed_pin_attempt().unwrap(), 0);
+}
+
+#[test]
 fn diagnostic_vault_encrypts_selective_records_and_rewraps_on_pin_change() {
     let database = TemporaryDatabase::new();
     let catalog = Catalog::open(&database.path).unwrap();
     let first_pin = "synthetic-first-passphrase";
     let second_pin = "synthetic-second-passphrase";
-    catalog.initialize_diagnostic_vault(first_pin).unwrap();
+    let recovery_key = catalog.initialize_diagnostic_vault(first_pin).unwrap();
     let marker = "synthetic-command-marker";
     catalog
         .record_encrypted_diagnostic("command", serde_json::json!({ "program": marker }))
@@ -2072,16 +2104,13 @@ fn diagnostic_vault_encrypts_selective_records_and_rewraps_on_pin_change() {
     assert_eq!(command.len(), 1);
     assert_eq!(command[0].data["program"], marker);
     let backup = catalog.backup_bytes().unwrap();
-    assert!(
-        !backup
-            .windows(marker.len())
-            .any(|window| window == marker.as_bytes())
-    );
-    assert!(
-        !backup
-            .windows(first_pin.len())
-            .any(|window| window == first_pin.as_bytes())
-    );
+    for secret in [marker, first_pin, recovery_key.as_str()] {
+        assert!(
+            !backup
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes())
+        );
+    }
     assert!(
         !catalog
             .verify_diagnostic_pin("wrong-synthetic-passphrase")
@@ -2107,6 +2136,24 @@ fn diagnostic_vault_encrypts_selective_records_and_rewraps_on_pin_change() {
             .len(),
         2
     );
+    let third_pin = "synthetic-recovered-passphrase";
+    let next_key = reopened
+        .recover_diagnostic_vault_pin(&recovery_key, third_pin)
+        .unwrap();
+    assert_ne!(recovery_key, next_key);
+    assert!(
+        reopened
+            .recover_diagnostic_vault_pin(&recovery_key, first_pin)
+            .is_err()
+    );
+    assert!(!reopened.verify_diagnostic_pin(second_pin).unwrap());
+    assert_eq!(
+        reopened
+            .unlock_diagnostic_records(third_pin, true, true)
+            .unwrap()
+            .len(),
+        2
+    );
     reopened
         .lock()
         .execute(
@@ -2116,7 +2163,7 @@ fn diagnostic_vault_encrypts_selective_records_and_rewraps_on_pin_change() {
         .unwrap();
     assert!(
         reopened
-            .unlock_diagnostic_records(second_pin, true, true)
+            .unlock_diagnostic_records(third_pin, true, true)
             .is_err()
     );
 }

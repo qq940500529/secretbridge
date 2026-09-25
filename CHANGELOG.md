@@ -10,6 +10,9 @@ This file records public release behavior rather than preserving a development d
 - Reorganize the source tree around `frontend/` and `backend/`, with the primary Rust binary named `secretbridge` and a cross-platform local-access helper package inside the backend.
 - Separate Web API requests by resource and Rust code by domain, application, transport, persistence, executor and runtime responsibilities. Move documentation into task-oriented sections and remove deployment prompts from the README.
 - Treat builds from this refactor as a new installation line. Compatibility with earlier binaries, installation layouts and databases is not promised; existing local data is neither read nor modified by the refactor work.
+- Allow a local PIN/passphrase of 6–64 characters; repeated incorrect PIN or recovery attempts now have persistent exponentially increasing wait times (30 seconds initially, capped at one hour).
+- Generate a one-time-display recovery key when the PIN is first set. A correct recovery key can reset a forgotten PIN without losing encrypted diagnostics and is rotated after use; existing users can replace it with their current PIN.
+- Place PIN setup immediately after the legal agreement in the same first-run dialog, with explicit recovery-key safekeeping confirmation.
 
 ## 0.2.0-beta.9 — 2026-09-24
 

@@ -18,6 +18,9 @@ import {
   getTerminalCapabilities,
   readRunOutput,
   pairWithTotp,
+  pairWithPin,
+  recoverPin,
+  setBrowserAuthMethod,
   startTotpSetup,
   confirmTotpSetup,
   updateCredentialReference,
@@ -29,6 +32,56 @@ afterEach(() => {
 });
 
 describe("configuration API client", () => {
+  it("returns the one-time recovery key only from PIN enrollment", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ recovery_key: "synthetic-recovery-key" }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const result = await setBrowserAuthMethod("session-token", "pin", "123456");
+    expect(result?.recovery_key).toBe("synthetic-recovery-key");
+    expect(fetch.mock.calls[0]?.[0]).toBe("/api/v1/session/method");
+  });
+
+  it("preserves server retry time and sends recovery only to the dedicated endpoint", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ code: "rate_limited" }), {
+          status: 429,
+          headers: { "Retry-After": "30" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            recovery_key: "next-synthetic-key",
+            session_token: "new-session",
+            token_type: "Bearer",
+            expires_in_seconds: 1800,
+          }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetch);
+    await expect(pairWithPin("123456")).rejects.toMatchObject({
+      status: 429,
+      code: "rate_limited",
+      retryAfterSeconds: 30,
+    });
+    const recovered = await recoverPin("previous-synthetic-key", "654321");
+    expect(recovered.recovery_key).toBe("next-synthetic-key");
+    expect(fetch.mock.calls[1]?.[0]).toBe("/api/v1/session/recover");
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toEqual({
+      recovery_key: "previous-synthetic-key",
+      new_pin: "654321",
+    });
+  });
+
   it("reads fixed browser authentication audit events through an authenticated API", async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(

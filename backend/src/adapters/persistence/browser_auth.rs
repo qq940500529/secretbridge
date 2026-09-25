@@ -98,6 +98,53 @@ pub struct BrowserAuthEvent {
 }
 
 impl Catalog {
+    pub fn pin_retry_after_seconds(&self) -> Result<u64, CatalogError> {
+        let blocked_until: i64 = self
+            .lock()
+            .query_row(
+                "SELECT pin_blocked_until_unix_ms FROM browser_auth_settings WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        let remaining_ms = blocked_until.saturating_sub(now_unix_ms_i64()?);
+        Ok(u64::try_from(remaining_ms.saturating_add(999) / 1_000).unwrap_or_default())
+    }
+
+    pub fn record_failed_pin_attempt(&self) -> Result<u64, CatalogError> {
+        let now = now_unix_ms_i64()?;
+        let connection = self.lock();
+        let (failures, blocked_until): (i64, i64) = connection.query_row(
+            "SELECT pin_failures, pin_blocked_until_unix_ms FROM browser_auth_settings WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).map_err(|_| CatalogError::Storage)?;
+        if blocked_until > now {
+            return Ok(u64::try_from((blocked_until - now + 999) / 1_000).unwrap_or_default());
+        }
+        let failures = failures.saturating_add(1);
+        let delay = if failures >= 5 {
+            30_i64
+                .saturating_mul(1_i64 << failures.saturating_sub(5).min(7))
+                .min(3_600)
+        } else {
+            0
+        };
+        connection.execute(
+            "UPDATE browser_auth_settings SET pin_failures = ?1, pin_blocked_until_unix_ms = ?2 WHERE singleton = 1",
+            params![failures, now.saturating_add(delay * 1_000)],
+        ).map_err(|_| CatalogError::Storage)?;
+        Ok(u64::try_from(delay).unwrap_or_default())
+    }
+
+    pub fn reset_failed_pin_attempts(&self) -> Result<(), CatalogError> {
+        self.lock().execute(
+            "UPDATE browser_auth_settings SET pin_failures = 0, pin_blocked_until_unix_ms = 0 WHERE singleton = 1",
+            [],
+        ).map_err(|_| CatalogError::Storage)?;
+        Ok(())
+    }
+
     pub fn browser_auth_mode(&self) -> Result<BrowserAuthMode, CatalogError> {
         self.lock()
             .query_row(

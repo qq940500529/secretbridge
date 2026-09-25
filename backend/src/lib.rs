@@ -66,7 +66,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 use catalog::{
     ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEventKind, BrowserAuthMode,
@@ -97,6 +97,7 @@ pub struct AppState {
     session_tokens: Arc<RwLock<HashMap<[u8; 32], Instant>>>,
     session_revocations: broadcast::Sender<[u8; 32]>,
     pin_attempts: Arc<Mutex<PinAttempts>>,
+    pin_verification_gate: Arc<Mutex<()>>,
     trusted_origins: Arc<HashSet<String>>,
     catalog: Catalog,
     configuration_storage: ConfigurationStorage,
@@ -210,6 +211,7 @@ impl AppState {
             session_tokens: Arc::new(RwLock::new(HashMap::new())),
             session_revocations,
             pin_attempts: Arc::new(Mutex::new(PinAttempts::default())),
+            pin_verification_gate: Arc::new(Mutex::new(())),
             trusted_origins: Arc::new(trusted_origins.into_iter().collect()),
             catalog,
             configuration_storage,

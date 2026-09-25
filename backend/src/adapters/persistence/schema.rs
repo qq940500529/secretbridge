@@ -12,7 +12,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::CatalogOpenError;
 
-pub(crate) const SCHEMA_VERSION: i64 = 23;
+pub(crate) const SCHEMA_VERSION: i64 = 24;
 
 pub(super) fn prepare(connection: &Connection) -> Result<(), CatalogOpenError> {
     let version = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
@@ -499,6 +499,18 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 ciphertext BLOB NOT NULL
              );
              PRAGMA user_version = 23;
+             COMMIT;",
+        )?;
+    }
+    if version < 24 {
+        connection.execute_batch(
+            "BEGIN IMMEDIATE;
+             ALTER TABLE diagnostic_vault ADD COLUMN recovery_salt BLOB CHECK (recovery_salt IS NULL OR length(recovery_salt) = 16);
+             ALTER TABLE diagnostic_vault ADD COLUMN recovery_nonce BLOB CHECK (recovery_nonce IS NULL OR length(recovery_nonce) = 12);
+             ALTER TABLE diagnostic_vault ADD COLUMN recovery_wrapped_private_key BLOB;
+             ALTER TABLE browser_auth_settings ADD COLUMN pin_failures INTEGER NOT NULL DEFAULT 0 CHECK (pin_failures >= 0);
+             ALTER TABLE browser_auth_settings ADD COLUMN pin_blocked_until_unix_ms INTEGER NOT NULL DEFAULT 0 CHECK (pin_blocked_until_unix_ms >= 0);
+             PRAGMA user_version = 24;
              COMMIT;",
         )?;
     }

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { Activity, CheckCircle2, CircleAlert, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { SecretBridgeApiError, type RecoveredSessionResponse } from "../api";
 import type { Language } from "./preferences";
 import type { AuthMethodStatus } from "../features/auth/BrowserAuthenticationSettings";
 import type { Copy } from "./copy";
@@ -56,6 +57,8 @@ export function PairingRequired({
   onRetry,
   onPin,
   onTotp,
+  onRecover,
+  onRecoveredSession,
 }: {
   text: Copy;
   page: string;
@@ -66,12 +69,33 @@ export function PairingRequired({
   onRetry: () => void;
   onPin: (pin: string) => Promise<void>;
   onTotp: (code: string) => Promise<void>;
+  onRecover: (
+    recoveryKey: string,
+    newPin: string,
+  ) => Promise<RecoveredSessionResponse>;
+  onRecoveredSession: (response: RecoveredSessionResponse) => void;
 }) {
   const [pin, setPin] = useState("");
   const [loginMethod, setLoginMethod] = useState<"pin" | "totp">("pin");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [retryAfter, setRetryAfter] = useState(0);
+  const [recovering, setRecovering] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [recoveredSession, setRecoveredSession] =
+    useState<RecoveredSessionResponse | null>(null);
+  const [recoverySaved, setRecoverySaved] = useState(false);
   const zh = language === "zh-CN";
+  useEffect(() => {
+    if (retryAfter <= 0) return;
+    const timer = window.setTimeout(
+      () => setRetryAfter((value) => Math.max(0, value - 1)),
+      1_000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [retryAfter]);
   return (
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-dashed border-slate-300 bg-white/65 p-10 text-center">
       <div className="max-w-lg">
@@ -115,7 +139,13 @@ export function PairingRequired({
                 if (loginMethod === "totp") await onTotp(pin);
                 else await onPin(pin);
                 setPin("");
-              } catch {
+              } catch (error) {
+                if (
+                  error instanceof SecretBridgeApiError &&
+                  error.status === 429
+                ) {
+                  setRetryAfter(error.retryAfterSeconds);
+                }
                 setFailed(true);
               } finally {
                 setBusy(false);
@@ -177,7 +207,7 @@ export function PairingRequired({
             />
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || retryAfter > 0}
               className="workbench-button w-full"
             >
               {busy
@@ -190,12 +220,148 @@ export function PairingRequired({
             </button>
             {failed && (
               <p role="alert" className="text-sm text-rose-700">
-                {zh
-                  ? "验证失败。连续错误会触发一分钟冷却。"
-                  : "Verification failed. Repeated failures trigger a one-minute cooldown."}
+                {retryAfter > 0
+                  ? zh
+                    ? `尝试次数过多，请在 ${retryAfter} 秒后重试。等待时间会随连续错误增加。`
+                    : `Too many attempts. Try again in ${retryAfter} seconds; repeated failures increase the wait.`
+                  : zh
+                    ? "验证失败，请检查输入。"
+                    : "Verification failed. Check your entry."}
               </p>
             )}
           </form>
+        )}
+        {authMethodStatus === "ready" && pinEnabled && (
+          <div className="mx-auto mt-5 max-w-sm text-left">
+            <button
+              type="button"
+              className="text-sm font-semibold text-cyan-800 hover:underline"
+              onClick={() => setRecovering((value) => !value)}
+            >
+              {zh ? "忘记 PIN？使用恢复密钥" : "Forgot PIN? Use recovery key"}
+            </button>
+            {recovering && !recoveredSession && (
+              <form
+                className="mt-4 space-y-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-5"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  if (newPin !== confirmPin || newPin.length < 6) return;
+                  setBusy(true);
+                  setFailed(false);
+                  try {
+                    const response = await onRecover(
+                      recoveryCode.trim(),
+                      newPin,
+                    );
+                    setRecoveredSession(response);
+                    setRecoveryCode("");
+                    setNewPin("");
+                    setConfirmPin("");
+                  } catch (error) {
+                    if (
+                      error instanceof SecretBridgeApiError &&
+                      error.status === 429
+                    )
+                      setRetryAfter(error.retryAfterSeconds);
+                    setFailed(true);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                <p className="m-0 text-sm leading-6 text-slate-700">
+                  {zh
+                    ? "输入此前安全保存的恢复密钥。成功后旧密钥立即失效，必须保存新密钥。"
+                    : "Enter the recovery key you saved. The old key is invalidated after reset; save the new one."}
+                </p>
+                <input
+                  aria-label={zh ? "恢复密钥" : "Recovery key"}
+                  value={recoveryCode}
+                  onChange={(event) => setRecoveryCode(event.target.value)}
+                  autoComplete="off"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-sm"
+                  required
+                />
+                <input
+                  aria-label={zh ? "新 PIN" : "New PIN"}
+                  type="password"
+                  value={newPin}
+                  onChange={(event) => setNewPin(event.target.value)}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5"
+                  required
+                />
+                <input
+                  aria-label={zh ? "确认新 PIN" : "Confirm new PIN"}
+                  type="password"
+                  value={confirmPin}
+                  onChange={(event) => setConfirmPin(event.target.value)}
+                  autoComplete="new-password"
+                  minLength={6}
+                  maxLength={64}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5"
+                  required
+                />
+                {newPin && confirmPin && newPin !== confirmPin && (
+                  <p role="alert" className="text-sm text-rose-700">
+                    {zh ? "两次 PIN 不一致。" : "The PINs do not match."}
+                  </p>
+                )}
+                {failed && (
+                  <p role="alert" className="text-sm text-rose-700">
+                    {zh
+                      ? "恢复失败，请核对密钥。"
+                      : "Recovery failed. Check the key."}
+                  </p>
+                )}
+                <button
+                  type="submit"
+                  className="workbench-primary w-full"
+                  disabled={
+                    busy ||
+                    retryAfter > 0 ||
+                    newPin.length < 6 ||
+                    newPin !== confirmPin
+                  }
+                >
+                  {zh ? "重置 PIN" : "Reset PIN"}
+                </button>
+              </form>
+            )}
+            {recoveredSession && (
+              <div className="mt-4 space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-5">
+                <h2 className="m-0 text-lg font-bold text-amber-950">
+                  {zh ? "保存新的恢复密钥" : "Save your new recovery key"}
+                </h2>
+                <p className="text-sm leading-6 text-amber-900">
+                  {zh
+                    ? "旧密钥已失效。请将新密钥保存到安全位置，不要发送给 AI。"
+                    : "The old key is invalid. Save the new one securely; never send it to an AI."}
+                </p>
+                <code className="block break-all rounded-xl bg-slate-950 p-3 font-mono text-sm text-cyan-100 select-all">
+                  {recoveredSession.recovery_key}
+                </code>
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={recoverySaved}
+                    onChange={(event) => setRecoverySaved(event.target.checked)}
+                  />
+                  {zh ? "我已安全保存" : "I saved it securely"}
+                </label>
+                <button
+                  type="button"
+                  disabled={!recoverySaved}
+                  className="workbench-primary w-full"
+                  onClick={() => onRecoveredSession(recoveredSession)}
+                >
+                  {zh ? "进入管理页" : "Open management page"}
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </section>

@@ -3,6 +3,8 @@
 
 import type {
   PairResponse,
+  RecoveryKeyResponse,
+  RecoveredSessionResponse,
   BrowserAuthMethods,
   BrowserAuthEventListResponse,
   TotpSetup,
@@ -34,6 +36,36 @@ export async function pairWithPin(pin: string): Promise<PairResponse> {
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pin }),
+    }),
+  );
+}
+
+export async function recoverPin(
+  recoveryKey: string,
+  newPin: string,
+): Promise<RecoveredSessionResponse> {
+  return readJson<RecoveredSessionResponse>(
+    await fetch("/api/v1/session/recover", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recovery_key: recoveryKey, new_pin: newPin }),
+    }),
+  );
+}
+
+export async function regenerateRecoveryKey(
+  token: string,
+  currentPin: string,
+): Promise<RecoveryKeyResponse> {
+  return readJson<RecoveryKeyResponse>(
+    await fetch("/api/v1/session/recovery-key", {
+      method: "POST",
+      credentials: "omit",
+      cache: "no-store",
+      headers: sessionJsonHeaders(token),
+      body: JSON.stringify({ current_pin: currentPin }),
     }),
   );
 }
@@ -97,16 +129,18 @@ export async function setBrowserAuthMethod(
   method: "pin" | "disable_totp",
   pin?: string,
   proof: CurrentBrowserAuthProof = {},
-): Promise<void> {
-  await requireOk(
-    await fetch("/api/v1/session/method", {
-      method: "PUT",
-      credentials: "omit",
-      cache: "no-store",
-      headers: sessionJsonHeaders(token),
-      body: JSON.stringify({ method, ...(pin ? { pin } : {}), ...proof }),
-    }),
-  );
+): Promise<RecoveryKeyResponse | null> {
+  const response = await fetch("/api/v1/session/method", {
+    method: "PUT",
+    credentials: "omit",
+    cache: "no-store",
+    headers: sessionJsonHeaders(token),
+    body: JSON.stringify({ method, ...(pin ? { pin } : {}), ...proof }),
+  });
+  await requireOk(response);
+  return response.status === 204
+    ? null
+    : ((await response.json()) as RecoveryKeyResponse);
 }
 
 export async function pair(bootstrapToken: string): Promise<PairResponse> {

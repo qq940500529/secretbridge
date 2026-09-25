@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import {
   confirmTotpSetup,
+  regenerateRecoveryKey,
   setBrowserAuthMethod,
   startTotpSetup,
   type CurrentBrowserAuthProof,
@@ -41,6 +42,8 @@ export function BrowserAuthenticationSettings({
     "pin" | "replace" | "disable" | null
   >(null);
   const [currentProof, setCurrentProof] = useState("");
+  const [recoveryPin, setRecoveryPin] = useState("");
+  const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
   const zh = language === "zh-CN";
 
   function proof(): CurrentBrowserAuthProof {
@@ -59,7 +62,13 @@ export function BrowserAuthenticationSettings({
     setBusy(true);
     setMessage(null);
     try {
-      await setBrowserAuthMethod(sessionToken, "pin", pin, current);
+      const result = await setBrowserAuthMethod(
+        sessionToken,
+        "pin",
+        pin,
+        current,
+      );
+      if (result?.recovery_key) setRecoveryKey(result.recovery_key);
       setPin("");
       onChanged("pin");
       setMessage(zh ? "PIN/口令已启用。" : "PIN/passphrase enabled.");
@@ -116,8 +125,8 @@ export function BrowserAuthenticationSettings({
       </h2>
       <p className="text-sm leading-6 text-slate-600">
         {zh
-          ? "首次使用必须设置 PIN/口令，建议至少 12 个不易猜测的字符。它用于浏览器登录和解锁持续加密保存的诊断记录；遗失后无法恢复旧诊断。设置完成后可选择绑定身份验证器验证码。请勿向 AI 提供 PIN、二维码或手动密钥。"
-          : "First set a PIN/passphrase of at least 12 hard-to-guess characters. It signs you in and unlocks continuously encrypted diagnostics; lost PINs cannot recover old records. You may then add an authenticator. Never share your PIN, QR code, or setup key with an AI."}
+          ? "PIN/口令至少 6 位，建议使用更长且不易猜测的口令。连续错误会逐级延长等待时间；遗失 PIN 时可用安全保存的恢复密钥重置，并继续解锁旧诊断记录。请勿向 AI 提供 PIN、恢复密钥或身份验证器密钥。"
+          : "A PIN/passphrase needs at least 6 characters; a longer, hard-to-guess passphrase is safer. Repeated failures increase the waiting time. A securely saved recovery key can reset a lost PIN while preserving encrypted diagnostics. Never share it, your PIN or authenticator key with an AI."}
       </p>
       {authMethodStatus === "loading" && (
         <p role="status" className="text-sm text-slate-600">
@@ -157,16 +166,16 @@ export function BrowserAuthenticationSettings({
         <div className="flex flex-col gap-3 sm:flex-row">
           <input
             type="password"
-            minLength={12}
+            minLength={6}
             maxLength={64}
             value={pin}
             onChange={(event) => setPin(event.target.value)}
-            placeholder={zh ? "至少 12 个字符" : "At least 12 characters"}
+            placeholder={zh ? "至少 6 位" : "At least 6 characters"}
             className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
           />
           <button
             type="button"
-            disabled={busy || pin.length < 12}
+            disabled={busy || pin.length < 6}
             className="workbench-button"
             onClick={() => {
               if (pinEnabled || totpEnabled) setConfirmation("pin");
@@ -257,7 +266,7 @@ export function BrowserAuthenticationSettings({
               aria-label={zh ? "当前 PIN/口令" : "Current PIN/passphrase"}
               value={currentProof}
               onChange={(event) => setCurrentProof(event.target.value)}
-              minLength={12}
+              minLength={6}
               maxLength={64}
               autoComplete="off"
               className="mb-3 w-full rounded-xl border border-amber-300 bg-white px-3.5 py-2.5"
@@ -266,7 +275,7 @@ export function BrowserAuthenticationSettings({
           <div className="flex gap-3">
             <button
               type="button"
-              disabled={busy || (pinEnabled && currentProof.length < 12)}
+              disabled={busy || (pinEnabled && currentProof.length < 6)}
               className="workbench-button"
               onClick={() => {
                 if (confirmation === "pin") void savePin();
@@ -357,6 +366,82 @@ export function BrowserAuthenticationSettings({
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {pinEnabled && (
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <h3 className="m-0 text-base font-semibold text-slate-950">
+            {zh ? "恢复密钥" : "Recovery key"}
+          </h3>
+          <p className="text-sm leading-6 text-slate-600">
+            {zh
+              ? "无法重新查看旧密钥。若需替换，请输入当前 PIN 生成新密钥；旧密钥随即失效。"
+              : "The existing key cannot be viewed again. Enter your current PIN to generate a replacement; the old key stops working immediately."}
+          </p>
+          {!recoveryKey && (
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <input
+                aria-label={
+                  zh
+                    ? "用于更换恢复密钥的当前 PIN"
+                    : "Current PIN for recovery key replacement"
+                }
+                type="password"
+                minLength={6}
+                maxLength={64}
+                autoComplete="current-password"
+                value={recoveryPin}
+                onChange={(event) => setRecoveryPin(event.target.value)}
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
+              />
+              <button
+                type="button"
+                disabled={busy || recoveryPin.length < 6}
+                className="workbench-button"
+                onClick={async () => {
+                  setBusy(true);
+                  setMessage(null);
+                  try {
+                    const result = await regenerateRecoveryKey(
+                      sessionToken,
+                      recoveryPin,
+                    );
+                    setRecoveryKey(result.recovery_key);
+                    setRecoveryPin("");
+                  } catch {
+                    setMessage(
+                      zh
+                        ? "无法更新恢复密钥。"
+                        : "Could not replace the recovery key.",
+                    );
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {zh ? "生成新密钥" : "Generate new key"}
+              </button>
+            </div>
+          )}
+          {recoveryKey && (
+            <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <p className="mt-0 text-sm font-semibold text-amber-950">
+                {zh
+                  ? "请立即保存到安全位置；离开此页后无法再次查看。"
+                  : "Save this in a secure place now; it cannot be viewed again after leaving."}
+              </p>
+              <code className="block break-all rounded-lg bg-slate-950 p-3 font-mono text-sm text-cyan-100 select-all">
+                {recoveryKey}
+              </code>
+              <button
+                type="button"
+                className="workbench-button mt-3"
+                onClick={() => setRecoveryKey(null)}
+              >
+                {zh ? "我已安全保存" : "I saved it securely"}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {message && <p className="mb-0 mt-3 text-sm text-slate-600">{message}</p>}

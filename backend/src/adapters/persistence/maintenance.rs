@@ -321,7 +321,10 @@ impl Catalog {
         copy_database(&self.lock(), &mut connection)?;
         storage(connection.execute_batch(
             "DELETE FROM browser_sessions;
-             UPDATE browser_auth_settings SET mode='pairing_link';",
+             UPDATE browser_auth_settings
+                SET mode=CASE WHEN EXISTS(SELECT 1 FROM diagnostic_vault WHERE singleton=1)
+                              THEN 'pin' ELSE 'pairing_link' END,
+                    pin_failures=0, pin_blocked_until_unix_ms=0;",
         ))?;
         let bytes = storage(connection.serialize("main"))?;
         if bytes.len() > MAX_BACKUP_BYTES {

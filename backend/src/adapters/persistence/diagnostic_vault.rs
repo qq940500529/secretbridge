@@ -13,11 +13,12 @@ use p256::{PublicKey, Sec1Point, SecretKey, ecdh::EphemeralSecret, elliptic_curv
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use super::{Catalog, CatalogError, now_unix_ms_i64};
 
 const WRAP_AAD: &[u8] = b"secretbridge/diagnostic-vault/private/v1";
+const RECOVERY_WRAP_AAD: &[u8] = b"secretbridge/diagnostic-vault/recovery/v1";
 const RECORD_AAD: &[u8] = b"secretbridge/diagnostic-vault/record/v1";
 const MAX_RECORD_BYTES: usize = 32 * 1024;
 const MAX_RECORDS: i64 = 2_000;
@@ -34,6 +35,37 @@ struct VaultHeader {
     salt: Vec<u8>,
     wrap_nonce: Vec<u8>,
     wrapped_private_key: Vec<u8>,
+    recovery_salt: Option<Vec<u8>>,
+    recovery_nonce: Option<Vec<u8>>,
+    recovery_wrapped_private_key: Option<Vec<u8>>,
+}
+
+struct WrappedPrivateKey {
+    salt: [u8; 16],
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
+}
+
+fn new_recovery_key() -> Zeroizing<String> {
+    let random: [u8; 32] = rand::random();
+    Zeroizing::new(hex::encode(random))
+}
+
+fn wrap_private(
+    private: &SecretKey,
+    passphrase: &str,
+    aad: &[u8],
+) -> Result<WrappedPrivateKey, CatalogError> {
+    let salt: [u8; 16] = rand::random();
+    let nonce: [u8; 12] = rand::random();
+    let key = derive_wrap_key(passphrase, &salt)?;
+    let private_bytes = Zeroizing::new(private.to_bytes());
+    let wrapped = seal(&key, &nonce, &private_bytes, aad)?;
+    Ok(WrappedPrivateKey {
+        salt,
+        nonce,
+        ciphertext: wrapped,
+    })
 }
 
 fn derive_wrap_key(pin: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, CatalogError> {
@@ -85,13 +117,26 @@ fn open(
 }
 
 fn header(connection: &rusqlite::Connection) -> Result<Option<VaultHeader>, CatalogError> {
-    connection.query_row(
-        "SELECT public_key, salt, wrap_nonce, wrapped_private_key FROM diagnostic_vault WHERE singleton = 1",
-        [],
-        |row| Ok(VaultHeader {
-            public_key: row.get(0)?, salt: row.get(1)?, wrap_nonce: row.get(2)?, wrapped_private_key: row.get(3)?,
-        }),
-    ).optional().map_err(|_| CatalogError::Storage)
+    connection
+        .query_row(
+            "SELECT public_key, salt, wrap_nonce, wrapped_private_key,
+                recovery_salt, recovery_nonce, recovery_wrapped_private_key
+           FROM diagnostic_vault WHERE singleton = 1",
+            [],
+            |row| {
+                Ok(VaultHeader {
+                    public_key: row.get(0)?,
+                    salt: row.get(1)?,
+                    wrap_nonce: row.get(2)?,
+                    wrapped_private_key: row.get(3)?,
+                    recovery_salt: row.get(4)?,
+                    recovery_nonce: row.get(5)?,
+                    recovery_wrapped_private_key: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|_| CatalogError::Storage)
 }
 
 fn unwrap_private(header: &VaultHeader, pin: &str) -> Result<SecretKey, CatalogError> {
@@ -111,6 +156,36 @@ fn unwrap_private(header: &VaultHeader, pin: &str) -> Result<SecretKey, CatalogE
     Ok(private)
 }
 
+fn unwrap_recovery_private(
+    header: &VaultHeader,
+    recovery_key: &str,
+) -> Result<SecretKey, CatalogError> {
+    if recovery_key.len() != 64 || !recovery_key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(CatalogError::Invalid);
+    }
+    let salt = header
+        .recovery_salt
+        .as_deref()
+        .ok_or(CatalogError::Invalid)?;
+    let nonce = header
+        .recovery_nonce
+        .as_deref()
+        .ok_or(CatalogError::Invalid)?;
+    let wrapped = header
+        .recovery_wrapped_private_key
+        .as_deref()
+        .ok_or(CatalogError::Invalid)?;
+    let key = derive_wrap_key(recovery_key, salt)?;
+    let plaintext = open(&key, nonce, wrapped, RECOVERY_WRAP_AAD)?;
+    let private = SecretKey::from_slice(&plaintext).map_err(|_| CatalogError::Storage)?;
+    let expected =
+        PublicKey::from_sec1_bytes(&header.public_key).map_err(|_| CatalogError::Storage)?;
+    if private.public_key() != expected {
+        return Err(CatalogError::Storage);
+    }
+    Ok(private)
+}
+
 impl Catalog {
     pub fn verify_diagnostic_pin(&self, pin: &str) -> Result<bool, CatalogError> {
         let connection = self.lock();
@@ -121,24 +196,24 @@ impl Catalog {
         Ok(header(&self.lock())?.is_some())
     }
 
-    pub fn initialize_diagnostic_vault(&self, pin: &str) -> Result<(), CatalogError> {
+    pub fn initialize_diagnostic_vault(&self, pin: &str) -> Result<String, CatalogError> {
         let connection = self.lock();
         if header(&connection)?.is_some() {
             return Err(CatalogError::Invalid);
         }
         let private = SecretKey::generate();
         let public = Sec1Point::from(private.public_key());
-        let salt: [u8; 16] = rand::random();
-        let nonce: [u8; 12] = rand::random();
-        let key = derive_wrap_key(pin, &salt)?;
-        let mut private_bytes = private.to_bytes();
-        let wrapped = seal(&key, &nonce, &private_bytes, WRAP_AAD)?;
-        private_bytes.zeroize();
+        let pin_wrap = wrap_private(&private, pin, WRAP_AAD)?;
+        let recovery_key = new_recovery_key();
+        let recovery_wrap = wrap_private(&private, &recovery_key, RECOVERY_WRAP_AAD)?;
         connection.execute(
-            "INSERT INTO diagnostic_vault(singleton, public_key, salt, wrap_nonce, wrapped_private_key) VALUES(1, ?1, ?2, ?3, ?4)",
-            params![public.as_ref(), salt.as_slice(), nonce.as_slice(), wrapped],
+            "INSERT INTO diagnostic_vault(singleton, public_key, salt, wrap_nonce, wrapped_private_key,
+                recovery_salt, recovery_nonce, recovery_wrapped_private_key)
+             VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![public.as_ref(), pin_wrap.salt.as_slice(), pin_wrap.nonce.as_slice(), pin_wrap.ciphertext,
+                recovery_wrap.salt.as_slice(), recovery_wrap.nonce.as_slice(), recovery_wrap.ciphertext],
         ).map_err(|_| CatalogError::Storage)?;
-        Ok(())
+        Ok(recovery_key.to_string())
     }
 
     pub fn rotate_diagnostic_vault_pin(
@@ -149,17 +224,61 @@ impl Catalog {
         let connection = self.lock();
         let header = header(&connection)?.ok_or(CatalogError::Invalid)?;
         let private = unwrap_private(&header, old_pin)?;
-        let salt: [u8; 16] = rand::random();
-        let nonce: [u8; 12] = rand::random();
-        let key = derive_wrap_key(new_pin, &salt)?;
-        let mut private_bytes = private.to_bytes();
-        let wrapped = seal(&key, &nonce, &private_bytes, WRAP_AAD)?;
-        private_bytes.zeroize();
+        let wrapped = wrap_private(&private, new_pin, WRAP_AAD)?;
         connection.execute(
             "UPDATE diagnostic_vault SET salt = ?1, wrap_nonce = ?2, wrapped_private_key = ?3 WHERE singleton = 1",
-            params![salt.as_slice(), nonce.as_slice(), wrapped],
+            params![wrapped.salt.as_slice(), wrapped.nonce.as_slice(), wrapped.ciphertext],
         ).map_err(|_| CatalogError::Storage)?;
         Ok(())
+    }
+
+    pub fn regenerate_diagnostic_recovery_key(&self, pin: &str) -> Result<String, CatalogError> {
+        let connection = self.lock();
+        let header = header(&connection)?.ok_or(CatalogError::Invalid)?;
+        let private = unwrap_private(&header, pin)?;
+        let recovery_key = new_recovery_key();
+        let wrapped = wrap_private(&private, &recovery_key, RECOVERY_WRAP_AAD)?;
+        connection
+            .execute(
+                "UPDATE diagnostic_vault SET recovery_salt = ?1, recovery_nonce = ?2,
+                recovery_wrapped_private_key = ?3 WHERE singleton = 1",
+                params![
+                    wrapped.salt.as_slice(),
+                    wrapped.nonce.as_slice(),
+                    wrapped.ciphertext
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(recovery_key.to_string())
+    }
+
+    pub fn recover_diagnostic_vault_pin(
+        &self,
+        recovery_key: &str,
+        new_pin: &str,
+    ) -> Result<String, CatalogError> {
+        let connection = self.lock();
+        let header = header(&connection)?.ok_or(CatalogError::Invalid)?;
+        let private = unwrap_recovery_private(&header, recovery_key)?;
+        let pin_wrap = wrap_private(&private, new_pin, WRAP_AAD)?;
+        let next_key = new_recovery_key();
+        let recovery_wrap = wrap_private(&private, &next_key, RECOVERY_WRAP_AAD)?;
+        connection
+            .execute(
+                "UPDATE diagnostic_vault SET salt = ?1, wrap_nonce = ?2, wrapped_private_key = ?3,
+                recovery_salt = ?4, recovery_nonce = ?5, recovery_wrapped_private_key = ?6
+             WHERE singleton = 1",
+                params![
+                    pin_wrap.salt.as_slice(),
+                    pin_wrap.nonce.as_slice(),
+                    pin_wrap.ciphertext,
+                    recovery_wrap.salt.as_slice(),
+                    recovery_wrap.nonce.as_slice(),
+                    recovery_wrap.ciphertext
+                ],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(next_key.to_string())
     }
 
     pub fn record_encrypted_diagnostic(

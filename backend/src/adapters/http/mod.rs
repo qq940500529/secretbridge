@@ -15,7 +15,7 @@ use crate::{
     Target, TerminalCapabilities, TerminalConnection, TerminalError, TerminalEvent, TerminalShell,
     TerminalStatus, TerminalSummary, UNIX_EPOCH, UpdateActionTemplate, UpdateCredentialReference,
     UpdateTarget, Uuid, WEBSOCKET_AUTH_TIMEOUT, WEBSOCKET_SEND_TIMEOUT, WebSocket,
-    WebSocketUpgrade, Zeroize, Zeroizing, broadcast, catalog, command, credential_service, delete,
+    WebSocketUpgrade, Zeroize, broadcast, catalog, command, credential_service, delete,
     drive_postgres_check, get, middleware, post, put, runtime, sleep, task, timeout, totp_auth,
 };
 
@@ -25,6 +25,7 @@ mod catalog_routes;
 mod conversations;
 mod maintenance;
 pub(crate) mod notifications;
+mod pin;
 mod runs;
 mod terminal_routes;
 pub(crate) mod totp;
@@ -35,12 +36,8 @@ use maintenance as maintenance_api;
 
 pub(crate) use auth::{
     authentication_attempt_allowed, record_authentication_failure, reset_authentication_attempts,
-    valid_browser_pin, verify_current_browser_auth,
 };
-use auth::{
-    browser_auth_methods, pair, pair_with_pin, revoke_session, session, set_browser_auth_method,
-    status,
-};
+use auth::{browser_auth_methods, pair, revoke_session, session, status};
 use catalog_routes::{
     approve_approval, clear_credential_secret, create_action_template, create_approval,
     create_credential_reference, create_target, delete_action_template,
@@ -49,6 +46,8 @@ use catalog_routes::{
     list_targets, revoke_approval, set_credential_secret, update_action_template,
     update_credential_reference, update_target,
 };
+use pin::{pair_with_pin, recover_pin, regenerate_recovery_key, set_browser_auth_method};
+pub(crate) use pin::{valid_browser_pin, verify_current_browser_auth};
 pub use runs::serve_mcp_stdio_bridge;
 pub(crate) use runs::{
     cancel_run_for_state, create_run_for_state, invalidate_synthetic_run, run_execution_mode,
@@ -80,6 +79,26 @@ struct BrowserAuthMethodsResponse {
 #[serde(deny_unknown_fields)]
 struct PinPairRequest {
     pin: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoverPinRequest {
+    recovery_key: String,
+    new_pin: String,
+}
+
+#[derive(Serialize)]
+struct RecoveryKeyResponse {
+    recovery_key: String,
+}
+
+#[derive(Serialize)]
+struct RecoveredSessionResponse {
+    recovery_key: String,
+    session_token: String,
+    token_type: &'static str,
+    expires_in_seconds: u64,
 }
 
 #[derive(Deserialize)]
@@ -267,6 +286,7 @@ pub(crate) enum ApiError {
     NotFound,
     PolicyDenied,
     ResourceInUse,
+    RateLimited(u64),
     SecretEntryNotFound,
     SecretStoreLocked,
     SecretStoreUnavailable,
@@ -282,6 +302,20 @@ impl IntoResponse for ApiError {
         reason = "fixed public error codes remain auditable in one response mapping"
     )]
     fn into_response(self) -> Response {
+        if let Self::RateLimited(seconds) = self {
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ErrorResponse {
+                    code: "rate_limited",
+                    message: "Wait before trying again.",
+                }),
+            )
+                .into_response();
+            if let Ok(value) = HeaderValue::from_str(&seconds.to_string()) {
+                response.headers_mut().insert("retry-after", value);
+            }
+            return response;
+        }
         let (status, code, message) = match self {
             Self::ApprovalConsumed => (
                 StatusCode::CONFLICT,
@@ -353,6 +387,7 @@ impl IntoResponse for ApiError {
                 "resource_in_use",
                 "The resource is still referenced and cannot be deleted.",
             ),
+            Self::RateLimited(_) => unreachable!("handled above"),
             Self::SecretEntryNotFound => (
                 StatusCode::CONFLICT,
                 "secret_entry_not_found",
@@ -423,6 +458,11 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/runtime/stop", post(runtime::stop_http))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session/pin", post(pair_with_pin))
+        .route("/api/v1/session/recover", post(recover_pin))
+        .route(
+            "/api/v1/session/recovery-key",
+            post(regenerate_recovery_key),
+        )
         .route("/api/v1/session/totp", post(totp_auth::pair))
         .route("/api/v1/session/totp/setup", post(totp_auth::start_setup))
         .route(

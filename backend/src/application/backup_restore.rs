@@ -66,7 +66,10 @@ pub fn restore_configuration_backup(
         UPDATE credential_references SET secret_configured=0, secret_updated_at_unix_ms=NULL, version=version+1;
         UPDATE approvals SET state='revoked', version=version+1 WHERE state IN ('pending','approved');
         DELETE FROM browser_sessions;
-        UPDATE browser_auth_settings SET mode='pairing_link';
+        UPDATE browser_auth_settings
+           SET mode=CASE WHEN EXISTS(SELECT 1 FROM diagnostic_vault WHERE singleton=1)
+                         THEN 'pin' ELSE 'pairing_link' END,
+               pin_failures=0, pin_blocked_until_unix_ms=0;
         COMMIT;").map_err(|_| "restore_failed")?;
     fs::create_dir(directory).map_err(|_| "restore_requires_new_directory")?;
     let database_path = directory.join("secretbridge.sqlite3");

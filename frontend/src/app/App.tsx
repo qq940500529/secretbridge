@@ -32,6 +32,7 @@ import {
   pair,
   pairWithPin,
   pairWithTotp,
+  recoverPin,
   revokePageSession,
   setApprovalNotificationSettings,
   type BrowserAuthMethods,
@@ -139,6 +140,17 @@ export function App() {
   const text = copy[language];
   const pinEnabled = browserAuthMethods?.pin_enabled ?? false;
   const totpEnabled = browserAuthMethods?.totp_enabled ?? false;
+
+  useEffect(() => {
+    if (
+      legalAccepted &&
+      sessionToken &&
+      authMethodStatus === "ready" &&
+      !pinEnabled
+    ) {
+      setLegalOpen(true);
+    }
+  }, [legalAccepted, sessionToken, authMethodStatus, pinEnabled]);
 
   const refreshBrowserAuthMethods = useCallback(async () => {
     setAuthMethodStatus("loading");
@@ -456,25 +468,18 @@ export function App() {
               </div>
             )}
             {sessionToken && authMethodStatus === "ready" && !pinEnabled ? (
-              <div className="max-w-3xl">
-                <h1 className="text-2xl font-bold text-slate-950">
+              <section className="max-w-3xl rounded-2xl border border-cyan-200 bg-white p-8 shadow-sm">
+                <h1 className="m-0 text-2xl font-bold text-slate-950">
                   {language === "zh-CN"
                     ? "完成首次初始化"
                     : "Finish first-time setup"}
                 </h1>
-                <BrowserAuthenticationSettings
-                  language={language}
-                  sessionToken={sessionToken}
-                  pinEnabled={pinEnabled}
-                  totpEnabled={totpEnabled}
-                  authMethodStatus={authMethodStatus}
-                  onRetry={() => void refreshBrowserAuthMethods()}
-                  onChanged={() => {
-                    setActivePage("settings");
-                    void refreshBrowserAuthMethods();
-                  }}
-                />
-              </div>
+                <p className="mb-0 mt-3 text-slate-600">
+                  {language === "zh-CN"
+                    ? "请在当前引导页设置 PIN，并将恢复密钥保存到安全位置。"
+                    : "Set a PIN in the onboarding dialog and save the recovery key securely."}
+                </p>
+              </section>
             ) : activePage === "settings" ? (
               <>
                 <SettingsView
@@ -630,10 +635,20 @@ export function App() {
                       response.session_token,
                     );
                     setAuthentication("paired");
-                  } catch {
+                  } catch (error) {
                     setAuthentication("error");
-                    throw new Error("pin_failed");
+                    throw error;
                   }
+                }}
+                onRecover={recoverPin}
+                onRecoveredSession={(response) => {
+                  setSessionToken(response.session_token);
+                  window.sessionStorage.setItem(
+                    PAGE_SESSION_KEY,
+                    response.session_token,
+                  );
+                  setAuthentication("paired");
+                  void refreshBrowserAuthMethods();
                 }}
                 onTotp={async (code) => {
                   setAuthentication("pairing");
@@ -659,13 +674,18 @@ export function App() {
           <LegalConsent
             language={language}
             canClose={legalAccepted}
+            requiresPinSetup={authMethodStatus === "ready" && !pinEnabled}
+            sessionToken={sessionToken}
             onLanguageChange={changeLanguage}
             onAccept={() => {
               storeLegalConsent();
               setLegalAccepted(true);
-              setLegalOpen(false);
             }}
             onClose={() => setLegalOpen(false)}
+            onInitialized={async () => {
+              await refreshBrowserAuthMethods();
+              setLegalOpen(false);
+            }}
           />
         )}
       </div>

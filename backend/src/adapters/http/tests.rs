@@ -233,7 +233,12 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         ))
         .await
         .expect("router response");
-    assert_eq!(configured.status(), StatusCode::NO_CONTENT);
+    assert_eq!(configured.status(), StatusCode::OK);
+    let recovery_key = response_json(configured).await["recovery_key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(recovery_key.len(), 64);
     assert!(state.catalog.diagnostic_vault_ready().unwrap());
     assert!(
         state
@@ -306,7 +311,7 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
     );
     assert!(!paired.to_string().contains("synthetic-local-pin"));
 
-    for _ in 0..5 {
+    for attempt in 0..5 {
         let rejected = app
             .clone()
             .oneshot(
@@ -320,7 +325,14 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
             )
             .await
             .expect("router response");
-        assert_eq!(rejected.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            rejected.status(),
+            if attempt == 4 {
+                StatusCode::TOO_MANY_REQUESTS
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        );
     }
     let blocked = app
         .clone()
@@ -335,9 +347,10 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
         )
         .await
         .expect("router response");
-    assert_eq!(blocked.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(blocked.headers().get("retry-after").is_some());
 
-    super::reset_authentication_attempts(&state).await;
+    state.catalog.reset_failed_pin_attempts().unwrap();
     let rejected_disable = app
         .clone()
         .oneshot(authenticated_json_request(
@@ -394,6 +407,85 @@ async fn browser_pin_is_write_only_rate_bounded_and_can_issue_a_page_session() {
 }
 
 #[tokio::test]
+async fn recovery_key_resets_a_six_character_pin_and_rotates_itself() {
+    let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    let app = router(state.clone());
+    let old_session = pair_test_session(&app, &bootstrap).await;
+    let initialized = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "PUT",
+            "/api/v1/session/method",
+            &old_session,
+            ORIGIN,
+            r#"{"method":"pin","pin":"123456"}"#,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(initialized.status(), StatusCode::OK);
+    let initial_key = response_json(initialized).await["recovery_key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(state.catalog.verify_diagnostic_pin("123456").unwrap());
+
+    let recover = |key: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/session/recover")
+            .header("Origin", ORIGIN)
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"recovery_key": key, "new_pin": "654321"}).to_string(),
+            ))
+            .unwrap()
+    };
+    let incorrect = app.clone().oneshot(recover(&"0".repeat(64))).await.unwrap();
+    assert_eq!(incorrect.status(), StatusCode::UNAUTHORIZED);
+    let recovered = app.clone().oneshot(recover(&initial_key)).await.unwrap();
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered = response_json(recovered).await;
+    let next_key = recovered["recovery_key"].as_str().unwrap();
+    assert_ne!(next_key, initial_key);
+    assert!(!state.catalog.verify_diagnostic_pin("123456").unwrap());
+    assert!(state.catalog.verify_diagnostic_pin("654321").unwrap());
+    assert_eq!(
+        app.clone()
+            .oneshot(recover(&initial_key))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/v1/session",
+                &old_session,
+                None
+            ))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let fresh_session = recovered["session_token"].as_str().unwrap();
+    assert_eq!(
+        app.oneshot(authenticated_request(
+            "GET",
+            "/api/v1/session",
+            fresh_session,
+            None
+        ))
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
 async fn installed_broker_blocks_operations_until_pin_initialization() {
     let (mut state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
     state.enable_runtime_control(
@@ -424,7 +516,7 @@ async fn installed_broker_blocks_operations_until_pin_initialization() {
         ))
         .await
         .unwrap();
-    assert_eq!(initialized.status(), StatusCode::NO_CONTENT);
+    assert_eq!(initialized.status(), StatusCode::OK);
     let after = app
         .oneshot(authenticated_request(
             "GET",
@@ -473,7 +565,7 @@ async fn totp_enrollment_is_write_only_and_codes_are_single_use() {
         ))
         .await
         .unwrap();
-    assert_eq!(pin_setup.status(), StatusCode::NO_CONTENT);
+    assert_eq!(pin_setup.status(), StatusCode::OK);
     let setup = app
         .clone()
         .oneshot(authenticated_json_request(

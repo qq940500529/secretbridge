@@ -5,6 +5,7 @@ export class SecretBridgeApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly code: string,
+    public readonly retryAfterSeconds = 0,
   ) {
     super(`SecretBridge API returned ${status} (${code})`);
     this.name = "SecretBridgeApiError";
@@ -20,7 +21,12 @@ export async function requireOk(response: Response): Promise<void> {
   } catch {
     // Error responses may be empty or come from an intermediary.
   }
-  throw new SecretBridgeApiError(response.status, code);
+  const retryAfterSeconds = Number(response.headers.get("Retry-After") ?? 0);
+  throw new SecretBridgeApiError(
+    response.status,
+    code,
+    Number.isFinite(retryAfterSeconds) ? Math.max(0, retryAfterSeconds) : 0,
+  );
 }
 
 export async function readJson<T>(response: Response): Promise<T> {

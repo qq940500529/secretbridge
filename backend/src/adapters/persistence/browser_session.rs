@@ -6,6 +6,13 @@ use rusqlite::{OptionalExtension, params};
 use super::{Catalog, CatalogError};
 
 impl Catalog {
+    pub fn revoke_all_browser_sessions(&self) -> Result<(), CatalogError> {
+        self.lock()
+            .execute("DELETE FROM browser_sessions", [])
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(())
+    }
+
     pub fn store_browser_session(
         &self,
         token_digest: &[u8; 32],

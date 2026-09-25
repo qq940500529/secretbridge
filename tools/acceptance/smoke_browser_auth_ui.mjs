@@ -49,7 +49,11 @@ async function openCase({
         request.postDataJSON().method === "disable_totp"
           ? "pin"
           : request.postDataJSON().method;
-      await route.fulfill({ status: 204 });
+      if (initialMethod === "pairing_link" && writes === 1) {
+        await route.fulfill({ json: { recovery_key: "a".repeat(64) } });
+      } else {
+        await route.fulfill({ status: 204 });
+      }
       return;
     }
     let body = { items: [] };
@@ -85,7 +89,7 @@ async function openCase({
       .click();
     await page.getByRole("heading", { name: "浏览器身份验证" }).waitFor();
   }
-  await showSettings();
+  if (initialMethod !== "pairing_link") await showSettings();
   return {
     context,
     page,
@@ -142,11 +146,20 @@ try {
     savedSession: false,
     initialMethod: "pairing_link",
   });
-  await initial.page.getByText("初始化待完成：请先设置 PIN").waitFor();
+  await initial.page.getByRole("heading", { name: "设置本机 PIN" }).waitFor();
+  await initial.page.getByLabel("PIN / 口令").fill("123456");
+  await initial.page.getByLabel("再次输入 PIN").fill("123456");
   await initial.page
-    .getByPlaceholder("至少 12 个字符")
-    .fill("synthetic-initial-pin");
-  await initial.page.getByRole("button", { name: "设置或更换" }).click();
+    .getByRole("button", { name: "设置 PIN 并生成恢复密钥" })
+    .click();
+  await initial.page.getByText("立即保存恢复密钥").waitFor();
+  assert.equal(
+    await initial.page.getByRole("button", { name: "完成初始化" }).isDisabled(),
+    true,
+  );
+  await initial.page.getByRole("checkbox").check();
+  await initial.page.getByRole("button", { name: "完成初始化" }).click();
+  await initial.showSettings();
   await initial.page.getByText("是否再绑定身份验证器验证码？").waitFor();
   await initial.page.getByRole("button", { name: "暂不绑定" }).click();
   assert.equal(initial.writes(), 1);
