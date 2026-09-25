@@ -221,7 +221,9 @@ class PackageReleaseTests(unittest.TestCase):
             (root / document).write_text("test notice", encoding="utf-8")
         skill = root / "skills/secretbridge-operations"
         skill.mkdir(parents=True)
-        (skill / "SKILL.md").write_text("---\nname: secretbridge-operations\n---\n", encoding="utf-8")
+        (skill / "SKILL.md").write_text(
+            "---\nname: secretbridge-operations\n---\n", encoding="utf-8"
+        )
         binary = root / "app"
         binary.write_bytes(b"fixture executable")
         return binary

@@ -45,6 +45,7 @@ flowchart TD
 | 跨平台与界面 | [跨平台与 UI 规范](./development/跨平台与UI规范.md) |
 | 支持范围与资源基线 | [支持矩阵与性能基线](./release/支持矩阵与性能基线.md) |
 | 稳定性与故障注入 | [稳定性与故障注入验收](./testing/稳定性与故障注入.md) |
+| AI 操作 Skill 的合成验收 | [AI 操作 Skill 验收](./testing/AI操作Skill验收.md) |
 | PostgreSQL TLS 实机复现 | [PostgreSQL 实机验证](./testing/PostgreSQL实机验证.md) |
 
 ## 开发与维护
@@ -53,6 +54,7 @@ flowchart TD
 |---|---|
 | 建立开发环境 | [开发者入门](./development/开发者入门.md) |
 | 理解模块与数据边界 | [开发设计](./development/架构设计.md) |
+| 核对结构重构的公开契约 | [结构重构契约核对](./development/issue-133-architecture/契约核对.md) |
 | 维护 Skill 与 MCP 契约 | [AI 操作 Skill 与 MCP 职责](./user-guide/AI客户端接入.md) |
 | 验证发行包和 SBOM | [发行物验证与 SBOM](./release/发行物验证与SBOM.md) |
 | 依赖漏洞和许可证 | [依赖漏洞与发行门槛](./release/依赖漏洞与发行门槛.md) · [依赖许可风险评估](./governance/依赖许可风险评估.md) |
