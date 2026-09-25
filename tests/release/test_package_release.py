@@ -219,6 +219,9 @@ class PackageReleaseTests(unittest.TestCase):
         )
         for document in package_release.DOCUMENTS:
             (root / document).write_text("test notice", encoding="utf-8")
+        skill = root / "skills/secretbridge-operations"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: secretbridge-operations\n---\n", encoding="utf-8")
         binary = root / "app"
         binary.write_bytes(b"fixture executable")
         return binary
@@ -284,6 +287,7 @@ class PackageReleaseTests(unittest.TestCase):
                     "THIRD_PARTY_LICENSES.txt",
                     "LICENSE",
                     "frontend/index.html",
+                    "skills/secretbridge-operations/SKILL.md",
                 }
                 <= paths
             )

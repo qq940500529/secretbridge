@@ -29,13 +29,12 @@ export async function launchBrowser() {
 }
 
 export async function acceptLegalConsent(page) {
-  const checkbox = page.getByRole("checkbox");
-  if (await checkbox.isVisible()) {
-    await checkbox.check();
-    await page
-      .getByRole("button", { name: /同意并继续|Agree and continue/u })
-      .click();
-  }
+  const checkbox = page.getByRole("checkbox").first();
+  await checkbox.waitFor({ state: "visible", timeout: 15_000 });
+  await checkbox.check();
+  await page
+    .getByRole("button", { name: /同意并继续|Agree and continue/u })
+    .click();
 }
 
 export function assertNoSeriousAccessibilityViolations(results, assert) {

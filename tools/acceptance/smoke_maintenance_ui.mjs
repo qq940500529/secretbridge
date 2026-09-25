@@ -179,6 +179,7 @@ try {
   await page.goto(
     (process.env.SECRETBRIDGE_UI_URL || "http://127.0.0.1:8799") +
       "/#pair=synthetic-bootstrap",
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
   );
   await acceptLegalConsent(page);
   const nav = (name) =>

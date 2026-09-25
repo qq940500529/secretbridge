@@ -505,6 +505,10 @@ def build_package(binary: Path, output: Path, allow_dirty: bool = False) -> Path
         if os.name != "nt":
             executable.chmod(0o755)
         shutil.copytree(web, package / "frontend")
+        shutil.copytree(
+            ROOT / "skills" / "secretbridge-operations",
+            package / "skills" / "secretbridge-operations",
+        )
         for document in DOCUMENTS:
             shutil.copy2(ROOT / document, package / document)
         source = source_snapshot(package / "SOURCE.tar.gz", allow_dirty, epoch)

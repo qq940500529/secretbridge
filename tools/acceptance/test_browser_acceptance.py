@@ -80,7 +80,9 @@ def run_acceptance(browsers: list[str], output: Path) -> dict[str, object]:
             ],
             cwd=ROOT / "frontend",
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            # The preview may log rejected synthetic WebSocket reconnects. An
+            # unread pipe can fill and block Vite midway through the suite.
+            stderr=subprocess.DEVNULL,
         )
         wait_for_preview(url, preview)
         for browser, script in acceptance_plan(browsers):
@@ -91,7 +93,7 @@ def run_acceptance(browsers: list[str], output: Path) -> dict[str, object]:
             )
             started = time.monotonic()
             subprocess.run(
-                [node, str(ROOT / "tools" / script)],
+                [node, str(ROOT / "tools" / "acceptance" / script)],
                 cwd=ROOT,
                 env=env,
                 check=True,

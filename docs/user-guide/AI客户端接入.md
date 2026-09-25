@@ -8,7 +8,7 @@ SecretBridge 的 [AI 操作 Skill](../../skills/secretbridge-operations/SKILL.md
 
 | 内容 | 唯一维护位置 | 其他位置保留什么 |
 |---|---|---|
-| 工具名、输入/输出 schema、状态和错误码 | `mcp.rs`、`mcp/errors.rs` 与服务端类型 | Skill 仅引用工具名和少量已校验示例 |
+| 工具名、输入/输出 schema、状态和错误码 | `backend/src/adapters/mcp/` 与服务端类型 | Skill 仅引用工具名和少量已校验示例 |
 | 凭据、审批、目标、IPC、过滤与运行时校验 | 本机服务端 | Skill 解释边界，不能代替校验 |
 | 工具选择、会话 ID、审批展示、游标、取消与恢复 | `skills/secretbridge-operations/SKILL.md` | MCP instructions 只留最小必要指引 |
 | 例子中的字段位置和常见恢复动作 | Skill 的 `references/` | Rust 测试对照当前 schema 和错误动作 |
@@ -18,7 +18,7 @@ SecretBridge 的 [AI 操作 Skill](../../skills/secretbridge-operations/SKILL.md
 
 ## 安装与版本
 
-先按 [部署指南](../getting-started/AI辅助部署.md) 安装代理并接通 MCP；Skill 不能替代 MCP 连接。仓库中的 `skills/secretbridge-operations/` 是完整的可复制目录。Codex 用户把整个目录复制到当前用户的 `$CODEX_HOME/skills/secretbridge-operations`；未设置 `CODEX_HOME` 时使用 Codex 用户技能目录 `.codex/skills/secretbridge-operations`，然后重启或刷新客户端。不要只复制 `SKILL.md`，因为示例和兼容性信息在 `references/` 中。
+先按 [部署指南](../getting-started/AI辅助部署.md) 安装代理并接通 MCP；Skill 不能替代 MCP 连接。源码仓库与正式发行包都包含完整的 `skills/secretbridge-operations/` 目录。Codex 用户把整个目录复制到当前用户的 `$CODEX_HOME/skills/secretbridge-operations`；未设置 `CODEX_HOME` 时使用 Codex 用户技能目录 `.codex/skills/secretbridge-operations`，然后重启或刷新客户端。不要只复制 `SKILL.md`，因为示例和兼容性信息在 `references/` 中。
 
 其他支持 Agent Skills 的客户端，应把完整目录安装到该客户端文档指定的 Skills 位置，同时单独配置 SecretBridge MCP。只支持 MCP 的客户端无需安装 Skill：它们仍能发现工具 schema、简短 server instructions 和响应中的 `next_actions`。客户端没有 MCP 时，Skill 不能执行受控操作。
 
