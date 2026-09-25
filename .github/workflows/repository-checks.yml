@@ -40,14 +40,14 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-          version="$(python tools/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
+          version="$(python tools/checks/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
           installed="$(cargo audit --version 2>/dev/null || true)"
           case "$installed" in
             "cargo-audit $version"|"cargo-audit-audit $version") ;;
             *) cargo install cargo-audit --version "$version" --locked --force ;;
           esac
       - name: Check Rust and production Web dependencies
-        run: python tools/check_dependency_vulnerabilities.py
+        run: python tools/checks/check_dependency_vulnerabilities.py
   database-connectors:
     name: Real databases (${{ matrix.postgresql }}, ${{ matrix.mysql }})
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
         env:
           SECRETBRIDGE_TEST_PG_IMAGE: ${{ matrix.postgresql }}
           SECRETBRIDGE_TEST_MYSQL_IMAGE: ${{ matrix.mysql }}
-        run: bash tools/test_database_connectors.sh
+        run: bash tools/acceptance/test_database_connectors.sh
   repository-checks:
     name: repository-checks (${{ matrix.os }})
     env:
@@ -94,9 +94,9 @@ jobs:
       - name: Install Web dependencies
         run: pnpm install --frozen-lockfile
       - name: Check public repository contents
-        run: python tools/check_repository.py
+        run: python tools/checks/check_repository.py
       - name: Check project metadata
-        run: python tools/check_project_metadata.py
+        run: python tools/checks/check_project_metadata.py
       - name: Install pinned Python development tools
         run: python -m pip install --disable-pip-version-check -r tools/requirements-dev.txt
       - name: Check Python formatting
@@ -121,14 +121,14 @@ jobs:
         run: cargo test --workspace --all-targets
       - name: Test native credential store with a disposable entry
         if: runner.os == 'Windows' || runner.os == 'macOS'
-        run: cargo test -p secretbridge-server native_store_round_trip_uses_a_disposable_entry -- --ignored --nocapture
+        run: cargo test -p secretbridge native_store_round_trip_uses_a_disposable_entry -- --ignored --nocapture
       - name: Lint Rust workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Check locked dependency licenses
-        run: python tools/check_dependency_licenses.py
+        run: python tools/checks/check_dependency_licenses.py
       - name: Record toolchain metadata
         if: always()
-        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
+        run: python tools/release/write_ci_metadata.py --output dist/ci-metadata.json
       - name: Retain sanitized check reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -170,29 +170,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          executable=target/debug/secretbridge-server
+          executable=target/debug/secretbridge
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          python tools/package_release.py --binary "$executable" --output dist/acceptance
+          python tools/release/package_release.py --binary "$executable" --output dist/acceptance
       - name: Check personal-scale startup and idle resource baseline
         shell: bash
         run: |
-          executable=target/debug/secretbridge-server
+          executable=target/debug/secretbridge
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          python tools/test_personal_scale.py --binary "$executable" --rounds 2
+          python tools/acceptance/test_personal_scale.py --binary "$executable" --rounds 2
       - name: Test isolated native package lifecycle
         shell: bash
         run: |
           archives_checked=0
           for archive in dist/acceptance/*.zip dist/acceptance/*.tar.gz; do
             if [ -f "$archive" ]; then
-              python tools/test_packaged_delivery.py "$archive"
+              python tools/release/test_packaged_delivery.py "$archive"
               archives_checked=$((archives_checked + 1))
             fi
           done
           test "$archives_checked" -eq 1
       - name: Record toolchain metadata
         if: always()
-        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
+        run: python tools/release/write_ci_metadata.py --output dist/ci-metadata.json
       - name: Retain sanitized check reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

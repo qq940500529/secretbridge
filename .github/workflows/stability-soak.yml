@@ -31,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Run bounded stability acceptance
-        run: python tools/test_stability_acceptance.py --profile soak --iterations "$STABILITY_ITERATIONS" --with-databases
+        run: python tools/acceptance/test_stability_acceptance.py --profile soak --iterations "$STABILITY_ITERATIONS" --with-databases
       - name: Retain sanitized stability report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

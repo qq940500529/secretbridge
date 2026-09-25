@@ -29,14 +29,14 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
-          version="$(python tools/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
+          version="$(python tools/checks/check_dependency_vulnerabilities.py --print-scanner-version cargo-audit)"
           installed="$(cargo audit --version 2>/dev/null || true)"
           case "$installed" in
             "cargo-audit $version"|"cargo-audit-audit $version") ;;
             *) cargo install cargo-audit --version "$version" --locked --force ;;
           esac
       - name: Check Rust and production Web dependencies
-        run: python tools/check_dependency_vulnerabilities.py
+        run: python tools/checks/check_dependency_vulnerabilities.py
   package:
     name: Native package (${{ matrix.os }})
     needs: dependency-vulnerability-gate
@@ -60,34 +60,34 @@ jobs:
           pnpm build
       - name: Verify source and dependency notices
         run: |
-          python tools/check_repository.py
-          python tools/check_dependency_licenses.py
+          python tools/checks/check_repository.py
+          python tools/checks/check_dependency_licenses.py
       - name: Build native application
         run: cargo build --release --locked
       - name: Measure release personal-scale baseline
         shell: bash
         run: |
-          executable=target/release/secretbridge-server
+          executable=target/release/secretbridge
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          python tools/test_personal_scale.py --binary "$executable" --rounds 5 --output dist/release-personal-scale.json
+          python tools/acceptance/test_personal_scale.py --binary "$executable" --rounds 5 --output dist/release-personal-scale.json
       - name: Package executable, Web assets, SBOM and corresponding source twice
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          executable=target/release/secretbridge-server
+          executable=target/release/secretbridge
           if [ "${{ runner.os }}" = "Windows" ]; then executable="$executable.exe"; fi
-          python tools/package_release.py --binary "$executable" --output dist/packages-a
-          python tools/package_release.py --binary "$executable" --output dist/packages-b
-          python tools/verify_reproducible_packages.py dist/packages-a dist/packages-b
+          python tools/release/package_release.py --binary "$executable" --output dist/packages-a
+          python tools/release/package_release.py --binary "$executable" --output dist/packages-b
+          python tools/release/verify_reproducible_packages.py dist/packages-a dist/packages-b
       - name: Verify native package
         shell: bash
         run: |
           for archive in dist/packages-a/*.zip dist/packages-a/*.tar.gz; do
-            if [ -f "$archive" ]; then python tools/test_packaged_delivery.py "$archive"; fi
+            if [ -f "$archive" ]; then python tools/release/test_packaged_delivery.py "$archive"; fi
           done
       - name: Record release toolchain metadata
-        run: python tools/write_ci_metadata.py --output dist/ci-metadata.json
+        run: python tools/release/write_ci_metadata.py --output dist/ci-metadata.json
       - name: Retain unsigned native packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

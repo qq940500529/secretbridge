@@ -37,7 +37,7 @@ jobs:
       - name: Build Web application
         run: pnpm build
       - name: Run browser and accessibility acceptance
-        run: python tools/test_browser_acceptance.py
+        run: python tools/acceptance/test_browser_acceptance.py
       - name: Retain sanitized browser report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

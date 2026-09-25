@@ -1,8 +1,8 @@
 # SecretBridge 路线图
 
-[项目首页](README.zh-CN.md) / [文档中心](docs/README.md) / 路线图
+[项目首页](./README.zh-CN.md) / [文档中心](./docs/README.md) / 路线图
 
-路线图只说明尚未完成的产品目标。已经完成的变化记录在 [CHANGELOG](CHANGELOG.md)，具体实现以代码、测试和对应提交为准。
+路线图只说明尚未完成的产品目标。已经完成的变化记录在 [CHANGELOG](./CHANGELOG.md)，具体实现以代码、测试和对应提交为准。
 
 ## 当前阶段：0.2.0 Beta
 
@@ -54,4 +54,4 @@ flowchart LR
 
 ---
 
-[版本差异](docs/开源版与企业版.md) · [开发设计](docs/开发设计.md) · [安全模型](docs/安全模型与验收.md) · [变更记录](CHANGELOG.md)
+[版本差异](./docs/开源版与企业版.md) · [开发设计](./docs/development/架构设计.md) · [安全模型](./docs/security/安全模型.md) · [变更记录](./CHANGELOG.md)

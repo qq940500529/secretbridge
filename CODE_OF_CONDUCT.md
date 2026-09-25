@@ -1,6 +1,6 @@
 # Community standards
 
-[Home](README.md) / Community standards
+[Home](./README.md) / Community standards
 
 SecretBridge welcomes contributors with different backgrounds, experience levels and accessibility needs. Keep collaboration respectful, specific and focused on improving the project.
 
@@ -22,7 +22,7 @@ Harassment, discrimination, threats, doxxing, credential sharing and unauthorize
 | :--- | :--- |
 | Non-sensitive moderation issue | Contact the maintainer through a GitHub issue |
 | Concern involving private information | Request a private channel without identifying affected people |
-| Software vulnerability | Follow [SECURITY.md](SECURITY.md) |
+| Software vulnerability | Follow [SECURITY.md](./SECURITY.md) |
 
 Do not publish private evidence while requesting a reporting channel.
 
@@ -34,4 +34,4 @@ These standards apply to project-managed spaces and project representation; they
 
 ---
 
-[Contribution guide](CONTRIBUTING.md) · [Security policy](SECURITY.md)
+[Contribution guide](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)

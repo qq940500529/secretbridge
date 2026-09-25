@@ -1,6 +1,6 @@
 # Security policy
 
-[Home](README.md) / Security
+[Home](./README.md) / Security
 
 > [!WARNING]
 > The supported public version is a Beta prerelease. Start with synthetic credentials and the package-specific Release notes; do not treat Beta availability as an independent security audit or a production-readiness claim.
@@ -36,8 +36,8 @@ Revoke or rotate it at its source first. Stop affected sessions, review access a
 
 SecretBridge's intended secure mode requires a tested OS/process/identity boundary and narrowly scoped operation adapters. Output masking is not a sandbox, and an assistant with unrestricted access under the credential owner's account can bypass application-level controls.
 
-For implementation review, use the [threat model and acceptance tests](docs/安全模型与验收.md). For contribution data handling, use [CONTRIBUTING.md](CONTRIBUTING.md).
+For implementation review, use the [threat model and acceptance tests](./docs/security/安全模型.md). For contribution data handling, use [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 
-[Documentation](docs/README.md) · [Threat model](docs/安全模型与验收.md)
+[Documentation](./docs/README.md) · [Threat model](./docs/security/安全模型.md)
