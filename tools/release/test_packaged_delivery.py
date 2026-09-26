@@ -153,6 +153,41 @@ def accept(archive: Path) -> None:
             assert "installation.json" in launcher.read_text(encoding="utf-8")
             assert original not in json.dumps(client)
             assert json.loads((plugin_root / "marketplace.json").read_text(encoding="utf-8"))["name"] == "secretbridge-local"
+            mcp_messages = [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "secretbridge-package-test", "version": "1.0.0"},
+                }},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                    "name": "secretbridge_terminal_capabilities", "arguments": {},
+                }},
+            ]
+            mcp_result = subprocess.run(
+                [client["command"], *client["args"]],
+                input=("\n".join(json.dumps(message) for message in mcp_messages) + "\n").encode(),
+                env=env,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+            replies = [
+                json.loads(line) for line in mcp_result.stdout.decode("utf-8-sig").splitlines()
+                if line.lstrip().startswith("{")
+            ]
+            assert any(reply.get("id") == 1 and "result" in reply for reply in replies), (
+                mcp_result.stderr.decode(errors="replace")
+            )
+            assert any(
+                reply.get("id") == 2 and any(
+                    tool.get("name") == "secretbridge_terminal_capabilities"
+                    for tool in reply.get("result", {}).get("tools", [])
+                ) for reply in replies
+            ), replies
+            assert any(
+                reply.get("id") == 3 and "result" in reply for reply in replies
+            ), replies
             run("client-plugin", "codex", plugin_root, success=False)
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
