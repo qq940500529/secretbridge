@@ -211,6 +211,8 @@ async fn status_exposes_current_runtime_capabilities() {
     assert_eq!(status["mode"], "controlled_operations");
     assert_eq!(status["configuration_storage"], "memory_only");
     assert_eq!(status["real_credentials_enabled"], true);
+    assert_eq!(status["software_version"], env!("CARGO_PKG_VERSION"));
+    assert!(status["source_commit"].is_null());
 }
 
 #[tokio::test]

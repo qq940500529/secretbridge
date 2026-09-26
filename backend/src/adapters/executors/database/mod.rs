@@ -60,6 +60,8 @@ pub struct DatabaseConfig {
     pub query: String,
     pub columns: Vec<String>,
     pub max_rows: u32,
+    #[serde(default)]
+    pub expected_min_rows: Option<u32>,
 }
 
 impl DatabaseConfig {
@@ -78,6 +80,9 @@ impl DatabaseConfig {
                 .iter()
                 .any(|s| s.len() > 128 || s.contains(['\0', '\r', '\n']))
             || !(1..=1000).contains(&self.max_rows)
+            || self
+                .expected_min_rows
+                .is_some_and(|rows| rows > self.max_rows)
             || !config.program.is_empty()
             || !config.working_directory.is_empty()
             || !config.arguments.is_empty()
@@ -119,6 +124,7 @@ impl DatabaseConfig {
         } else if !self.query.is_empty()
             || !self.columns.is_empty()
             || !config.parameters.is_empty()
+            || self.expected_min_rows.is_some()
         {
             return Err(invalid());
         }
@@ -611,10 +617,40 @@ async fn request(
     }
     let mut columns = json!(database.output_columns());
     filter_value(&mut columns, secrets);
+    let validation = validation_status(
+        database.operation,
+        database.expected_min_rows,
+        result.rows.len(),
+        result.truncated,
+    );
     Ok(
         json!({"kind":"database", "engine":database.engine, "operation":database.operation,
-        "columns":columns, "row_count":result.rows.len(), "rows":result.rows, "truncated":result.truncated}),
+        "columns":columns, "row_count":result.rows.len(), "rows":result.rows, "truncated":result.truncated,
+        "validation_status":validation, "expected_min_rows":database.expected_min_rows}),
     )
+}
+
+fn validation_status(
+    operation: DatabaseOperation,
+    expected_min_rows: Option<u32>,
+    rows: usize,
+    truncated: bool,
+) -> &'static str {
+    match operation {
+        DatabaseOperation::Query => match expected_min_rows {
+            Some(minimum) if rows < minimum as usize => "expected_rows_missing",
+            Some(_) if truncated => "incomplete_output",
+            Some(_) => "verified",
+            None => "not_configured",
+        },
+        DatabaseOperation::Check | DatabaseOperation::Version => {
+            if rows == 1 && !truncated {
+                "verified"
+            } else {
+                "expected_rows_missing"
+            }
+        }
+    }
 }
 
 fn mysql_value(value: mysql_async::Value) -> Result<Value, &'static str> {

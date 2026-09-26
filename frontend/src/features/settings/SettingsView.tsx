@@ -59,7 +59,7 @@ export function SettingsView({
           languageHelp: "选择会保存在当前浏览器中，并在下次打开时继续使用。",
           notification: "审批通知渠道",
           notificationHelp:
-            "页内审批弹窗始终显示。浏览器通知可点击返回弹窗，但需保持页面打开并授予浏览器通知权限；系统通知由本机后台调用操作系统通知接口，页面关闭后仍可提醒，但需后台运行及系统允许通知。通知内容不包含目标或命令。",
+            "待审批请求保存在本机服务，页面返回前台时会重新读取，顶部待办入口可随时打开。浏览器通知需保持页面打开并获得权限；后台浏览器不保证自动切到前台。系统通知由本机后台发送，页面关闭后仍可提醒，但需服务运行及系统允许。通知不包含目标或命令。",
           browserNotification: "浏览器通知",
           systemNotification: "系统级通知",
           permissionDenied:
@@ -79,7 +79,7 @@ export function SettingsView({
             "The choice is saved in this browser and used the next time you open the app.",
           notification: "Approval notification channel",
           notificationHelp:
-            "The in-page approval dialog always appears. Browser notifications can reopen it but need an open page and browser permission. System notifications use the OS notification API from the local broker, so they work with the page closed while the broker runs and OS notifications are allowed. Neither includes targets or commands.",
+            "Pending approvals remain in the local service. Returning to the page refreshes them, and the header badge opens the queue. Browser notifications need an open page and permission; background browsers cannot guarantee foreground focus. System notifications can alert with the page closed if the broker and OS notifications remain available. Neither includes targets or commands.",
           browserNotification: "Browser notification",
           systemNotification: "System notification",
           permissionDenied:
@@ -118,6 +118,14 @@ export function SettingsView({
           <Activity className="size-5 text-cyan-600" aria-hidden="true" />
         </div>
         <dl className="divide-y divide-slate-200">
+          <StatusDatum
+            label={language === "zh-CN" ? "软件版本" : "Software version"}
+            value={status?.software_version ?? "—"}
+          />
+          <StatusDatum
+            label={language === "zh-CN" ? "来源提交" : "Source commit"}
+            value={status?.source_commit ?? "—"}
+          />
           <StatusDatum
             label={text.apiVersion}
             value={status?.api_version ?? "—"}
@@ -276,7 +284,7 @@ function StatusDatum({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 px-5 py-3 sm:grid-cols-[14rem_1fr] sm:items-center">
       <dt className="text-sm font-medium text-slate-500">{label}</dt>
-      <dd className="m-0 text-sm font-semibold text-slate-900">{value}</dd>
+      <dd className="m-0 break-all text-sm font-semibold text-slate-900">{value}</dd>
     </div>
   );
 }

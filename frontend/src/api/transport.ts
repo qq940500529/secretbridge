@@ -22,6 +22,20 @@ export async function requireOk(response: Response): Promise<void> {
     // Error responses may be empty or come from an intermediary.
   }
   const retryAfterSeconds = Number(response.headers.get("Retry-After") ?? 0);
+  const url = new URL(response.url || "/", "http://localhost");
+  const sessionMutation =
+    /^\/api\/v1\/session\/(?:pin|pair|recovery|totp|methods)/.test(
+      url.pathname,
+    );
+  if (
+    typeof window !== "undefined" &&
+    response.status === 401 &&
+    code === "unauthorized" &&
+    !sessionMutation &&
+    url.pathname.startsWith("/api/v1/")
+  ) {
+    window.dispatchEvent(new Event("secretbridge:session-rejected"));
+  }
   throw new SecretBridgeApiError(
     response.status,
     code,

@@ -233,6 +233,15 @@ class PackageReleaseTests(unittest.TestCase):
         (skill / "SKILL.md").write_text(
             "---\nname: secretbridge-operations\n---\n", encoding="utf-8"
         )
+        plugin = root / "plugins/secretbridge"
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / ".codex-plugin/plugin.json").write_text(
+            '{"name":"secretbridge"}', encoding="utf-8"
+        )
+        (plugin / ".mcp.json").write_text(
+            '{"mcpServers":{"secretbridge":{"command":"secretbridge"}}}',
+            encoding="utf-8",
+        )
         binary = root / "app"
         binary.write_bytes(b"fixture executable")
         return binary
@@ -302,6 +311,8 @@ class PackageReleaseTests(unittest.TestCase):
                     "brand/secretbridge-logo.png",
                     "frontend/index.html",
                     "skills/secretbridge-operations/SKILL.md",
+                    "plugins/secretbridge/.codex-plugin/plugin.json",
+                    "plugins/secretbridge/.mcp.json",
                 }
                 <= paths
             )

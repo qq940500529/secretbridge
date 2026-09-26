@@ -10,7 +10,6 @@ import {
 } from "./ShellComponents";
 import {
   FileClock,
-  KeyRound,
   Languages,
   MessageSquareWarning,
   PanelLeftClose,
@@ -38,6 +37,7 @@ import {
   type BrowserAuthMethods,
   type ServiceStatus,
 } from "../api/index";
+import { SecretBridgeApiError } from "../api/transport";
 import {
   BrowserAuthenticationSettings,
   type AuthMethodStatus,
@@ -58,6 +58,7 @@ import {
 import { SettingsView } from "../features/settings/SettingsView";
 import { ApprovalQueueDialog } from "../features/tasks/approvals/ApprovalQueueDialog";
 import { ActiveConversationRisk } from "../features/tasks/approvals/AiConversationsView";
+import { SectionTabs } from "../shared/ui/SectionTabs";
 
 const TerminalView = lazy(() =>
   import("../features/terminal/TerminalView").then((module) => ({
@@ -69,14 +70,9 @@ const DataMaintenanceView = lazy(() =>
     default: module.DataMaintenanceView,
   })),
 );
-const CredentialReferencesView = lazy(() =>
-  import("../features/catalog/CatalogView").then((module) => ({
-    default: module.CredentialReferencesView,
-  })),
-);
-const TargetsView = lazy(() =>
-  import("../features/catalog/CatalogView").then((module) => ({
-    default: module.TargetsView,
+const CatalogWorkspace = lazy(() =>
+  import("../features/catalog/CatalogWorkspace").then((module) => ({
+    default: module.CatalogWorkspace,
   })),
 );
 const TaskWorkspace = lazy(() =>
@@ -92,13 +88,11 @@ const HistoryWorkspace = lazy(() =>
 
 type Connection = "checking" | "online" | "offline";
 type Authentication = "unpaired" | "pairing" | "paired" | "error";
-type Page =
-  "credentials" | "targets" | "operations" | "terminal" | "audit" | "settings";
+type Page = "catalog" | "operations" | "terminal" | "audit" | "settings";
 type TaskSection = "templates" | "approvals" | "runs";
 
 const navItems: Array<{ id: Page; icon: LucideIcon }> = [
-  { id: "credentials", icon: KeyRound },
-  { id: "targets", icon: ServerCog },
+  { id: "catalog", icon: ServerCog },
   { id: "operations", icon: PlayCircle },
   { id: "terminal", icon: SquareTerminal },
   { id: "audit", icon: FileClock },
@@ -124,12 +118,18 @@ export function App() {
     null,
   );
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [sessionDeadline, setSessionDeadline] = useState<number | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [browserAuthMethods, setBrowserAuthMethods] =
     useState<BrowserAuthMethods | null>(null);
   const [authMethodStatus, setAuthMethodStatus] =
     useState<AuthMethodStatus>("loading");
   const [activePage, setActivePage] = useState<Page>("operations");
   const [taskSection, setTaskSection] = useState<TaskSection>("templates");
+  const [settingsSection, setSettingsSection] = useState<
+    "service" | "identity" | "data"
+  >("service");
   const [taskContext, setTaskContext] = useState<{
     targetId?: string;
     templateId?: string;
@@ -140,6 +140,9 @@ export function App() {
   const text = copy[language];
   const pinEnabled = browserAuthMethods?.pin_enabled ?? false;
   const totpEnabled = browserAuthMethods?.totp_enabled ?? false;
+  const remainingSeconds = sessionDeadline
+    ? Math.max(0, Math.ceil((sessionDeadline - now) / 1000))
+    : null;
 
   useEffect(() => {
     if (
@@ -160,6 +163,18 @@ export function App() {
       setAuthMethodStatus("error");
     }
   }, []);
+
+  const clearPageSession = useCallback(
+    (expired = true) => {
+      window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+      setSessionToken(null);
+      setSessionDeadline(null);
+      setAuthentication("unpaired");
+      setSessionExpired(expired);
+      void refreshBrowserAuthMethods();
+    },
+    [refreshBrowserAuthMethods],
+  );
 
   function changeLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
@@ -229,6 +244,9 @@ export function App() {
             if (session.authenticated) {
               setAuthentication("paired");
               setSessionToken(savedSession);
+              setSessionDeadline(
+                Date.now() + session.expires_in_seconds * 1000,
+              );
               return;
             }
           } catch {
@@ -244,6 +262,7 @@ export function App() {
           setAuthentication(session.authenticated ? "paired" : "error");
           if (session.authenticated) {
             setSessionToken(pairedSession.session_token);
+            setSessionDeadline(Date.now() + session.expires_in_seconds * 1000);
             window.sessionStorage.setItem(
               PAGE_SESSION_KEY,
               pairedSession.session_token,
@@ -267,6 +286,64 @@ export function App() {
       active = false;
     };
   }, [refreshBrowserAuthMethods]);
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    let active = true;
+    let checking = false;
+    async function checkSession() {
+      if (checking) return;
+      checking = true;
+      try {
+        const session = await getSession(sessionToken!);
+        if (!active) return;
+        if (!session.authenticated) {
+          clearPageSession();
+          return;
+        }
+        setSessionDeadline(Date.now() + session.expires_in_seconds * 1000);
+      } catch (error) {
+        if (
+          active &&
+          error instanceof SecretBridgeApiError &&
+          (error.status === 401 || error.status === 403)
+        ) {
+          clearPageSession();
+        }
+      } finally {
+        checking = false;
+      }
+    }
+    function checkOnReturn() {
+      if (document.visibilityState === "visible") void checkSession();
+    }
+    const heartbeat = window.setInterval(() => void checkSession(), 10_000);
+    const countdown = window.setInterval(() => setNow(Date.now()), 1_000);
+    document.addEventListener("visibilitychange", checkOnReturn);
+    window.addEventListener("focus", checkOnReturn);
+    void checkSession();
+    return () => {
+      active = false;
+      window.clearInterval(heartbeat);
+      window.clearInterval(countdown);
+      document.removeEventListener("visibilitychange", checkOnReturn);
+      window.removeEventListener("focus", checkOnReturn);
+    };
+  }, [sessionToken, clearPageSession]);
+
+  useEffect(() => {
+    if (!sessionToken) return;
+    const rejected = () => clearPageSession();
+    window.addEventListener("secretbridge:session-rejected", rejected);
+    return () =>
+      window.removeEventListener("secretbridge:session-rejected", rejected);
+  }, [sessionToken, clearPageSession]);
+
+  useEffect(() => {
+    if (sessionToken && sessionDeadline !== null && remainingSeconds === 0) {
+      clearPageSession();
+    }
+  }, [sessionToken, sessionDeadline, remainingSeconds, clearPageSession]);
 
   return (
     <Tooltip.Provider delayDuration={250}>
@@ -408,6 +485,16 @@ export function App() {
                 pending={authentication === "pairing"}
                 label={stateLabel(authentication, text)}
               />
+              {authentication === "paired" && remainingSeconds !== null && (
+                <span
+                  aria-live="off"
+                  className="text-xs tabular-nums text-slate-500"
+                >
+                  {language === "zh-CN" ? "配对剩余" : "Session remaining"}{" "}
+                  {Math.floor(remainingSeconds / 60)}:
+                  {String(remainingSeconds % 60).padStart(2, "0")}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {sessionToken && legalAccepted && (
@@ -458,7 +545,7 @@ export function App() {
           <main
             id="main-content"
             tabIndex={-1}
-            className="mx-auto max-w-[104rem] px-4 py-8 sm:px-8 sm:py-10"
+            className="mx-auto max-w-[92rem] px-4 py-7 sm:px-8 sm:py-9"
           >
             {sessionToken && (
               <div className="mb-5">
@@ -483,29 +570,58 @@ export function App() {
               </section>
             ) : activePage === "settings" ? (
               <>
-                <SettingsView
-                  text={text}
-                  status={serviceStatus}
-                  language={language}
-                  onLanguageChange={changeLanguage}
-                  notificationChannel={notificationChannel}
-                  onNotificationChannelChange={changeNotificationChannel}
-                  onReviewLegal={() => setLegalOpen(true)}
+                <SectionTabs
+                  selected={settingsSection}
+                  onSelect={setSettingsSection}
+                  items={[
+                    {
+                      id: "service",
+                      label:
+                        language === "zh-CN"
+                          ? "服务与客户端"
+                          : "Service & clients",
+                    },
+                    {
+                      id: "identity",
+                      label:
+                        language === "zh-CN"
+                          ? "身份与配对"
+                          : "Identity & pairing",
+                    },
+                    {
+                      id: "data",
+                      label:
+                        language === "zh-CN"
+                          ? "数据与诊断"
+                          : "Data & diagnostics",
+                    },
+                  ]}
                 />
-                {sessionToken && serviceStatus?.background_control_enabled && (
-                  <BackgroundServiceView
-                    sessionToken={sessionToken}
+                {settingsSection === "service" && (
+                  <SettingsView
+                    text={text}
+                    status={serviceStatus}
                     language={language}
-                    onStopped={() => {
-                      setSessionToken(null);
-                      window.sessionStorage.removeItem(PAGE_SESSION_KEY);
-                      setAuthentication("unpaired");
-                      setConnection("offline");
-                      setServiceStatus(null);
-                    }}
+                    onLanguageChange={changeLanguage}
+                    notificationChannel={notificationChannel}
+                    onNotificationChannelChange={changeNotificationChannel}
+                    onReviewLegal={() => setLegalOpen(true)}
                   />
                 )}
-                {sessionToken && (
+                {settingsSection === "service" &&
+                  sessionToken &&
+                  serviceStatus?.background_control_enabled && (
+                    <BackgroundServiceView
+                      sessionToken={sessionToken}
+                      language={language}
+                      onStopped={() => {
+                        clearPageSession(false);
+                        setConnection("offline");
+                        setServiceStatus(null);
+                      }}
+                    />
+                  )}
+                {settingsSection === "identity" && sessionToken && (
                   <BrowserAuthenticationSettings
                     language={language}
                     sessionToken={sessionToken}
@@ -516,7 +632,7 @@ export function App() {
                     onChanged={() => void refreshBrowserAuthMethods()}
                   />
                 )}
-                {sessionToken && (
+                {settingsSection === "data" && sessionToken && (
                   <Suspense
                     fallback={
                       <p>
@@ -532,7 +648,7 @@ export function App() {
                     />
                   </Suspense>
                 )}
-                {sessionToken && (
+                {settingsSection === "identity" && sessionToken && (
                   <div className="mt-6 border-t border-slate-200 pt-5">
                     <button
                       type="button"
@@ -543,9 +659,7 @@ export function App() {
                         setDisconnectError(false);
                         try {
                           await revokePageSession(sessionToken);
-                          setSessionToken(null);
-                          window.sessionStorage.removeItem(PAGE_SESSION_KEY);
-                          setAuthentication("unpaired");
+                          clearPageSession(false);
                         } catch {
                           setDisconnectError(true);
                         } finally {
@@ -576,16 +690,9 @@ export function App() {
               <Suspense fallback={<TerminalLoading text={text} />}>
                 <TerminalView language={language} sessionToken={sessionToken} />
               </Suspense>
-            ) : activePage === "credentials" && sessionToken ? (
+            ) : activePage === "catalog" && sessionToken ? (
               <Suspense fallback={<TerminalLoading text={text} />}>
-                <CredentialReferencesView
-                  language={language}
-                  sessionToken={sessionToken}
-                />
-              </Suspense>
-            ) : activePage === "targets" && sessionToken ? (
-              <Suspense fallback={<TerminalLoading text={text} />}>
-                <TargetsView
+                <CatalogWorkspace
                   language={language}
                   sessionToken={sessionToken}
                   onTask={(targetId, templateId) => {
@@ -617,57 +724,79 @@ export function App() {
                 />
               </Suspense>
             ) : (
-              <PairingRequired
-                text={text}
-                page={text[activePage]}
-                language={language}
-                pinEnabled={pinEnabled}
-                totpEnabled={totpEnabled}
-                authMethodStatus={authMethodStatus}
-                onRetry={() => void refreshBrowserAuthMethods()}
-                onPin={async (pin) => {
-                  setAuthentication("pairing");
-                  try {
-                    const response = await pairWithPin(pin);
-                    await getSession(response.session_token);
+              <>
+                {sessionExpired && (
+                  <p
+                    role="status"
+                    className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                  >
+                    {language === "zh-CN"
+                      ? "页面配对已到期。未保存的编辑需重新填写；重新登录后不会自动重放审批或命令。"
+                      : "This page session expired. Unsaved edits must be entered again; approvals and commands will not replay after sign-in."}
+                  </p>
+                )}
+                <PairingRequired
+                  text={text}
+                  page={text[activePage]}
+                  language={language}
+                  pinEnabled={pinEnabled}
+                  totpEnabled={totpEnabled}
+                  authMethodStatus={authMethodStatus}
+                  onRetry={() => void refreshBrowserAuthMethods()}
+                  onPin={async (pin) => {
+                    setAuthentication("pairing");
+                    try {
+                      const response = await pairWithPin(pin);
+                      const session = await getSession(response.session_token);
+                      setSessionToken(response.session_token);
+                      setSessionDeadline(
+                        Date.now() + session.expires_in_seconds * 1000,
+                      );
+                      window.sessionStorage.setItem(
+                        PAGE_SESSION_KEY,
+                        response.session_token,
+                      );
+                      setAuthentication("paired");
+                      setSessionExpired(false);
+                    } catch (error) {
+                      setAuthentication("error");
+                      throw error;
+                    }
+                  }}
+                  onRecover={recoverPin}
+                  onRecoveredSession={(response) => {
                     setSessionToken(response.session_token);
+                    setSessionDeadline(null);
                     window.sessionStorage.setItem(
                       PAGE_SESSION_KEY,
                       response.session_token,
                     );
                     setAuthentication("paired");
-                  } catch (error) {
-                    setAuthentication("error");
-                    throw error;
-                  }
-                }}
-                onRecover={recoverPin}
-                onRecoveredSession={(response) => {
-                  setSessionToken(response.session_token);
-                  window.sessionStorage.setItem(
-                    PAGE_SESSION_KEY,
-                    response.session_token,
-                  );
-                  setAuthentication("paired");
-                  void refreshBrowserAuthMethods();
-                }}
-                onTotp={async (code) => {
-                  setAuthentication("pairing");
-                  try {
-                    const response = await pairWithTotp(code);
-                    await getSession(response.session_token);
-                    setSessionToken(response.session_token);
-                    window.sessionStorage.setItem(
-                      PAGE_SESSION_KEY,
-                      response.session_token,
-                    );
-                    setAuthentication("paired");
-                  } catch {
-                    setAuthentication("error");
-                    throw new Error("totp_failed");
-                  }
-                }}
-              />
+                    setSessionExpired(false);
+                    void refreshBrowserAuthMethods();
+                  }}
+                  onTotp={async (code) => {
+                    setAuthentication("pairing");
+                    try {
+                      const response = await pairWithTotp(code);
+                      const session = await getSession(response.session_token);
+                      setSessionToken(response.session_token);
+                      setSessionDeadline(
+                        Date.now() + session.expires_in_seconds * 1000,
+                      );
+                      window.sessionStorage.setItem(
+                        PAGE_SESSION_KEY,
+                        response.session_token,
+                      );
+                      setAuthentication("paired");
+                      setSessionExpired(false);
+                    } catch {
+                      setAuthentication("error");
+                      throw new Error("totp_failed");
+                    }
+                  }}
+                />
+              </>
             )}
           </main>
         </div>

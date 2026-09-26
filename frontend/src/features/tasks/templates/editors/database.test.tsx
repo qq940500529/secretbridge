@@ -121,4 +121,18 @@ describe("database query workflow", () => {
       ),
     ).toContain("没有匹配的数据");
   });
+  it("distinguishes process completion from a missing expected database row", () => {
+    const result = {
+      columns: ["setting"],
+      rows: [],
+      truncated: false,
+      cleanup_ok: true,
+      validation_status: "expected_rows_missing" as const,
+      expected_min_rows: 1,
+    };
+    expect(renderToStaticMarkup(<DatabaseResultView result={result} zh={true} />))
+      .toContain("至少需要 1 行");
+    expect(renderToStaticMarkup(<DatabaseResultView result={{ ...result, validation_status: "verified" }} zh={true} />))
+      .toContain("结果已按预设条件验证");
+  });
 });

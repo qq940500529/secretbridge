@@ -259,6 +259,25 @@ fn assert_retained_terminal_evidence(state: &AppState, run_id: Uuid, terminal_id
             .unwrap()
             .contains("Synthetic-SB-command_A&z")
     );
+    let visible = retained
+        .items
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect::<String>();
+    assert!(!visible.contains("__SECRETBRIDGE_START_"), "{visible}");
+    assert!(!visible.contains("__SECRETBRIDGE_RUN_"), "{visible}");
+    assert!(!visible.contains("command-secrets"), "{visible}");
+    assert!(!visible.contains("Set-Location"), "{visible}");
+    assert!(!visible.contains("cd --"), "{visible}");
+    assert!(!visible.contains('\u{1b}'), "{visible}");
+}
+
+#[test]
+fn terminal_output_cleaner_handles_split_ansi_and_crlf() {
+    let mut cleaner = super::TerminalOutputCleaner::default();
+    assert_eq!(cleaner.feed("start\u{1b}[?25"), "start");
+    assert_eq!(cleaner.feed("l\r\nresult\u{1b}]0;title\u{1b}"), "\nresult");
+    assert_eq!(cleaner.feed("\\end\r\n"), "end\n");
 }
 
 #[cfg(windows)]

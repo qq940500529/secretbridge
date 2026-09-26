@@ -36,10 +36,12 @@ export function TargetsView({
   language,
   sessionToken,
   onTask,
+  onCredentials,
 }: {
   language: Language;
   sessionToken: string;
   onTask?: (targetId: string, templateId?: string) => void;
+  onCredentials?: () => void;
 }) {
   const common = sharedCopy[language];
   const text =
@@ -47,15 +49,15 @@ export function TargetsView({
       ? {
           title: "连接",
           subtitle:
-            "按业务用途组织凭据、任务与执行记录。各任务分别配置真实连接地址；可选 PostgreSQL 字段仅供内置连接检查，不会覆盖任务连接器。",
+            "按业务用途组织连接、凭据与任务。内置 PostgreSQL 检查是可选能力，不会自动配置通用命令的连接或 TLS。",
           formTitle: "新建连接",
           name: "连接名称",
           namePlaceholder: "例如：测试报表数据库",
           kind: "连接类型",
           environment: "环境",
-          address: "地址（可选）",
+          address: "主机或地址（可选）",
           addressPlaceholder: "计算机名、域名、网址、SMB/FTP 地址或 IP",
-          username: "账号（可选）",
+          username: "登录账号（可选）",
           usernamePlaceholder: "连接使用的账号或用户名",
           description: "用途说明（可选）",
           descriptionPlaceholder: "说明业务用途，不要填写地址或秘密",
@@ -63,11 +65,12 @@ export function TargetsView({
           none: "暂不关联",
           listTitle: "已保存连接",
           noCredential: "未关联凭据",
-          postgresHost: "PostgreSQL 主机",
+          postgresCheck: "启用内置 PostgreSQL 连接检查",
+          postgresLegacy:
+            "此连接旧版的通用地址/账号与 PostgreSQL 检查值不同。当前显示检查值；保存后会统一为这组值，请先核对。",
           postgresPort: "端口",
           postgresDatabase: "数据库名",
-          postgresUsername: "登录账号",
-          postgresTls: "TLS 校验",
+          postgresTls: "内置连接检查的 TLS 要求",
           verifyFull: "强制加密并验证证书与主机名",
           telnetWarning:
             "Telnet 会以明文传输账号、密码和命令。仅在无法升级的隔离旧设备上显式启用，并优先迁移到 SSH。",
@@ -76,16 +79,16 @@ export function TargetsView({
       : {
           title: "Connections",
           subtitle:
-            "Organize credentials, tasks and results by purpose. Tasks configure their own endpoints; optional PostgreSQL fields apply only to the built-in check, not task connectors.",
+            "Organize connections, credentials and tasks by purpose. The optional built-in PostgreSQL check does not configure generic commands or their TLS settings.",
           formTitle: "New connection",
           name: "Connection name",
           namePlaceholder: "Example: test reporting database",
           kind: "Connection type",
           environment: "Environment",
-          address: "Address (optional)",
+          address: "Host or address (optional)",
           addressPlaceholder:
             "Computer name, domain, URL, SMB/FTP address, or IP",
-          username: "Account (optional)",
+          username: "Login account (optional)",
           usernamePlaceholder: "Account or username used by this connection",
           description: "Purpose (optional)",
           descriptionPlaceholder:
@@ -94,11 +97,12 @@ export function TargetsView({
           none: "No reference",
           listTitle: "Saved connections",
           noCredential: "No credential reference",
-          postgresHost: "PostgreSQL host",
+          postgresCheck: "Enable built-in PostgreSQL connection check",
+          postgresLegacy:
+            "This connection's legacy general address/account differs from its PostgreSQL check. The check values are shown; saving will unify them. Review before saving.",
           postgresPort: "Port",
           postgresDatabase: "Database",
-          postgresUsername: "Login user",
-          postgresTls: "TLS verification",
+          postgresTls: "Built-in connection check TLS requirement",
           verifyFull: "Require encryption and verify certificate + hostname",
           telnetWarning:
             "Telnet sends accounts, passwords, and commands in plaintext. Enable it only for an isolated legacy device that cannot be upgraded, and migrate to SSH.",
@@ -116,10 +120,10 @@ export function TargetsView({
   const [username, setUsername] = useState("");
   const [allowInsecureProtocol, setAllowInsecureProtocol] = useState(false);
   const [credentialId, setCredentialId] = useState("");
-  const [postgresHost, setPostgresHost] = useState("");
+  const [postgresEnabled, setPostgresEnabled] = useState(false);
+  const [postgresLegacyConflict, setPostgresLegacyConflict] = useState(false);
   const [postgresPort, setPostgresPort] = useState("5432");
   const [postgresDatabase, setPostgresDatabase] = useState("");
-  const [postgresUsername, setPostgresUsername] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingVersion, setEditingVersion] = useState<number | null>(null);
   const [storage, setStorage] = useState<ConfigurationStorage | null>(null);
@@ -172,13 +176,13 @@ export function TargetsView({
           : {}),
         ...(description.trim() ? { description } : {}),
         ...(credentialId ? { credential_reference_id: credentialId } : {}),
-        ...(kind === "database" && postgresHost.trim()
+        ...(kind === "database" && postgresEnabled
           ? {
               postgres: {
-                host: postgresHost,
+                host: address,
                 port: Number(postgresPort),
                 database: postgresDatabase,
-                username: postgresUsername,
+                username,
                 tls_mode: "verify_full" as const,
               },
             }
@@ -246,14 +250,20 @@ export function TargetsView({
     setKind(item.kind);
     setEnvironment(item.environment);
     setDescription(item.description ?? "");
-    setAddress(item.address ?? "");
-    setUsername(item.username ?? "");
+    setAddress(item.postgres?.host ?? item.address ?? "");
+    setUsername(item.postgres?.username ?? item.username ?? "");
+    setPostgresLegacyConflict(
+      Boolean(
+        item.postgres &&
+        ((item.address && item.address !== item.postgres.host) ||
+          (item.username && item.username !== item.postgres.username)),
+      ),
+    );
     setAllowInsecureProtocol(item.allow_insecure_protocol);
     setCredentialId(item.credential_reference_id ?? "");
-    setPostgresHost(item.postgres?.host ?? "");
+    setPostgresEnabled(Boolean(item.postgres));
     setPostgresPort(String(item.postgres?.port ?? 5432));
     setPostgresDatabase(item.postgres?.database ?? "");
-    setPostgresUsername(item.postgres?.username ?? "");
     setError(null);
   }
 
@@ -269,10 +279,10 @@ export function TargetsView({
     setUsername("");
     setAllowInsecureProtocol(false);
     setCredentialId("");
-    setPostgresHost("");
+    setPostgresEnabled(false);
+    setPostgresLegacyConflict(false);
     setPostgresPort("5432");
     setPostgresDatabase("");
-    setPostgresUsername("");
   }
 
   return (
@@ -351,7 +361,8 @@ export function TargetsView({
         <Field label={text.address} htmlFor="target-address">
           <input
             id="target-address"
-            maxLength={2048}
+            required={kind === "database" && postgresEnabled}
+            maxLength={kind === "database" && postgresEnabled ? 253 : 2048}
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             placeholder={text.addressPlaceholder}
@@ -361,7 +372,8 @@ export function TargetsView({
         <Field label={text.username} htmlFor="target-username">
           <input
             id="target-username"
-            maxLength={256}
+            required={kind === "database" && postgresEnabled}
+            maxLength={kind === "database" && postgresEnabled ? 63 : 256}
             autoComplete="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
@@ -383,6 +395,17 @@ export function TargetsView({
               </option>
             ))}
           </select>
+          {onCredentials && (
+            <button
+              type="button"
+              className="mt-2 text-sm font-semibold text-cyan-700 underline"
+              onClick={onCredentials}
+            >
+              {language === "zh-CN"
+                ? "登记或管理凭据"
+                : "Add or manage credentials"}
+            </button>
+          )}
         </Field>
         {kind === "telnet_host" && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
@@ -401,70 +424,67 @@ export function TargetsView({
           </div>
         )}
         {kind === "database" && (
-          <div className="space-y-4 rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
-            <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-              <Field label={text.postgresHost} htmlFor="target-postgres-host">
-                <input
-                  id="target-postgres-host"
-                  maxLength={253}
-                  value={postgresHost}
-                  onChange={(event) => setPostgresHost(event.target.value)}
-                  placeholder="db.example.internal"
-                  className={inputClass}
-                />
-              </Field>
-              <Field label={text.postgresPort} htmlFor="target-postgres-port">
-                <input
-                  id="target-postgres-port"
-                  required
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={postgresPort}
-                  onChange={(event) => setPostgresPort(event.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label={text.postgresDatabase}
-                htmlFor="target-postgres-database"
+          <div className="space-y-4 border-t border-slate-200 pt-4">
+            {postgresLegacyConflict && (
+              <p
+                role="status"
+                className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
               >
-                <input
-                  id="target-postgres-database"
-                  required={Boolean(postgresHost.trim())}
-                  maxLength={63}
-                  value={postgresDatabase}
-                  onChange={(event) => setPostgresDatabase(event.target.value)}
+                {text.postgresLegacy}
+              </p>
+            )}
+            <label className="flex items-start gap-3 text-sm font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                checked={postgresEnabled}
+                onChange={(event) => setPostgresEnabled(event.target.checked)}
+                className="mt-1"
+              />
+              <span>{text.postgresCheck}</span>
+            </label>
+            {postgresEnabled && (
+              <div className="grid gap-4 sm:grid-cols-[8rem_1fr]">
+                <Field label={text.postgresPort} htmlFor="target-postgres-port">
+                  <input
+                    id="target-postgres-port"
+                    required
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={postgresPort}
+                    onChange={(event) => setPostgresPort(event.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <Field
+                  label={text.postgresDatabase}
+                  htmlFor="target-postgres-database"
+                >
+                  <input
+                    id="target-postgres-database"
+                    required
+                    maxLength={63}
+                    value={postgresDatabase}
+                    onChange={(event) =>
+                      setPostgresDatabase(event.target.value)
+                    }
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+            )}
+            {postgresEnabled && (
+              <Field label={text.postgresTls} htmlFor="target-postgres-tls">
+                <select
+                  id="target-postgres-tls"
+                  value="verify_full"
+                  disabled
                   className={inputClass}
-                />
+                >
+                  <option value="verify_full">{text.verifyFull}</option>
+                </select>
               </Field>
-              <Field
-                label={text.postgresUsername}
-                htmlFor="target-postgres-username"
-              >
-                <input
-                  id="target-postgres-username"
-                  required={Boolean(postgresHost.trim())}
-                  maxLength={63}
-                  autoComplete="username"
-                  value={postgresUsername}
-                  onChange={(event) => setPostgresUsername(event.target.value)}
-                  className={inputClass}
-                />
-              </Field>
-            </div>
-            <Field label={text.postgresTls} htmlFor="target-postgres-tls">
-              <select
-                id="target-postgres-tls"
-                value="verify_full"
-                disabled
-                className={inputClass}
-              >
-                <option value="verify_full">{text.verifyFull}</option>
-              </select>
-            </Field>
+            )}
           </div>
         )}
         <Field label={text.description} htmlFor="target-description">

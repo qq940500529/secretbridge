@@ -113,7 +113,14 @@ def accept(archive: Path) -> None:
                     (reference, "delivery acceptance", "password"),
                 )
 
+            install_started = time.monotonic()
             installed = run("install", package)
+            install_seconds = round(time.monotonic() - install_started, 3)
+            assert installed["install_kind"] == "new"
+            assert installed["existing_configuration_detected"] is True
+            assert installed["data_disposition"] == "existing_data_detected"
+            assert installed["backup_performed"] is False
+            assert installed["next_login_service_expected"] is False
             assert installed["management_page"] in {"opened", "manual_open_required"}
             if installed["management_page"] == "manual_open_required":
                 assert (
@@ -122,18 +129,29 @@ def accept(archive: Path) -> None:
                 )
             assert not any(key in installed for key in ("token", "pairing_url", "console_url"))
             replayed = run("install", package)
-            assert replayed["replayed"]
+            assert replayed["install_kind"] == "reused"
             assert replayed["binary"] == installed["binary"]
             assert replayed["management_page"] == "not_requested"
             run("stop")
             replayed = run("install", package)
-            assert replayed["replayed"]
+            assert replayed["install_kind"] == "reused"
             assert replayed["binary"] == installed["binary"]
             assert replayed["management_page"] == "not_requested"
             assert run("status")["running"]
             installed_status = run("status")["installation"]
             assert installed_status["binary"] == installed["binary"]
             original = installed_status["active_release"]
+            plugin_root = workspace / "codex-marketplace"
+            exported = run("client-plugin", "codex", plugin_root)
+            assert exported["requires_build"] is False
+            config = json.loads((plugin_root / "plugins/secretbridge/.mcp.json").read_text(encoding="utf-8"))
+            client = config["mcpServers"]["secretbridge"]
+            launcher = Path(client["args"][-1])
+            assert launcher.is_file() and launcher.parent == install
+            assert "installation.json" in launcher.read_text(encoding="utf-8")
+            assert original not in json.dumps(client)
+            assert json.loads((plugin_root / "marketplace.json").read_text(encoding="utf-8"))["name"] == "secretbridge-local"
+            run("client-plugin", "codex", plugin_root, success=False)
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
             assert pointer["startup_files"]
@@ -214,13 +232,16 @@ def accept(archive: Path) -> None:
             )
             rehash(upgraded)
             upgrade_result = run("install", upgraded)
+            assert upgrade_result["install_kind"] == "upgrade"
             assert upgrade_result["binary"] != installed["binary"]
             assert upgrade_result["management_page"] == "not_requested"
             assert "delivery upgrade" in web_text()
             assert run("status")["installation"]["previous_release"] == original
+            assert launcher.is_file() and json.loads((plugin_root / "plugins/secretbridge/.mcp.json").read_text(encoding="utf-8"))["mcpServers"]["secretbridge"] == client
             rollback_result = run("rollback")
             assert rollback_result["binary"] == installed["binary"]
             assert run("status")["installation"]["active_release"] == original
+            assert launcher.is_file()
             assert "delivery upgrade" not in web_text()
             run("stop")
             run("start", "--no-open")
@@ -230,7 +251,7 @@ def accept(archive: Path) -> None:
                     "SELECT name FROM credential_references WHERE id=?", (reference,)
                 ).fetchone() == ("delivery acceptance",)
                 assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-            print("Upgrade, rollback and configuration-preserving restart passed.", flush=True)
+            print(f"Upgrade, rollback and configuration-preserving restart passed. Initial install: {install_seconds}s; plugin export requires no build.", flush=True)
 
             run("autostart", "off")
             assert all(not Path(path).exists() for path in saved_startup)
@@ -239,6 +260,7 @@ def accept(archive: Path) -> None:
             run("uninstall")
             assert database.exists() and (install / "keep-me.txt").exists()
             assert not (install / "installation.json").exists()
+            assert not launcher.exists()
             assert all(not Path(path).exists() for path in saved_startup)
             # A second clean installation exercises the explicit configuration-removal option.
             env["SECRETBRIDGE_INSTALL_DIR"] = str(workspace / "second-install")

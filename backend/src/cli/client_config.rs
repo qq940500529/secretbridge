@@ -5,7 +5,8 @@
 
 use super::Result;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::{fs, path::Path};
+use uuid::Uuid;
 
 pub(super) const CLIENTS: &[&str] = &[
     "generic",
@@ -77,6 +78,86 @@ pub(super) fn render(client: &str, binary: &Path, data: &Path) -> Result<String>
         )),
         _ => unreachable!(),
     }
+}
+
+/// Export the signed release's preassembled plugin. Never modify an existing
+/// directory: its ownership and locally edited contents are unknown.
+pub(super) fn export_codex_plugin(
+    binary: &Path,
+    destination: &Path,
+    launcher: &(String, Vec<String>),
+) -> Result<()> {
+    path_text(binary)?;
+    if !destination.is_absolute() || destination.file_name().is_none() || destination.exists() {
+        return Err("plugin_destination_invalid");
+    }
+    let parent = destination.parent().ok_or("plugin_destination_invalid")?;
+    if !parent.is_dir() {
+        return Err("plugin_destination_invalid");
+    }
+    let source = binary
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("plugin_bundle_unavailable")?
+        .join("plugins/secretbridge");
+    if !source.join(".codex-plugin/plugin.json").is_file() {
+        return Err("plugin_bundle_unavailable");
+    }
+    let staging = parent.join(format!(".secretbridge-plugin-{}", Uuid::new_v4()));
+    fs::create_dir(&staging).map_err(|_| "plugin_export_failed")?;
+    let result = (|| {
+        let plugin = staging.join("plugins/secretbridge");
+        fs::create_dir_all(&plugin).map_err(|_| "plugin_export_failed")?;
+        copy_plugin_tree(&source, &plugin)?;
+        let config = json!({"mcpServers":{"secretbridge":{
+            "command":launcher.0,"args":launcher.1
+        }}});
+        fs::write(
+            plugin.join(".mcp.json"),
+            serde_json::to_vec_pretty(&config).map_err(|_| "plugin_export_failed")?,
+        )
+        .map_err(|_| "plugin_export_failed")?;
+        let marketplace = json!({
+            "name":"secretbridge-local",
+            "interface":{"displayName":"SecretBridge"},
+            "plugins":[{
+                "name":"secretbridge",
+                "source":{"source":"local","path":"./plugins/secretbridge"},
+                "policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},
+                "category":"Productivity"
+            }]
+        });
+        fs::write(
+            staging.join("marketplace.json"),
+            serde_json::to_vec_pretty(&marketplace).map_err(|_| "plugin_export_failed")?,
+        )
+        .map_err(|_| "plugin_export_failed")?;
+        fs::rename(&staging, destination).map_err(|_| "plugin_export_failed")
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
+    for entry in fs::read_dir(source).map_err(|_| "plugin_bundle_unavailable")? {
+        let entry = entry.map_err(|_| "plugin_bundle_unavailable")?;
+        let kind = entry.file_type().map_err(|_| "plugin_bundle_unavailable")?;
+        if kind.is_symlink() {
+            return Err("plugin_bundle_invalid");
+        }
+        let target = destination.join(entry.file_name());
+        if kind.is_dir() {
+            fs::create_dir(&target).map_err(|_| "plugin_export_failed")?;
+            copy_plugin_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), target).map_err(|_| "plugin_export_failed")?;
+        } else {
+            return Err("plugin_bundle_invalid");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -182,5 +263,55 @@ mod tests {
         assert!(command.contains("--scope user"));
         let json = render("workbuddy", binary, data).unwrap();
         assert!(serde_json::from_str::<Value>(&json).is_ok());
+    }
+
+    #[test]
+    fn prebuilt_codex_plugin_export_personalizes_binary_without_overwriting() {
+        let root =
+            std::env::temp_dir().join(format!("secretbridge-plugin-test-{}", Uuid::new_v4()));
+        let bundle = root.join("release/plugins/secretbridge");
+        fs::create_dir_all(bundle.join(".codex-plugin")).unwrap();
+        fs::write(
+            bundle.join(".codex-plugin/plugin.json"),
+            r#"{"name":"secretbridge"}"#,
+        )
+        .unwrap();
+        fs::write(bundle.join(".mcp.json"), "{}").unwrap();
+        let binary = root.join("release/bin/secretbridge");
+        let destination = root.join("codex-plugin");
+        let launcher = (
+            "stable-launcher".to_owned(),
+            vec!["--mcp-active".to_owned()],
+        );
+        export_codex_plugin(&binary, &destination, &launcher).unwrap();
+        let value: Value = serde_json::from_slice(
+            &fs::read(destination.join("plugins/secretbridge/.mcp.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            value["mcpServers"]["secretbridge"]["command"],
+            "stable-launcher"
+        );
+        assert_eq!(
+            value["mcpServers"]["secretbridge"]["args"],
+            json!(["--mcp-active"])
+        );
+        assert_eq!(
+            export_codex_plugin(&binary, &destination, &launcher),
+            Err("plugin_destination_invalid")
+        );
+        assert!(
+            destination
+                .join("plugins/secretbridge/.codex-plugin/plugin.json")
+                .is_file()
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &fs::read(destination.join("marketplace.json")).unwrap()
+            )
+            .unwrap()["name"],
+            "secretbridge-local"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }

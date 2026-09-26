@@ -19,6 +19,7 @@ export const emptyDatabase: DatabaseConfig = {
   query: "",
   columns: [],
   max_rows: 100,
+  expected_min_rows: null,
 };
 const input =
   "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal";
@@ -192,6 +193,29 @@ export function DatabaseEditor({
       )}
       {value.operation === "query" && (
         <>
+          <label className="block text-sm font-semibold">
+            {zh
+              ? "至少应返回的行数（可选）"
+              : "Minimum expected rows (optional)"}
+            <input
+              type="number"
+              min={0}
+              max={value.max_rows}
+              className={input}
+              value={value.expected_min_rows ?? ""}
+              onChange={(e) =>
+                update({
+                  expected_min_rows:
+                    e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+            />
+            <span className="mt-1 block text-xs font-normal text-slate-500">
+              {zh
+                ? "留空表示不验证业务行数；填 0 表示零行也是预期结果。"
+                : "Leave blank to skip row-count validation; 0 accepts an empty result."}
+            </span>
+          </label>
           <label className="block text-sm font-semibold">
             {zh ? "只读 SQL" : "Read-only SQL"}
             <textarea

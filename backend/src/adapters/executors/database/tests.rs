@@ -103,6 +103,34 @@ pub(crate) fn port(engine: DatabaseEngine) -> u16 {
 }
 
 #[test]
+fn structured_result_validation_distinguishes_empty_expected_and_missing() {
+    assert_eq!(
+        validation_status(DatabaseOperation::Query, None, 0, false),
+        "not_configured"
+    );
+    assert_eq!(
+        validation_status(DatabaseOperation::Query, Some(0), 0, false),
+        "verified"
+    );
+    assert_eq!(
+        validation_status(DatabaseOperation::Query, Some(1), 0, false),
+        "expected_rows_missing"
+    );
+    assert_eq!(
+        validation_status(DatabaseOperation::Query, Some(1), 1, true),
+        "incomplete_output"
+    );
+    assert_eq!(
+        validation_status(DatabaseOperation::Check, None, 1, false),
+        "verified"
+    );
+    assert_eq!(
+        validation_status(DatabaseOperation::Check, None, 0, false),
+        "expected_rows_missing"
+    );
+}
+
+#[test]
 fn placeholder_lexer_ignores_literals_comments_and_dollar_quotes() {
     let command = config(DatabaseEngine::Postgres, 5432, Uuid::new_v4());
     let sql = "/* SELECT ?; {{param:nope}} */ WITH v AS (SELECT '{{param:nope}};?' AS v) SELECT {{param:company}}, {{param:amount}}, {{param:ready}}, $tag${{param:nope}};$tag$, 'it''s fine' -- {{param:nope}};?\n";

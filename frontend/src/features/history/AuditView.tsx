@@ -4,7 +4,6 @@
 import { FileClock, Filter, LockKeyhole, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { saveDownload } from "../settings/DataMaintenanceView";
-import { RunOutputView } from "../tasks/runs/RunOutputView";
 import {
   renderSafeLog,
   type SafeLogEntry,
@@ -41,9 +40,11 @@ type TimelineItem =
 export function AuditView({
   language,
   sessionToken,
+  onShowRun,
 }: {
   language: Language;
   sessionToken: string;
+  onShowRun: (runId: string) => void;
 }) {
   const zh = language === "zh-CN";
   const text =
@@ -202,7 +203,6 @@ export function AuditView({
   const [approvalModeFilter, setApprovalModeFilter] = useState<
     AuthorizationMode | "all"
   >("all");
-  const [expandedEventId, setExpandedEventId] = useState<number | null>(null);
   const [authRetentionTruncated, setAuthRetentionTruncated] = useState(false);
   const [visibleCount, setVisibleCount] = useState(100);
   const [exportFormat, setExportFormat] = useState<SafeLogFormat>("json");
@@ -435,124 +435,135 @@ export function AuditView({
           onChange={(event) => setQuery(event.target.value)}
           className="min-w-64 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
         />
-        <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-          <Filter className="size-4" />
-          <select
-            value={filter}
-            onChange={(event) => setFilter(event.target.value as LogKind)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-cyan-500"
-          >
-            <option value="all">{text.all}</option>
-            {Object.entries(text.kinds).map(([kind, label]) => (
-              <option key={kind} value={kind}>
-                {label}
-              </option>
-            ))}
-            {Object.entries(text.authKinds).map(([kind, label]) => (
-              <option key={kind} value={kind}>
-                {label}
-              </option>
-            ))}
-            {Object.entries(text.approvalStates).map(([kind, label]) => (
-              <option key={kind} value={kind}>
-                {text.approval}: {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.period}
-          <select
-            value={period}
-            onChange={(event) => setPeriod(event.target.value as typeof period)}
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            <option value="day">{text.lastDay}</option>
-            <option value="week">{text.lastWeek}</option>
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.result}
-          <select
-            value={result}
-            onChange={(event) => setResult(event.target.value as typeof result)}
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            <option value="succeeded">{text.kinds.succeeded}</option>
-            <option value="failed">{text.kinds.failed}</option>
-            <option value="cancelled">{text.kinds.cancelled}</option>
-            <option value="timed_out">{text.timeout}</option>
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.target}
-          <select
-            value={targetFilter}
-            onChange={(event) => setTargetFilter(event.target.value)}
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            {targets.map((target) => (
-              <option key={target.id} value={target.id}>
-                {target.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.errorCode}
-          <select
-            value={errorCodeFilter}
-            onChange={(event) => setErrorCodeFilter(event.target.value)}
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            {errorCodes.map((code) => (
-              <option key={code} value={code}>
-                {code}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.approvalMode}
-          <select
-            value={approvalModeFilter}
-            onChange={(event) =>
-              setApprovalModeFilter(
-                event.target.value as typeof approvalModeFilter,
-              )
-            }
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            {Object.entries(text.approvalModes).map(([mode, label]) => (
-              <option key={mode} value={mode}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-semibold text-slate-700">
-          {text.template}
-          <select
-            value={templateFilter}
-            onChange={(event) => setTemplateFilter(event.target.value)}
-            className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
-          >
-            <option value="all">{text.all}</option>
-            <option value="one_time">
-              {zh ? "一次性操作" : "One-time operations"}
-            </option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>
-                {template.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <details className="w-full rounded-lg border border-slate-200 bg-white px-4 py-3">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+            {zh ? "更多筛选条件" : "More filters"}
+          </summary>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <Filter className="size-4" />
+              <select
+                value={filter}
+                onChange={(event) => setFilter(event.target.value as LogKind)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-cyan-500"
+              >
+                <option value="all">{text.all}</option>
+                {Object.entries(text.kinds).map(([kind, label]) => (
+                  <option key={kind} value={kind}>
+                    {label}
+                  </option>
+                ))}
+                {Object.entries(text.authKinds).map(([kind, label]) => (
+                  <option key={kind} value={kind}>
+                    {label}
+                  </option>
+                ))}
+                {Object.entries(text.approvalStates).map(([kind, label]) => (
+                  <option key={kind} value={kind}>
+                    {text.approval}: {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.period}
+              <select
+                value={period}
+                onChange={(event) =>
+                  setPeriod(event.target.value as typeof period)
+                }
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                <option value="day">{text.lastDay}</option>
+                <option value="week">{text.lastWeek}</option>
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.result}
+              <select
+                value={result}
+                onChange={(event) =>
+                  setResult(event.target.value as typeof result)
+                }
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                <option value="succeeded">{text.kinds.succeeded}</option>
+                <option value="failed">{text.kinds.failed}</option>
+                <option value="cancelled">{text.kinds.cancelled}</option>
+                <option value="timed_out">{text.timeout}</option>
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.target}
+              <select
+                value={targetFilter}
+                onChange={(event) => setTargetFilter(event.target.value)}
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                {targets.map((target) => (
+                  <option key={target.id} value={target.id}>
+                    {target.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.errorCode}
+              <select
+                value={errorCodeFilter}
+                onChange={(event) => setErrorCodeFilter(event.target.value)}
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                {errorCodes.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.approvalMode}
+              <select
+                value={approvalModeFilter}
+                onChange={(event) =>
+                  setApprovalModeFilter(
+                    event.target.value as typeof approvalModeFilter,
+                  )
+                }
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                {Object.entries(text.approvalModes).map(([mode, label]) => (
+                  <option key={mode} value={mode}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              {text.template}
+              <select
+                value={templateFilter}
+                onChange={(event) => setTemplateFilter(event.target.value)}
+                className="ml-2 rounded-xl border border-slate-200 bg-white px-3 py-2"
+              >
+                <option value="all">{text.all}</option>
+                <option value="one_time">
+                  {zh ? "一次性操作" : "One-time operations"}
+                </option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </details>
         <button
           type="button"
           aria-label={zh ? "刷新安全事件" : "Refresh safe events"}
@@ -817,21 +828,10 @@ export function AuditView({
                       <button
                         type="button"
                         className="mt-2 text-xs font-semibold text-cyan-700 underline"
-                        onClick={() =>
-                          setExpandedEventId(
-                            expandedEventId === event.id ? null : event.id,
-                          )
-                        }
+                        onClick={() => onShowRun(run.id)}
                       >
                         {text.output}
                       </button>
-                    )}
-                    {run && expandedEventId === event.id && (
-                      <RunOutputView
-                        id={run.id}
-                        sessionToken={sessionToken}
-                        language={language}
-                      />
                     )}
                   </div>
                 </div>

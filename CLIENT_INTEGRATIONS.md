@@ -4,6 +4,16 @@
 
 SecretBridge 在本机运行一个执行代理。不同 AI 客户端连接的都是同一个 `--mcp-stdio` 桥接进程，不需要为每个客户端重复安装代理或复制凭据。首次使用应先按[安装说明](./README.zh-CN.md)完成本机安装和初始化；客户端配置只包含程序路径与本机数据目录，不包含 PIN、恢复密钥、配对链接或凭据。
 
+## Codex：使用预构建插件
+
+发行包已包含插件、操作 Skill 和 MCP 定义，安装时无需 Node.js、Rust 或源码构建。先在本机安装并初始化 SecretBridge，然后用活动程序导出一个**新的**本地插件市场目录：
+
+```text
+secretbridge client-plugin codex <absolute-empty-destination>
+```
+
+命令会复制经过安装包校验的插件，配置指向安装目录内固定的 MCP 启动入口；启动入口每次读取当前活动版本，因此升级和回退后不必重建插件，也不复制任何凭据。目标目录不得已存在。随后运行 `codex plugin marketplace add <absolute-destination>` 和 `codex plugin add secretbridge@secretbridge-local`，并在新会话中验证工具。若本机已有同名市场，先用 `codex plugin list` 核对其来源，不要覆盖已有市场或插件文件；也可以继续使用下述 MCP 配置方式。卸载代理后此入口会失效，属于预期行为。
+
 ## 生成当前安装的配置
 
 从 `secretbridge status` 输出中的 `installation.binary` 获取正在使用的绝对程序路径。用这个程序运行 `client-config`：

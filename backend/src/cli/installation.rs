@@ -213,6 +213,7 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
         if !seen.insert(file.path.clone())
             || !(file.path.starts_with("frontend/")
                 || file.path.starts_with("skills/secretbridge-operations/")
+                || file.path.starts_with("plugins/secretbridge/")
                 || [
                     binary_name(),
                     "brand/secretbridge-logo.png",
@@ -258,6 +259,8 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
         "brand/secretbridge-mark.svg",
         "CLIENT_INTEGRATIONS.md",
         "skills/secretbridge-operations/SKILL.md",
+        "plugins/secretbridge/.codex-plugin/plugin.json",
+        "plugins/secretbridge/.mcp.json",
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
         "COPYRIGHT.md",
@@ -339,6 +342,74 @@ pub(super) fn active_paths() -> Result<Option<(PathBuf, PathBuf)>> {
         release.join("frontend"),
     )))
 }
+
+/// A stable, non-secret MCP entry point. It resolves the active release on
+/// each launch, so a previously installed client plugin survives upgrades and
+/// rollbacks without modifying client-owned files.
+pub(super) fn mcp_launcher() -> Result<(String, Vec<String>)> {
+    if active_paths()?.is_none() {
+        return Err("not_installed");
+    }
+    let path = root()?.join(if cfg!(windows) {
+        "mcp-launcher.ps1"
+    } else {
+        "mcp-launcher.sh"
+    });
+    let script = launcher_script();
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            if fs::read(&path).map_err(|_| "launcher_invalid")? != script.as_bytes() {
+                return Err("launcher_invalid");
+            }
+        }
+        Ok(_) => return Err("launcher_invalid"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            private_file(&path, script.as_bytes()).map_err(|_| "launcher_write_failed")?;
+        }
+        Err(_) => return Err("launcher_invalid"),
+    }
+    let path = path.to_str().ok_or("launcher_invalid")?.to_owned();
+    if cfg!(windows) {
+        Ok((
+            "powershell.exe".into(),
+            vec![
+                "-NoLogo".into(),
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-ExecutionPolicy".into(),
+                "Bypass".into(),
+                "-File".into(),
+                path,
+            ],
+        ))
+    } else {
+        Ok(("/bin/sh".into(), vec![path]))
+    }
+}
+
+fn launcher_script() -> &'static str {
+    if cfg!(windows) {
+        r#"$ErrorActionPreference = 'Stop'
+$record = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'installation.json') -Raw | ConvertFrom-Json
+$id = [string]$record.active
+if ($id -cnotmatch '^release-[0-9a-f]{16}$') { exit 2 }
+$binary = Join-Path $PSScriptRoot ('releases\' + $id + '\bin\secretbridge.exe')
+if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { exit 2 }
+& $binary --mcp-stdio
+exit $LASTEXITCODE
+"#
+    } else {
+        r#"#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+id=$(sed -n 's/^  "active": "\(release-[0-9a-f]*\)",*$/\1/p' "$root/installation.json" | head -n 1)
+case "$id" in release-????????????????) ;; *) exit 2 ;; esac
+binary="$root/releases/$id/bin/secretbridge"
+test -f "$binary" || exit 2
+exec "$binary" --mcp-stdio
+"#
+    }
+}
 pub(super) fn summary() -> Result<serde_json::Value> {
     let Some(installation) = load()? else {
         return Ok(serde_json::Value::Null);
@@ -349,14 +420,29 @@ pub(super) fn summary() -> Result<serde_json::Value> {
         }
         None => None,
     };
+    let source_commit = installation
+        .active
+        .as_ref()
+        .and_then(|active| {
+            let path = root()
+                .ok()?
+                .join("releases")
+                .join(active)
+                .join("SOURCE.json");
+            read_json::<serde_json::Value>(&path, 65_536).ok()
+        })
+        .and_then(|source| source["base_commit"].as_str().map(str::to_owned));
     Ok(
-        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"binary":binary,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true}),
+        serde_json::json!({"active_release":installation.active,"previous_release":installation.previous,"binary":binary,"autostart":!installation.startup_files.is_empty(),"data_retained_on_uninstall":true,"source_commit":source_commit}),
     )
 }
 
 pub(super) fn verify(package: &Path) -> Result<serde_json::Value> {
     let package = fs::canonicalize(package).map_err(|_| "package_unavailable")?;
     let verified = manifest(&package, true)?;
+    let source_commit = read_json::<serde_json::Value>(&package.join("SOURCE.json"), 65_536)
+        .ok()
+        .and_then(|source| source["base_commit"].as_str().map(str::to_owned));
     super::validate_web_build_for(&package.join("frontend"), &verified.version)?;
     let bytes = verified.files.iter().map(|file| file.bytes).sum::<u64>();
     Ok(serde_json::json!({
@@ -367,6 +453,7 @@ pub(super) fn verify(package: &Path) -> Result<serde_json::Value> {
         "schema_version": verified.schema_version,
         "files": verified.files.len(),
         "bytes": bytes,
+        "source_commit": source_commit,
         "sbom": "CycloneDX 1.6",
         "executable_digest_verified": true,
         "executable_version_check": "activation"
@@ -409,7 +496,13 @@ async fn handoff_after_install(fresh: bool, no_open: bool) -> &'static str {
 pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
     let package = fs::canonicalize(package).map_err(|_| "package_unavailable")?;
     let verified = manifest(&package, true)?;
+    let source_commit = read_json::<serde_json::Value>(&package.join("SOURCE.json"), 65_536)
+        .ok()
+        .and_then(|source| source["base_commit"].as_str().map(str::to_owned));
     let root = root()?;
+    let existing_configuration_detected = super::super::data_directory()?
+        .join("secretbridge.sqlite3")
+        .is_file();
     let old = if let Some(installation) = load()? {
         installation
     } else {
@@ -453,7 +546,7 @@ pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"replayed":true,"management_page":"not_requested"})
+            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":"reused","existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"source_commit":source_commit,"autostart":!old.startup_files.is_empty(),"next_login_service_expected":!old.startup_files.is_empty(),"management_page":"not_requested"})
         );
         return Ok(());
     }
@@ -466,7 +559,7 @@ pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
         .then_some("run_active_binary_open_on_local_desktop");
     println!(
         "{}",
-        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"data_retained":true,"management_page":management_page,"management_page_next_action":management_page_next_action})
+        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":if old.active.is_some() {"upgrade"} else {"new"},"existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"source_commit":source_commit,"data_retained":true,"autostart":!pending.startup_files.is_empty(),"next_login_service_expected":!pending.startup_files.is_empty(),"management_page":management_page,"management_page_next_action":management_page_next_action})
     );
     Ok(())
 }
@@ -602,6 +695,17 @@ pub(super) async fn uninstall(remove_configuration: bool) -> Result<()> {
     }
     let _ = fs::remove_dir(releases);
     fs::remove_file(root.join("installation.json")).map_err(|_| "uninstall_failed")?;
+    let launcher = root.join(if cfg!(windows) {
+        "mcp-launcher.ps1"
+    } else {
+        "mcp-launcher.sh"
+    });
+    if fs::symlink_metadata(&launcher)
+        .is_ok_and(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        && fs::read(&launcher).is_ok_and(|bytes| bytes == launcher_script().as_bytes())
+    {
+        fs::remove_file(launcher).map_err(|_| "uninstall_failed")?;
+    }
     drop(lock);
     let _ = fs::remove_file(root.join("installer.lock"));
     let _ = fs::remove_dir(&root);
