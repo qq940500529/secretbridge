@@ -185,9 +185,14 @@ def accept(archive: Path) -> None:
                     for tool in reply.get("result", {}).get("tools", [])
                 ) for reply in replies
             ), replies
+            # This isolated install intentionally has no human PIN yet. The
+            # request must reach the broker and receive its documented gate,
+            # not fail because the launcher or MCP framing is broken.
             assert any(
-                reply.get("id") == 3 and "result" in reply for reply in replies
-            ), replies
+                reply.get("id") == 3
+                and reply.get("error", {}).get("message") == "initialization_required"
+                for reply in replies
+            ), mcp_result.stderr.decode(errors="replace")[:500]
             run("client-plugin", "codex", plugin_root, success=False)
             run("autostart", "on")
             pointer = json.loads((install / "installation.json").read_text(encoding="utf-8"))
