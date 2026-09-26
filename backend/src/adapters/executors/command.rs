@@ -590,6 +590,10 @@ struct TerminalExecution<'a> {
     parameters: &'a crate::parameters::ParameterValues,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one PTY execution loop must keep cancellation, bounded output and exit-marker parsing together"
+)]
 async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str, Option<i32>) {
     let TerminalExecution {
         state,

@@ -362,11 +362,10 @@ pub(super) fn mcp_launcher() -> Result<(String, Vec<String>)> {
                 return Err("launcher_invalid");
             }
         }
-        Ok(_) => return Err("launcher_invalid"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             private_file(&path, script.as_bytes()).map_err(|_| "launcher_write_failed")?;
         }
-        Err(_) => return Err("launcher_invalid"),
+        Ok(_) | Err(_) => return Err("launcher_invalid"),
     }
     let path = path.to_str().ok_or("launcher_invalid")?.to_owned();
     if cfg!(windows) {
@@ -389,7 +388,7 @@ pub(super) fn mcp_launcher() -> Result<(String, Vec<String>)> {
 
 fn launcher_script() -> &'static str {
     if cfg!(windows) {
-        r#"$ErrorActionPreference = 'Stop'
+        r"$ErrorActionPreference = 'Stop'
 $record = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'installation.json') -Raw | ConvertFrom-Json
 $id = [string]$record.active
 if ($id -cnotmatch '^release-[0-9a-f]{16}$') { exit 2 }
@@ -397,7 +396,7 @@ $binary = Join-Path $PSScriptRoot ('releases\' + $id + '\bin\secretbridge.exe')
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { exit 2 }
 & $binary --mcp-stdio
 exit $LASTEXITCODE
-"#
+"
     } else {
         r#"#!/bin/sh
 set -eu

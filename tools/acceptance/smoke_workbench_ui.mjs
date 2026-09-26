@@ -451,6 +451,21 @@ try {
       await review.evaluate((element) => element.parentElement?.open),
       true,
     );
+    const reviewPane = review.locator("..").locator("pre");
+    const reviewStyle = await reviewPane.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        maxHeight: style.maxHeight,
+        classes: element.className,
+      };
+    });
+    assert.notEqual(
+      reviewStyle.background,
+      "rgba(0, 0, 0, 0)",
+      JSON.stringify(reviewStyle),
+    );
+    assert.equal(Number.parseInt(reviewStyle.maxHeight, 10), 256);
     assert.equal(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth + 1,
