@@ -215,6 +215,9 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
                 || file.path.starts_with("skills/secretbridge-operations/")
                 || [
                     binary_name(),
+                    "brand/secretbridge-logo.png",
+                    "brand/secretbridge-mark.svg",
+                    "CLIENT_INTEGRATIONS.md",
                     "LICENSE",
                     "LICENSING.md",
                     "COPYRIGHT.md",
@@ -251,6 +254,9 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
         binary_name(),
         "frontend/index.html",
         "frontend/secretbridge-build.json",
+        "brand/secretbridge-logo.png",
+        "brand/secretbridge-mark.svg",
+        "CLIENT_INTEGRATIONS.md",
         "skills/secretbridge-operations/SKILL.md",
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",

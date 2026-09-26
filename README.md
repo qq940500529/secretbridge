@@ -1,6 +1,8 @@
 <div align="center">
 
-# SecretBridge · 密桥
+<img src="./brand/secretbridge-logo.png" alt="SecretBridge 秘桥标识" width="88" height="88" />
+
+# SecretBridge · 秘桥
 
 **Keep credentials local. Let a human set the approval policy.**
 
@@ -71,6 +73,8 @@ This version is not an in-place upgrade for an earlier installation. Keep existi
 Detailed engineering documents are currently in Simplified Chinese. Start with the [documentation hub](./docs/README.md) and [user guide](./docs/user-guide/使用指南.md).
 
 AI clients with Skill support can install the versioned [SecretBridge operations Skill](./skills/secretbridge-operations/SKILL.md) after connecting MCP. It guides tool choice, approval handoff, output cursors and recovery; the broker continues to enforce authorization. See the [installation and responsibility guide](./docs/user-guide/AI客户端接入.md) (Chinese). MCP-only clients continue to use the advertised tool schemas and minimal server instructions.
+
+For Codex, Claude Code, Cursor, GitHub Copilot CLI, OpenCode, WorkBuddy and DeepSeek Harness, the installed binary can print client-specific MCP setup with `client-config CLIENT`. Other local stdio MCP clients can start with `client-config generic` and adapt the outer configuration format; see [AI client integrations](./CLIENT_INTEGRATIONS.md).
 
 ## Validation targets
 

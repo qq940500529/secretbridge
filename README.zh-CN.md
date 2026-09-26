@@ -1,6 +1,8 @@
 <div align="center">
 
-# 密桥 SecretBridge
+<img src="./brand/secretbridge-logo.png" alt="SecretBridge 秘桥标识" width="88" height="88" />
+
+# 秘桥 SecretBridge
 
 **让凭据留在本机，让授权决定操作。**
 
@@ -60,6 +62,8 @@ flowchart LR
 此版本不能作为既有安装的原地升级包。请保持原有数据不动，在独立的空白数据目录中评估；已安装版本应按对应 Release 文档操作。
 
 支持 Skill 的 AI 客户端可在接通 MCP 后安装版本化的 [SecretBridge AI 操作 Skill](./skills/secretbridge-operations/SKILL.md)，用于工具选择、审批交接、游标读取和错误恢复。安装与职责说明见 [AI 操作 Skill 与 MCP 职责](./docs/user-guide/AI客户端接入.md)。仅支持 MCP 的客户端仍可使用工具 schema 和服务端的最小指引。
+
+Codex、Claude Code、Cursor、GitHub Copilot CLI、OpenCode、WorkBuddy 和 DeepSeek Harness 可通过已安装程序的 `client-config CLIENT` 生成各自的 MCP 配置；其他支持本机 stdio MCP 的客户端可用 `client-config generic` 获取通用配置。放置位置与验证步骤见[AI 客户端接入](./CLIENT_INTEGRATIONS.md)。
 
 ## 日常流程
 

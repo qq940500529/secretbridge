@@ -1,4 +1,6 @@
-# SecretBridge 文档
+# 秘桥 · SecretBridge 文档
+
+<img src="../brand/secretbridge-logo.png" alt="SecretBridge 秘桥标识" width="56" height="56" />
 
 [项目首页](../README.zh-CN.md) / 文档
 
@@ -27,6 +29,7 @@ flowchart TD
 | 了解日常流程 | [使用指南](./user-guide/使用指南.md) · [工作台说明](./user-guide/工作台.md) · [术语表](./user-guide/术语表.md) |
 | 安全连续终端与实时状态 | [安全连续终端](./user-guide/连续终端.md) |
 | 为 AI 客户端安装操作 Skill | [AI 操作 Skill 与 MCP 职责](./user-guide/AI客户端接入.md) |
+| 接入主流 AI 客户端 | [AI 客户端接入](../CLIENT_INTEGRATIONS.md) |
 | 迁移、备份和恢复 | [配置迁移与备份恢复](./user-guide/备份与恢复.md) |
 | 参与真实环境测试 | [Beta 测试与反馈](./community/测试与反馈.md) · [社区验证待办](./community/社区验证待办.md) |
 | 查看首次运行条款 | [最终用户许可与免责声明](./最终用户许可与免责声明.md) |

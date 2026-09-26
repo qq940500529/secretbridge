@@ -70,6 +70,11 @@ TEXT_SUFFIXES = {
     ".yaml",
     ".ps1",
     ".sh",
+    ".svg",
+}
+BINARY_ASSETS = {
+    "brand/secretbridge-logo.png": (b"\x89PNG\r\n\x1a\n", 2_000_000),
+    ".github/assets/social-preview.png": (b"\x89PNG\r\n\x1a\n", 1_000_000),
 }
 SKIP_PARTS = {".git", ".ruff_cache", "__pycache__", "dist", "node_modules", "target"}
 MAX_RUST_SOURCE_LINES = 2_500
@@ -147,6 +152,14 @@ def inspect_file(root: Path, path: Path) -> list[str]:
     label = relative.as_posix()
     if path.is_symlink():
         return [f"{label}: symlink-not-allowed"]
+    if label in BINARY_ASSETS:
+        signature, max_size = BINARY_ASSETS[label]
+        if path.stat().st_size > max_size:
+            return [f"{label}: forbidden-or-oversize-file"]
+        with path.open("rb") as stream:
+            if stream.read(len(signature)) != signature:
+                return [f"{label}: invalid-binary-asset"]
+        return []
     if path.name not in SPECIAL_NAMES and path.suffix not in TEXT_SUFFIXES:
         return [f"{label}: unexpected-artifact"]
     if path.name.startswith(".env") or path.stat().st_size > 1_000_000:
@@ -218,12 +231,14 @@ def check_ai_deployment_entrypoints(root: Path) -> list[str]:
             PUBLIC_REPOSITORY_URL,
             "不需要预先克隆仓库",
             "直接复用",
-            "--mcp-stdio",
+            "client-config CLIENT",
+            "CLIENT_INTEGRATIONS.md",
             "secretbridge_terminal_capabilities",
         ),
         "docs/getting-started/自动化部署运行手册.md": (
             "Existing installation discovery",
-            "--mcp-stdio",
+            "client-config CLIENT",
+            "CLIENT_INTEGRATIONS.md",
             "secretbridge_terminal_capabilities",
         ),
     }

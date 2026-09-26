@@ -21,6 +21,7 @@ describe("first-run agreement and PIN wizard", () => {
       <LegalConsent {...props} canClose={false} requiresPinSetup />,
     );
     expect(html).toContain("许可协议与免责协议");
+    expect(html).toContain('src="/secretbridge-logo.png"');
     expect(html).toContain("最终用户许可协议");
     expect(html).not.toContain("设置 PIN 并生成恢复密钥");
     expect(html).not.toContain("synthetic-session-token");

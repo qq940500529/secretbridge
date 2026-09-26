@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SecretBridge · 秘桥</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1280px;
+        height: 640px;
+        margin: 0;
+      }
+      body {
+        overflow: hidden;
+        color: #f2fbfd;
+        font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at 83% 12%, #12415a 0, transparent 46%),
+          linear-gradient(120deg, #061628, #08283b 74%, #0a3446);
+      }
+      main {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 68px;
+        height: 100%;
+        padding: 74px 100px;
+      }
+      main::before {
+        position: absolute;
+        inset: 38px;
+        border: 1px solid #336275;
+        border-radius: 34px;
+        content: "";
+        pointer-events: none;
+      }
+      .mark {
+        z-index: 1;
+        width: 342px;
+        height: 342px;
+        flex: none;
+        border-radius: 78px;
+        box-shadow: 0 28px 65px #0006;
+      }
+      .copy {
+        z-index: 1;
+        min-width: 0;
+      }
+      .eyebrow {
+        margin: 0 0 22px;
+        color: #80ebde;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.23em;
+      }
+      h1 {
+        margin: 0;
+        font-size: 72px;
+        font-weight: 750;
+        letter-spacing: -0.045em;
+        line-height: 1.06;
+        white-space: nowrap;
+      }
+      .chinese {
+        margin: 16px 0 0;
+        color: #a8f5e8;
+        font-size: 43px;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+      }
+      .rule {
+        width: 82px;
+        height: 4px;
+        margin: 28px 0 25px;
+        border-radius: 2px;
+        background: #d6ad68;
+      }
+      .tagline {
+        margin: 0;
+        color: #d8e8ee;
+        font-size: 25px;
+        letter-spacing: 0.04em;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img class="mark" src="../../brand/secretbridge-logo.png" alt="" />
+      <div class="copy">
+        <p class="eyebrow">SECRETS BROKER · HUMAN-APPROVED</p>
+        <h1>SecretBridge</h1>
+        <p class="chinese">秘桥</p>
+        <div class="rule"></div>
+        <p class="tagline">让凭据留在本机，让授权决定操作。</p>
+      </div>
+    </main>
+  </body>
+</html>

@@ -3,7 +3,7 @@ name: secretbridge-operations
 description: Use SecretBridge MCP tools to run user-requested local, SSH, database, HTTP, or other saved-connection operations while keeping credentials in the local broker. Use when the user asks an AI assistant to perform a controlled operation through SecretBridge; do not use for installation or ordinary repository development.
 ---
 
-# SecretBridge controlled operations / 密桥受控操作
+# SecretBridge controlled operations / 秘桥受控操作
 
 This skill describes the AI workflow. The MCP server is authoritative for tool schemas, live state, approval, credential access, output filtering, and permissions. Read [compatibility.json](./references/compatibility.json) when connecting to a new broker version. If it differs, use the server's current `tools/list` schemas and responses; do not copy fields from this skill's examples until an updated skill is installed.
 

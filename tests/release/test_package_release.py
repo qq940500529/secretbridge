@@ -219,6 +219,15 @@ class PackageReleaseTests(unittest.TestCase):
         )
         for document in package_release.DOCUMENTS:
             (root / document).write_text("test notice", encoding="utf-8")
+        for asset in package_release.BRAND_ASSETS:
+            brand_asset = root / asset
+            brand_asset.parent.mkdir(parents=True, exist_ok=True)
+            if brand_asset.suffix == ".png":
+                brand_asset.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+            else:
+                brand_asset.write_text(
+                    '<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8"
+                )
         skill = root / "skills/secretbridge-operations"
         skill.mkdir(parents=True)
         (skill / "SKILL.md").write_text(
@@ -288,6 +297,9 @@ class PackageReleaseTests(unittest.TestCase):
                     "SBOM.cdx.json",
                     "THIRD_PARTY_LICENSES.txt",
                     "LICENSE",
+                    "CLIENT_INTEGRATIONS.md",
+                    "brand/secretbridge-mark.svg",
+                    "brand/secretbridge-logo.png",
                     "frontend/index.html",
                     "skills/secretbridge-operations/SKILL.md",
                 }

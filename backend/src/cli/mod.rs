@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+mod client_config;
 mod installation;
 mod startup;
 pub(crate) mod synthetic_child;
@@ -44,6 +45,12 @@ pub(super) async fn handle(
                 "{}",
                 serde_json::json!({"running":status.is_some(),"runtime":status,"installation":installation::summary()?})
             );
+        }
+        "client-config" if arguments.len() == 2 => {
+            let client = arguments[1].to_str().ok_or("client_name_invalid")?;
+            let (binary, _) = installation::active_paths()?.ok_or("not_installed")?;
+            let data = super::data_directory()?;
+            println!("{}", client_config::render(client, &binary, &data)?);
         }
         "stop" if arguments.len() == 1 => {
             stop().await?;

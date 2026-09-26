@@ -110,6 +110,36 @@ class RepositoryChecks(unittest.TestCase):
             path.write_bytes(b"synthetic")
             self.assertIn("export.zip: unexpected-artifact", inspect_file(root, path))
 
+    def test_only_named_brand_png_is_allowed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            brand = root / "brand"
+            brand.mkdir()
+            logo = brand / "secretbridge-logo.png"
+            logo.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
+            self.assertEqual([], inspect_file(root, logo))
+            other = brand / "unused.png"
+            other.write_bytes(logo.read_bytes())
+            self.assertIn("brand/unused.png: unexpected-artifact", inspect_file(root, other))
+            logo.write_bytes(b"not a png")
+            self.assertIn(
+                "brand/secretbridge-logo.png: invalid-binary-asset", inspect_file(root, logo)
+            )
+
+    def test_social_preview_is_the_only_other_allowed_png(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            assets = root / ".github" / "assets"
+            assets.mkdir(parents=True)
+            preview = assets / "social-preview.png"
+            preview.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
+            self.assertEqual([], inspect_file(root, preview))
+            preview.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 1_000_000)
+            self.assertIn(
+                ".github/assets/social-preview.png: forbidden-or-oversize-file",
+                inspect_file(root, preview),
+            )
+
     def test_application_source_types_are_checked_as_text(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -159,11 +189,12 @@ class RepositoryChecks(unittest.TestCase):
             guide = getting_started / "AI辅助部署.md"
             guide.write_text(
                 f"{PUBLIC_REPOSITORY_URL}\n不需要预先克隆仓库\n直接复用\n"
-                "--mcp-stdio\nsecretbridge_terminal_capabilities",
+                "client-config CLIENT\nCLIENT_INTEGRATIONS.md\nsecretbridge_terminal_capabilities",
                 encoding="utf-8",
             )
             (getting_started / "自动化部署运行手册.md").write_text(
-                "Existing installation discovery\n--mcp-stdio\nsecretbridge_terminal_capabilities",
+                "Existing installation discovery\nclient-config CLIENT\n"
+                "CLIENT_INTEGRATIONS.md\nsecretbridge_terminal_capabilities",
                 encoding="utf-8",
             )
             self.assertEqual([], check_ai_deployment_entrypoints(root))

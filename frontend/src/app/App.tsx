@@ -281,15 +281,18 @@ export function App() {
           className={`app-sidebar fixed inset-y-0 left-0 z-20 flex flex-col border-r border-slate-200 bg-slate-950 text-slate-200 shadow-xl transition-[width] duration-200 ${collapsed ? "w-20" : "w-20 md:w-64"}`}
         >
           <div className="flex h-20 items-center gap-3 border-b border-white/10 px-5">
-            <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 shadow-lg shadow-cyan-950/40">
-              <ShieldCheck className="size-6 text-white" aria-hidden="true" />
-            </div>
+            <img
+              src="/secretbridge-logo.png"
+              alt=""
+              className="size-10 shrink-0 rounded-xl shadow-lg shadow-cyan-950/40"
+              aria-hidden="true"
+            />
             {!collapsed && (
               <div className="hidden md:block">
                 <p className="m-0 text-base font-semibold tracking-wide text-white">
                   SecretBridge
                 </p>
-                <p className="m-0 text-xs text-slate-400">密桥</p>
+                <p className="m-0 text-xs text-slate-400">秘桥</p>
               </div>
             )}
           </div>
