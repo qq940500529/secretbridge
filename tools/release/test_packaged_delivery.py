@@ -120,6 +120,8 @@ def accept(archive: Path) -> None:
             assert installed["existing_configuration_detected"] is True
             assert installed["data_disposition"] == "existing_data_detected"
             assert installed["backup_performed"] is False
+            assert installed["migration_status"] == "not_evaluated"
+            assert installed["prior_external_reset"] == "not_observable"
             assert installed["next_login_service_expected"] is False
             assert installed["management_page"] in {"opened", "manual_open_required"}
             if installed["management_page"] == "manual_open_required":

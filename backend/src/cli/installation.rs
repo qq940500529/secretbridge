@@ -546,7 +546,7 @@ pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
         }
         println!(
             "{}",
-            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":"reused","existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"source_commit":source_commit,"autostart":!old.startup_files.is_empty(),"next_login_service_expected":!old.startup_files.is_empty(),"management_page":"not_requested"})
+            serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":"reused","existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"migration_status":"not_evaluated","prior_external_reset":"not_observable","source_commit":source_commit,"autostart":!old.startup_files.is_empty(),"next_login_service_expected":!old.startup_files.is_empty(),"management_page":"not_requested"})
         );
         return Ok(());
     }
@@ -559,7 +559,7 @@ pub(super) async fn install(package: &Path, no_open: bool) -> Result<()> {
         .then_some("run_active_binary_open_on_local_desktop");
     println!(
         "{}",
-        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":if old.active.is_some() {"upgrade"} else {"new"},"existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"source_commit":source_commit,"data_retained":true,"autostart":!pending.startup_files.is_empty(),"next_login_service_expected":!pending.startup_files.is_empty(),"management_page":management_page,"management_page_next_action":management_page_next_action})
+        serde_json::json!({"installed":true,"version":verified.version,"binary":release.join(binary_name()),"install_kind":if old.active.is_some() {"upgrade"} else {"new"},"existing_configuration_detected":existing_configuration_detected,"data_disposition":if existing_configuration_detected {"existing_data_detected"} else {"none_detected"},"backup_performed":false,"migration_status":"not_evaluated","prior_external_reset":"not_observable","source_commit":source_commit,"data_retained":true,"autostart":!pending.startup_files.is_empty(),"next_login_service_expected":!pending.startup_files.is_empty(),"management_page":management_page,"management_page_next_action":management_page_next_action})
     );
     Ok(())
 }
