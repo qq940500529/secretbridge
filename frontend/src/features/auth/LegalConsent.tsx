@@ -7,7 +7,6 @@ import {
   ExternalLink,
   KeyRound,
   Languages,
-  Scale,
   ShieldAlert,
   X,
 } from "lucide-react";
@@ -104,8 +103,13 @@ export function LegalConsent({
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200">
-                <Scale className="size-4" aria-hidden="true" />
-                SecretBridge Beta
+                <img
+                  src="/secretbridge-logo.png"
+                  alt=""
+                  className="size-5 rounded-md"
+                  aria-hidden="true"
+                />
+                {zh ? "秘桥 · SecretBridge Beta" : "SecretBridge Beta"}
               </div>
               <h1
                 id="legal-consent-title"

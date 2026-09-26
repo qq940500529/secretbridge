@@ -1,4 +1,4 @@
-# SecretBridge MCP / 密桥 MCP
+# SecretBridge MCP / 秘桥 MCP
 
 This server exposes controlled local operations. Discover the current tools and schemas with `tools/list`; the schema and live response are authoritative. A separately installable `secretbridge-operations` Skill explains tool selection and recovery for clients that support Skills. The Skill is optional: these MCP tools remain usable without it.
 

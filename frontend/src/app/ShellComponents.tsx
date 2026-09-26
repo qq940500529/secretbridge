@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import { Activity, CheckCircle2, CircleAlert, ShieldCheck } from "lucide-react";
+import { Activity, CheckCircle2, CircleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import { SecretBridgeApiError, type RecoveredSessionResponse } from "../api";
 import type { Language } from "./preferences";
@@ -99,9 +99,12 @@ export function PairingRequired({
   return (
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-dashed border-slate-300 bg-white/65 p-10 text-center">
       <div className="max-w-lg">
-        <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-cyan-50 text-cyan-700">
-          <ShieldCheck className="size-7" aria-hidden="true" />
-        </div>
+        <img
+          src="/secretbridge-logo.png"
+          alt=""
+          className="mx-auto size-14 rounded-2xl"
+          aria-hidden="true"
+        />
         <p className="mb-0 mt-5 text-sm font-semibold uppercase tracking-[0.14em] text-cyan-700">
           {page}
         </p>

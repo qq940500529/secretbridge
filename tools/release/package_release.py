@@ -38,7 +38,9 @@ DOCUMENTS = (
     "THIRD_PARTY_NOTICES.md",
     "COMMERCIAL_LICENSE.md",
     "README.md",
+    "CLIENT_INTEGRATIONS.md",
 )
+BRAND_ASSETS = ("brand/secretbridge-mark.svg", "brand/secretbridge-logo.png")
 NATIVE_PLATFORMS = {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}
 ARCHITECTURES = {"AMD64": "x86_64", "x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
 
@@ -511,6 +513,10 @@ def build_package(binary: Path, output: Path, allow_dirty: bool = False) -> Path
         )
         for document in DOCUMENTS:
             shutil.copy2(ROOT / document, package / document)
+        for asset in BRAND_ASSETS:
+            brand_asset = package / asset
+            brand_asset.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / asset, brand_asset)
         source = source_snapshot(package / "SOURCE.tar.gz", allow_dirty, epoch)
         (package / "SOURCE.json").write_text(
             json.dumps(source, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
