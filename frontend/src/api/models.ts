@@ -9,6 +9,8 @@ export interface ServiceStatus {
   paired: boolean;
   real_credentials_enabled: boolean;
   background_control_enabled?: boolean;
+  software_version?: string;
+  source_commit?: string | null;
 }
 
 export type ConfigurationStorage = "memory_only" | "sqlite";
@@ -384,6 +386,7 @@ export interface DatabaseConfig {
   query: string;
   columns: string[];
   max_rows: number;
+  expected_min_rows?: number | null;
 }
 
 export type HttpValueSource =

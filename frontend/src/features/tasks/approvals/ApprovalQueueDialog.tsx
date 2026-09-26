@@ -46,6 +46,14 @@ export function ApprovalQueueDialog({
   const [error, setError] = useState<string | null>(null);
   const current = pending[0];
 
+  useEffect(() => {
+    const original = document.title;
+    if (pending.length > 0) document.title = `(${pending.length}) ${original}`;
+    return () => {
+      document.title = original;
+    };
+  }, [pending.length]);
+
   const reload = useCallback(async () => {
     const number = ++requestNumber.current;
     const [approvalResponse, targetResponse] = await Promise.all([
@@ -65,6 +73,7 @@ export function ApprovalQueueDialog({
     if (
       enabled &&
       notificationChannel === "browser" &&
+      document.visibilityState !== "visible" &&
       "Notification" in window &&
       Notification.permission === "granted"
     ) {
@@ -91,7 +100,11 @@ export function ApprovalQueueDialog({
         }
       }
     }
-    if (enabled && next.some((item) => !dismissed.current.has(item.id))) {
+    if (
+      enabled &&
+      document.visibilityState === "visible" &&
+      next.some((item) => !dismissed.current.has(item.id))
+    ) {
       setOpen(true);
     }
     if (next.length === 0) setOpen(false);
@@ -119,6 +132,33 @@ export function ApprovalQueueDialog({
       );
     });
   });
+
+  useEffect(() => {
+    function reconcileOnReturn() {
+      if (document.visibilityState === "visible") {
+        void reload().catch(() => {
+          setError(
+            zh
+              ? "待审批列表读取失败，请重试。"
+              : "Could not load approvals. Retry.",
+          );
+        });
+      }
+    }
+    document.addEventListener("visibilitychange", reconcileOnReturn);
+    window.addEventListener("focus", reconcileOnReturn);
+    // Background event streams may be suspended by the browser. Polling is a
+    // recovery path; the pending badge remains available even without OS
+    // notification permission or foreground focus.
+    const poll = window.setInterval(() => {
+      void reload().catch(() => undefined);
+    }, 15_000);
+    return () => {
+      document.removeEventListener("visibilitychange", reconcileOnReturn);
+      window.removeEventListener("focus", reconcileOnReturn);
+      window.clearInterval(poll);
+    };
+  }, [reload, zh]);
 
   useEffect(() => {
     if (!current?.action_template_id) {
@@ -216,15 +256,15 @@ export function ApprovalQueueDialog({
       <dialog
         ref={dialog}
         aria-labelledby={titleId}
-        className="max-h-[min(90vh,60rem)] w-[min(96vw,68rem)] max-w-none overflow-y-auto rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl backdrop:bg-slate-950/60"
+        className="fixed inset-0 m-auto max-h-[min(90dvh,60rem)] w-[min(96vw,68rem)] max-w-none overflow-hidden rounded-2xl border border-slate-200 bg-white p-0 shadow-2xl backdrop:bg-slate-950/60"
         onCancel={(event) => {
           event.preventDefault();
           if (!busy) defer();
         }}
       >
         {current && (
-          <div className="min-w-0">
-            <header className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
+          <div className="flex max-h-[min(90dvh,60rem)] min-w-0 flex-col">
+            <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
               <div>
                 <h2
                   id={titleId}
@@ -247,7 +287,7 @@ export function ApprovalQueueDialog({
                 {zh ? "稍后处理" : "Review later"}
               </button>
             </header>
-            <section className="min-w-0 space-y-4 px-5 py-5 text-sm">
+            <section className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-5 text-sm">
               <p className="m-0 font-semibold text-slate-950">
                 {canApprove
                   ? template?.name
@@ -328,7 +368,14 @@ export function ApprovalQueueDialog({
                   {error}
                 </p>
               )}
-              <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">
+            </section>
+            <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-4 shadow-[0_-8px_24px_-20px_rgba(15,23,42,0.45)]">
+              <span className="text-xs text-slate-500">
+                {zh
+                  ? "决定前请核对上方操作快照"
+                  : "Review the operation snapshot before deciding"}
+              </span>
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   disabled={busy || !canApprove}
@@ -346,7 +393,7 @@ export function ApprovalQueueDialog({
                   {zh ? "拒绝当前项" : "Deny current"}
                 </button>
               </div>
-            </section>
+            </footer>
           </div>
         )}
       </dialog>

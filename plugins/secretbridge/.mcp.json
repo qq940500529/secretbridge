@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "secretbridge": {
+      "command": "secretbridge",
+      "args": ["--mcp-stdio"]
+    }
+  }
+}

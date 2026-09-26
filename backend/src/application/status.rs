@@ -30,6 +30,8 @@ pub struct StatusResponse {
     pub paired: bool,
     pub real_credentials_enabled: bool,
     pub background_control_enabled: bool,
+    pub software_version: &'static str,
+    pub source_commit: Option<String>,
 }
 
 impl StatusResponse {
@@ -43,6 +45,8 @@ impl StatusResponse {
             paired,
             real_credentials_enabled: false,
             background_control_enabled: false,
+            software_version: env!("CARGO_PKG_VERSION"),
+            source_commit: None,
         }
     }
 
@@ -59,6 +63,8 @@ impl StatusResponse {
             paired,
             real_credentials_enabled: true,
             background_control_enabled: false,
+            software_version: env!("CARGO_PKG_VERSION"),
+            source_commit: None,
         }
     }
 
@@ -75,6 +81,8 @@ impl StatusResponse {
             paired,
             real_credentials_enabled: true,
             background_control_enabled: false,
+            software_version: env!("CARGO_PKG_VERSION"),
+            source_commit: None,
         }
     }
 }

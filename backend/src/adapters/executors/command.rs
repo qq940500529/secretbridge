@@ -590,6 +590,10 @@ struct TerminalExecution<'a> {
     parameters: &'a crate::parameters::ParameterValues,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one PTY execution loop must keep cancellation, bounded output and exit-marker parsing together"
+)]
 async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str, Option<i32>) {
     let TerminalExecution {
         state,
@@ -616,14 +620,25 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
     ) else {
         return ("command_failed", None);
     };
+    // The PTY echo is visible to terminal attachments, not only to this run reader.
+    let private_paths = files
+        .paths
+        .iter()
+        .map(|path| Zeroizing::new(path.to_string_lossy().into_owned()))
+        .collect::<Vec<_>>();
+    broker.add_redaction_secrets(&private_paths);
     if broker.write(command.as_bytes()).is_err() {
         return ("command_failed", None);
     }
 
     let marker = format!("__SECRETBRIDGE_RUN_{}:", run_id.simple());
+    let start_marker = format!("__SECRETBRIDGE_START_{}__", run_id.simple());
     let deadline = tokio::time::sleep(limit);
     tokio::pin!(deadline);
     let mut recent = String::new();
+    let mut prelude = String::new();
+    let mut started = false;
+    let mut cleaner = TerminalOutputCleaner::default();
     let mut pending_output = String::new();
     let result = loop {
         tokio::select! {
@@ -638,10 +653,26 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
             event = events.recv() => match event {
                 Ok(crate::terminal::TerminalEvent::Output { data, .. }) => {
                     let text = String::from_utf8_lossy(&data);
-                    recent.push_str(&text);
-                    pending_output.extend(text.chars().filter(|character| {
-                        !character.is_control() || matches!(character, '\n' | '\r' | '\t')
-                    }));
+                    let body = if started {
+                        text.into_owned()
+                    } else {
+                        prelude.push_str(&text);
+                        let Some(position) = prelude.find(&start_marker) else {
+                            if prelude.len() > 131_072 {
+                                let end = prelude.floor_char_boundary(prelude.len() - 256);
+                                prelude.drain(..end);
+                            }
+                            continue;
+                        };
+                        started = true;
+                        let body = prelude[position + start_marker.len()..]
+                            .trim_start_matches(['\r', '\n'])
+                            .to_owned();
+                        prelude.clear();
+                        body
+                    };
+                    recent.push_str(&body);
+                    pending_output.push_str(&cleaner.feed(&body));
                     if recent.len() > 16_384 {
                         let keep = recent.floor_char_boundary(recent.len() - 8_192);
                         recent.drain(..keep);
@@ -683,6 +714,74 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
         return ("command_cleanup_failed", result.1);
     }
     result
+}
+
+#[derive(Default)]
+struct TerminalOutputCleaner {
+    escape: EscapeState,
+    last_was_cr: bool,
+}
+
+#[derive(Default)]
+enum EscapeState {
+    #[default]
+    Text,
+    Escape,
+    Csi,
+    Osc,
+    OscEscape,
+}
+
+impl TerminalOutputCleaner {
+    fn feed(&mut self, input: &str) -> String {
+        let mut output = String::with_capacity(input.len());
+        for character in input.chars() {
+            match self.escape {
+                EscapeState::Text => match character {
+                    '\u{1b}' => self.escape = EscapeState::Escape,
+                    '\r' => {
+                        output.push('\n');
+                        self.last_was_cr = true;
+                    }
+                    '\n' if self.last_was_cr => self.last_was_cr = false,
+                    '\n' | '\t' => {
+                        output.push(character);
+                        self.last_was_cr = false;
+                    }
+                    value if !value.is_control() => {
+                        output.push(value);
+                        self.last_was_cr = false;
+                    }
+                    _ => self.last_was_cr = false,
+                },
+                EscapeState::Escape => {
+                    self.escape = match character {
+                        '[' => EscapeState::Csi,
+                        ']' => EscapeState::Osc,
+                        _ => EscapeState::Text,
+                    };
+                }
+                EscapeState::Csi => {
+                    if ('@'..='~').contains(&character) {
+                        self.escape = EscapeState::Text;
+                    }
+                }
+                EscapeState::Osc => match character {
+                    '\u{7}' => self.escape = EscapeState::Text,
+                    '\u{1b}' => self.escape = EscapeState::OscEscape,
+                    _ => {}
+                },
+                EscapeState::OscEscape => {
+                    self.escape = if character == '\\' {
+                        EscapeState::Text
+                    } else {
+                        EscapeState::Osc
+                    };
+                }
+            }
+        }
+        output
+    }
 }
 
 fn terminal_exit_marker(output: &str, marker: &str) -> Option<i32> {
@@ -757,7 +856,14 @@ fn terminal_command_posix(
     marker: &str,
 ) -> Option<Zeroizing<String>> {
     let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
-    let mut command = format!(" cd -- {} && ", quote(&config.working_directory));
+    // Assemble the marker at runtime so an echoed command cannot impersonate it.
+    let start_suffix = marker
+        .trim_start_matches("__SECRETBRIDGE_RUN_")
+        .trim_end_matches(':');
+    let mut command = format!(
+        "printf '%s%s\\n' '__SECRETBRIDGE_' 'START_{start_suffix}__'; cd -- {} && ",
+        quote(&config.working_directory)
+    );
     let mut stdin = stdin_path.map(|path| quote(&path.to_string_lossy()));
     for (slot, path) in config.slots.iter().zip(secret_paths) {
         let path = quote(&path.to_string_lossy());
@@ -812,8 +918,11 @@ fn terminal_command_powershell(
     marker: &str,
 ) -> Option<Zeroizing<String>> {
     let quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+    let start_suffix = marker
+        .trim_start_matches("__SECRETBRIDGE_RUN_")
+        .trim_end_matches(':');
     let mut command = format!(
-        "Set-Location -LiteralPath {}; ",
+        "Write-Output ('__SECRETBRIDGE_'+'START_{start_suffix}__'); Set-Location -LiteralPath {}; ",
         quote(&config.working_directory)
     );
     let mut restore = String::new();

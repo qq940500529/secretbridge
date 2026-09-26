@@ -85,7 +85,7 @@ export function OperationsView({
             failed: "失败",
           } satisfies Record<RunState, string>,
           results: {
-            command_ok: "程序执行成功",
+            command_ok: "程序正常退出；业务结果尚未验证",
             command_failed: "程序执行失败",
             command_cleanup_failed: "临时凭据文件清理失败，请检查本机权限",
             synthetic_ok: "合成检查正常",
@@ -138,7 +138,7 @@ export function OperationsView({
             failed: "Failed",
           } satisfies Record<RunState, string>,
           results: {
-            command_ok: "Program completed",
+            command_ok: "Program exited normally; business result not verified",
             command_failed: "Program failed",
             command_cleanup_failed:
               "Temporary credential cleanup failed; check local permissions",
@@ -381,9 +381,12 @@ export function OperationsView({
                 <option value="">{text.choose}</option>
                 {availableApprovals.map((approval) => (
                   <option key={approval.id} value={approval.id}>
-                    {approval.action_template_id
+                    {(approval.action_template_id
                       ? templateNames.get(approval.action_template_id)
-                      : approval.operation}{" "}
+                      : undefined) ??
+                      (language === "zh-CN"
+                        ? "已移除的操作模板"
+                        : "Removed operation template")}{" "}
                     · {targetNames.get(approval.target_id)} ·{" "}
                     {text.approvalVersion} {approval.version}
                   </option>
@@ -473,7 +476,9 @@ export function OperationsView({
                       </span>
                       <span className="text-xs font-medium text-slate-500">
                         {templateNames.get(run.action_template_id) ??
-                          run.operation}
+                          (language === "zh-CN"
+                            ? "已移除的操作模板"
+                            : "Removed operation template")}
                       </span>
                     </div>
                     <h3 className="mb-0 mt-2 text-base font-semibold text-slate-950">
@@ -531,16 +536,27 @@ export function OperationsView({
                     )}
                   </div>
                 </div>
-                {expandedRunId === run.id && (
-                  <pre className="mt-3 whitespace-pre-wrap break-all text-xs text-slate-600">
-                    {JSON.stringify(
-                      approvals.find((a) => a.id === run.approval_id)
-                        ?.parameters,
-                      null,
-                      2,
-                    )}
-                  </pre>
-                )}
+                {expandedRunId === run.id &&
+                  approvals.find((a) => a.id === run.approval_id)?.parameters &&
+                  Object.keys(
+                    approvals.find((a) => a.id === run.approval_id)!.parameters,
+                  ).length > 0 && (
+                    <details className="mt-3 text-xs text-slate-600">
+                      <summary className="cursor-pointer font-medium">
+                        {language === "zh-CN"
+                          ? "查看普通参数"
+                          : "View ordinary parameters"}
+                      </summary>
+                      <pre className="whitespace-pre-wrap break-all">
+                        {JSON.stringify(
+                          approvals.find((a) => a.id === run.approval_id)
+                            ?.parameters,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  )}
                 {run.operation === "command_execution" &&
                   expandedRunId === run.id && (
                     <RunOutputView

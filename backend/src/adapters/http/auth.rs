@@ -11,7 +11,25 @@ pub(crate) async fn status(State(state): State<AppState>) -> Json<StatusResponse
     let paired = state.active_session_count() > 0;
     let mut status = StatusResponse::controlled_operations(paired, state.configuration_storage);
     status.background_control_enabled = state.runtime_control.is_some();
+    status.source_commit = release_source_commit();
     Json(status)
+}
+
+fn release_source_commit() -> Option<String> {
+    let release = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .parent()?
+        .to_path_buf();
+    let path = release.join("SOURCE.json");
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 65_536 {
+        return None;
+    }
+    let source: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let commit = source.get("base_commit")?.as_str()?;
+    (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| commit.to_owned())
 }
 
 pub(crate) async fn pair(

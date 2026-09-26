@@ -187,6 +187,10 @@ try {
       .locator("nav[aria-label='主导航']")
       .getByRole("button", { name, exact: true });
   await nav("设置").click();
+  await page
+    .getByRole("navigation", { name: "工作区分区" })
+    .getByRole("button", { name: "数据与诊断", exact: true })
+    .click();
   await page.getByRole("heading", { name: "数据维护" }).waitFor();
   assert.equal(
     await page

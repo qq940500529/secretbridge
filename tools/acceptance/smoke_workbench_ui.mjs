@@ -40,6 +40,7 @@ try {
     grant_expires_at_unix_ms: null,
   };
   let notificationChannel = "browser";
+  let rejectSession = false;
   let failTaskSave = true;
   let outputReads = 0;
   await page.route("**/api/v1/**", async (route) => {
@@ -74,6 +75,8 @@ try {
         configuration_storage: "sqlite",
         real_credentials_enabled: true,
         paired: true,
+        software_version: "0.3.0-beta.2",
+        source_commit: "a".repeat(40),
       };
     else if (path === "/api/v1/session/pair")
       body = {
@@ -81,12 +84,22 @@ try {
         token_type: "Bearer",
         expires_in_seconds: 3600,
       };
-    else if (path === "/api/v1/session" && method === "DELETE") {
+    else if (path === "/api/v1/session/pin") {
+      assert.equal(input.pin, "synthetic-pin-only");
+      body = {
+        session_token: "synthetic-session",
+        token_type: "Bearer",
+        expires_in_seconds: 3600,
+      };
+    } else if (path === "/api/v1/session" && method === "DELETE") {
       await route.fulfill({ status: 204 });
       return;
-    } else if (path === "/api/v1/session")
-      body = { authenticated: true, expires_in_seconds: 3600 };
-    else if (path === "/api/v1/session/methods")
+    } else if (path === "/api/v1/session") {
+      if (rejectSession) {
+        status = 401;
+        body = { code: "unauthorized" };
+      } else body = { authenticated: true, expires_in_seconds: 3600 };
+    } else if (path === "/api/v1/session/methods")
       body = {
         pin_enabled: true,
         totp_enabled: false,
@@ -276,13 +289,20 @@ try {
       .getByRole("navigation", { name: "主导航" })
       .getByRole("button")
       .count(),
-    9,
+    8,
   );
   const nav = (name) =>
     page
       .getByRole("navigation", { name: "主导航" })
       .getByRole("button", { name, exact: true });
-  await nav("凭据").click();
+  const catalog = async (section) => {
+    await nav("连接与凭据").click();
+    await page
+      .getByRole("navigation", { name: "工作区分区" })
+      .getByRole("button", { name: section, exact: true })
+      .click();
+  };
+  await catalog("凭据");
   const add = page.getByRole("button", { name: "添加凭据引用", exact: true });
   await add.click();
   const drawer = page.locator("dialog[data-presentation='side-drawer']");
@@ -336,12 +356,13 @@ try {
     addHandle,
     { timeout: 2_000 },
   );
+  await page.getByRole("button", { name: "更换秘密值" }).click();
   await page.getByLabel("输入新秘密值").fill("synthetic-secret-only");
   await page
     .getByRole("button", { name: "保存到系统凭据库", exact: true })
     .click();
   await page.getByText("已安全保存", { exact: true }).waitFor();
-  assert.equal(await page.getByLabel("输入新秘密值").inputValue(), "");
+  await page.getByText("秘密值已保存在系统凭据库，不会在此显示。").waitFor();
   const editCredential = page.getByRole("button", {
     name: "编辑",
     exact: true,
@@ -355,7 +376,7 @@ try {
     editHandle,
     { timeout: 2_000 },
   );
-  await nav("连接").click();
+  await catalog("连接");
   await page.getByRole("button", { name: "新建连接", exact: true }).click();
   await page.getByLabel("连接名称").fill("工作台测试连接");
   await page.getByLabel("连接类型").selectOption("http_service");
@@ -430,6 +451,21 @@ try {
       await review.evaluate((element) => element.parentElement?.open),
       true,
     );
+    const reviewPane = review.locator("..").locator("pre");
+    const reviewStyle = await reviewPane.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        maxHeight: style.maxHeight,
+        classes: element.className,
+      };
+    });
+    assert.notEqual(
+      reviewStyle.background,
+      "rgba(0, 0, 0, 0)",
+      JSON.stringify(reviewStyle),
+    );
+    assert.equal(Number.parseInt(reviewStyle.maxHeight, 10), 256);
     assert.equal(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth + 1,
@@ -478,6 +514,10 @@ try {
   );
   await page.getByRole("heading", { name: "安全日志" }).waitFor();
   await page.getByRole("heading", { name: "受控运行已完成" }).waitFor();
+  await page.getByRole("button", { name: "查看此运行输出" }).first().click();
+  await page.getByRole("heading", { name: "运行与终端历史" }).waitFor();
+  await page.getByLabel("搜索运行、审批、终端或时间").fill("approval");
+  await page.getByRole("button", { name: "安全日志", exact: true }).click();
   await page.getByLabel("来源").selectOption("approval");
   await page
     .getByRole("list", { name: "安全日志时间线" })
@@ -507,7 +547,7 @@ try {
       .count(),
     0,
   );
-  await nav("连接").click();
+  await catalog("连接");
   await page.getByRole("button", { name: /工作台测试任务 · 完成/ }).waitFor();
   await page.getByLabel("搜索记录").fill("不存在");
   await page.getByText("没有匹配记录", { exact: true }).waitFor();
@@ -594,7 +634,7 @@ try {
     const scaleDurations = {
       tasks_ms: await searchAndOpen("任务", "规模任务 199", "规模任务 199"),
       connections_ms: await searchAndOpen(
-        "连接",
+        "连接与凭据",
         "规模连接 099",
         "规模连接 099",
       ),
@@ -618,7 +658,7 @@ try {
     console.log(
       `Personal-scale UI passed: 100 connections, 200 tasks and 500 runs (${JSON.stringify(scaleDurations)}).`,
     );
-    await nav("连接").click();
+    await catalog("连接");
   }
   if (process.env.SECRETBRIDGE_UI_SCREENSHOT)
     await page.screenshot({
@@ -687,6 +727,29 @@ try {
   await page.reload();
   const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
   await staleQueue.waitFor();
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const box = await staleQueue.boundingBox();
+    const approveBox = await staleQueue
+      .getByRole("button", { name: "批准当前项" })
+      .boundingBox();
+    assert.ok(box && approveBox);
+    assert.ok(
+      Math.abs(box.x + box.width / 2 - viewport.width / 2) <= 2,
+      "Approval modal is horizontally centered",
+    );
+    assert.ok(
+      Math.abs(box.y + box.height / 2 - viewport.height / 2) <= 2,
+      "Approval modal is vertically centered",
+    );
+    assert.ok(
+      approveBox.y + approveBox.height <= viewport.height,
+      "Approval decision remains in the viewport",
+    );
+  }
   await staleQueue
     .getByText("操作快照不可用或已变化", { exact: true })
     .waitFor();
@@ -711,10 +774,26 @@ try {
   await staleQueue.waitFor({ state: "hidden" });
   await nav("设置").click();
   await page
+    .getByRole("navigation", { name: "工作区分区" })
+    .getByRole("button", { name: "身份与配对", exact: true })
+    .click();
+  await page
     .getByRole("button", { name: "解除当前页面配对", exact: true })
     .click();
-  await nav("凭据").click();
+  await nav("连接与凭据").click();
   await page.getByRole("heading", { name: "登录本机管理页" }).waitFor();
+  await page.getByLabel("本机 PIN 或口令").fill("synthetic-pin-only");
+  await page.getByRole("button", { name: "验证并进入" }).click();
+  await page.getByText("已配对", { exact: true }).waitFor();
+  rejectSession = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.getByRole("heading", { name: "登录本机管理页" }).waitFor();
+  assert.equal(
+    await page.evaluate(() =>
+      sessionStorage.getItem("secretbridge.page-session.v1"),
+    ),
+    null,
+  );
   assert.deepEqual(errors, []);
   console.log(
     `Workbench UI smoke passed (${browserName}): six sections, credential/connection/task/authorization/run/result workflow, retry, focus, search, language, narrow layouts and unpairing.`,

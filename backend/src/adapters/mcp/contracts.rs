@@ -253,8 +253,21 @@ pub(super) struct ConnectionSummary {
     pub(super) address: Option<String>,
     pub(super) username: Option<String>,
     pub(super) credential_id: Option<String>,
+    #[schemars(
+        description = "Non-secret PostgreSQL metadata. TLS policy applies only to the built-in PostgreSQL connection check; a generic program command must configure its own transport."
+    )]
+    pub(super) postgres_check: Option<PostgresCheckSummary>,
     pub(super) insecure_protocol_explicitly_allowed: bool,
     pub(super) version: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema, Serialize)]
+pub(super) struct PostgresCheckSummary {
+    pub(super) host: String,
+    pub(super) port: u16,
+    pub(super) database: String,
+    pub(super) username: String,
+    pub(super) tls_mode: String,
 }
 
 impl From<crate::catalog::Target> for ConnectionSummary {
@@ -278,6 +291,13 @@ impl From<crate::catalog::Target> for ConnectionSummary {
             address: value.address,
             username: value.username,
             credential_id: value.credential_reference_id.map(|id| id.to_string()),
+            postgres_check: value.postgres.map(|postgres| PostgresCheckSummary {
+                host: postgres.host,
+                port: postgres.port,
+                database: postgres.database,
+                username: postgres.username,
+                tls_mode: "verify_full".to_owned(),
+            }),
             insecure_protocol_explicitly_allowed: value.allow_insecure_protocol,
             version: value.version,
         }

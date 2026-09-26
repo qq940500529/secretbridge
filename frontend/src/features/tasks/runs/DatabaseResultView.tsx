@@ -5,6 +5,12 @@ export function parseDatabaseResult(text: string): {
   rows: (string | null)[][];
   truncated: boolean;
   cleanup_ok: boolean;
+  validation_status?:
+    | "verified"
+    | "not_configured"
+    | "expected_rows_missing"
+    | "incomplete_output";
+  expected_min_rows?: number | null;
 } | null {
   try {
     const value = JSON.parse(text);
@@ -35,6 +41,28 @@ export function DatabaseResultView({
 }) {
   return (
     <div className="space-y-3">
+      {result.validation_status && (
+        <p
+          role="status"
+          className={`rounded-lg px-3 py-2 text-sm ${result.validation_status === "verified" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}
+        >
+          {result.validation_status === "verified"
+            ? zh
+              ? "结果已按预设条件验证。"
+              : "Result meets the configured expectation."
+            : result.validation_status === "expected_rows_missing"
+              ? zh
+                ? `结果未达预期：至少需要 ${result.expected_min_rows ?? 1} 行。`
+                : `Result below expectation: at least ${result.expected_min_rows ?? 1} row(s) required.`
+              : result.validation_status === "incomplete_output"
+                ? zh
+                  ? "输出被截断，无法确认是否满足预期。"
+                  : "Output was truncated; the expectation cannot be confirmed."
+                : zh
+                  ? "进程已完成，但未配置业务行数校验。"
+                  : "Process completed; no business row-count validation was configured."}
+        </p>
+      )}
       <p className="text-xs text-slate-600">
         {zh
           ? `返回 ${result.rows.length} 行。数值以文本显示以保留精度。`

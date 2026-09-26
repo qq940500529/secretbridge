@@ -4,6 +4,7 @@
 import type { Language } from "./preferences";
 
 export interface Copy {
+  catalog: string;
   credentials: string;
   targets: string;
   operations: string;
@@ -49,6 +50,7 @@ export interface Copy {
 
 export const copy: Record<Language, Copy> = {
   "zh-CN": {
+    catalog: "连接与凭据",
     credentials: "凭据",
     targets: "连接",
     operations: "任务",
@@ -93,6 +95,7 @@ export const copy: Record<Language, Copy> = {
     feedback: "反馈问题",
   },
   en: {
+    catalog: "Connections & credentials",
     credentials: "Credentials",
     targets: "Connections",
     operations: "Tasks",

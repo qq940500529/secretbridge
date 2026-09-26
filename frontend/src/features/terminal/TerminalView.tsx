@@ -59,6 +59,11 @@ const labels = {
     stop: "终止并移除",
     sessions: "终端会话",
     empty: "还没有终端会话。请在上方选择 Shell 后创建。",
+    emptyGuide: "创建终端后，输出与输入会在这里显示。关闭浏览器不会终止会话。",
+    advanced: "工作目录与环境变量",
+    trustedContext: "可承接受控凭据命令",
+    unverifiedContext:
+      "普通输入后仅供交互；如需再次使用凭据，请新建终端并重新审批。",
     unavailable: "当前系统没有探测到可用的受支持 Shell。",
     disconnected: "窗口已断开",
     connecting: "连接中",
@@ -102,6 +107,12 @@ const labels = {
     stop: "Terminate and remove",
     sessions: "Terminal sessions",
     empty: "No terminal sessions yet. Select a shell above and create one.",
+    emptyGuide:
+      "Create a terminal to see its output and input here. Closing the browser will not end the session.",
+    advanced: "Working directory & environment",
+    trustedContext: "Ready for approved credential operations",
+    unverifiedContext:
+      "After ordinary input, this shell is for interaction only. Create a new terminal and approval for another credential operation.",
     unavailable: "No supported shell was detected on this system.",
     disconnected: "Window detached",
     connecting: "Connecting",
@@ -356,6 +367,16 @@ export function TerminalView({
         socket?.readyState === WebSocket.OPEN
       ) {
         socket.send(JSON.stringify({ type: "input", data }));
+        const currentId = selectedRef.current;
+        if (currentId) {
+          setTerminals((current) =>
+            current.map((item) =>
+              item.id === currentId
+                ? { ...item, interactive_unverified: true }
+                : item,
+            ),
+          );
+        }
       }
     });
     const resize = new ResizeObserver(() => {
@@ -498,7 +519,7 @@ export function TerminalView({
       )}
 
       <form
-        className="mb-5 border-y border-slate-200 bg-white px-4 py-4"
+        className="mb-5 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
         onSubmit={(event) => {
           event.preventDefault();
           void handleCreate();
@@ -519,7 +540,7 @@ export function TerminalView({
         {capabilities && capabilities.shells.length === 0 ? (
           <p className="m-0 text-sm text-rose-700">{text.unavailable}</p>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-4">
+          <div className="grid gap-4 lg:grid-cols-2">
             <label className="text-sm font-medium text-slate-700">
               {text.name}
               <input
@@ -546,33 +567,52 @@ export function TerminalView({
                 ))}
               </select>
             </label>
-            <label className="text-sm font-medium text-slate-700 lg:col-span-2">
-              {text.workingDirectory}
-              <input
-                value={workingDirectory}
-                onChange={(event) => setWorkingDirectory(event.target.value)}
-                placeholder={text.workingDirectoryPlaceholder}
-                className="mt-1 block h-10 w-full rounded-md border border-slate-300 px-3 font-mono text-sm outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-100"
-              />
-            </label>
-            <label className="text-sm font-medium text-slate-700 lg:col-span-4">
-              {text.environment}
-              <textarea
-                value={environment}
-                onChange={(event) => setEnvironment(event.target.value)}
-                placeholder={text.environmentPlaceholder}
-                rows={2}
-                className="mt-1 block w-full resize-y rounded-md border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-100"
-              />
-              <span className="mt-1 block text-xs font-normal text-slate-500">
-                {text.environmentHint}
-              </span>
-            </label>
+            <details className="lg:col-span-2 rounded-xl border border-slate-200 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+                {text.advanced}
+              </summary>
+              <div className="mt-4 space-y-4">
+                <label className="block text-sm font-medium text-slate-700">
+                  {text.workingDirectory}
+                  <input
+                    value={workingDirectory}
+                    onChange={(event) =>
+                      setWorkingDirectory(event.target.value)
+                    }
+                    placeholder={text.workingDirectoryPlaceholder}
+                    className="mt-1 block h-10 w-full rounded-md border border-slate-300 px-3 font-mono text-sm outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  {text.environment}
+                  <textarea
+                    value={environment}
+                    onChange={(event) => setEnvironment(event.target.value)}
+                    placeholder={text.environmentPlaceholder}
+                    rows={2}
+                    className="mt-1 block w-full resize-y rounded-md border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-100"
+                  />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    {text.environmentHint}
+                  </span>
+                </label>
+              </div>
+            </details>
           </div>
         )}
       </form>
 
-      <div className="grid gap-5 xl:grid-cols-[20rem_minmax(0,1fr)]">
+      {terminals.length === 0 && !selectedId && (
+        <div className="mb-5 rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
+          <p className="m-0 text-base font-semibold text-slate-800">
+            {text.empty}
+          </p>
+          <p className="mb-0 mt-2 text-sm text-slate-500">{text.emptyGuide}</p>
+        </div>
+      )}
+      <div
+        className={`grid gap-5 xl:grid-cols-[20rem_minmax(0,1fr)] ${terminals.length === 0 && !selectedId ? "hidden" : ""}`}
+      >
         <aside className="border border-slate-200 bg-white p-4">
           <h2 className="mb-3 mt-0 text-sm font-semibold text-slate-900">
             {text.sessions}
@@ -608,6 +648,15 @@ export function TerminalView({
                     ? ` · ${text.exitCode} ${terminal.exit_code}`
                     : ""}
                 </span>
+                {terminal.status === "running" && (
+                  <span
+                    className={`mt-1 block text-xs ${terminal.interactive_unverified ? "text-amber-700" : "text-emerald-700"}`}
+                  >
+                    {terminal.interactive_unverified
+                      ? text.unverifiedContext
+                      : text.trustedContext}
+                  </span>
+                )}
               </button>
             ))}
             {terminals.length === 0 && (

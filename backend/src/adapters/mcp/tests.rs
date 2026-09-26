@@ -296,6 +296,26 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
             postgres: None,
         })
         .expect("create connection metadata");
+    state
+        .catalog
+        .create_target(&CreateTarget {
+            name: "Synthetic PostgreSQL check".to_owned(),
+            kind: TargetKind::Database,
+            environment: TargetEnvironment::Test,
+            description: None,
+            address: None,
+            username: None,
+            allow_insecure_protocol: false,
+            credential_reference_id: Some(credential.id),
+            postgres: Some(crate::catalog::PostgresTargetConfig {
+                host: "database.example.test".to_owned(),
+                port: 6543,
+                database: "sample".to_owned(),
+                username: "sample_user".to_owned(),
+                tls_mode: crate::catalog::PostgresTlsMode::VerifyFull,
+            }),
+        })
+        .expect("create PostgreSQL check metadata");
     let terminal = state
         .terminals
         .create(&crate::terminal::CreateTerminal {
@@ -315,7 +335,23 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
         .expect("list safe catalog");
     let catalog = catalog.structured_content.expect("catalog content");
     assert_eq!(catalog["credentials"][0]["address"], "service.example.test");
-    assert_eq!(catalog["connections"][0]["username"], "synthetic-user");
+    let connections = catalog["connections"].as_array().expect("connections");
+    let command_target = connections
+        .iter()
+        .find(|item| item["id"] == target.id.to_string())
+        .expect("command target");
+    assert_eq!(command_target["username"], "synthetic-user");
+    let postgres_target = connections
+        .iter()
+        .find(|item| item["name"] == "Synthetic PostgreSQL check")
+        .expect("PostgreSQL metadata");
+    assert_eq!(
+        postgres_target["postgres_check"]["host"],
+        "database.example.test"
+    );
+    assert_eq!(postgres_target["postgres_check"]["port"], 6543);
+    assert_eq!(postgres_target["postgres_check"]["database"], "sample");
+    assert_eq!(postgres_target["postgres_check"]["tls_mode"], "verify_full");
 
     let executable = std::env::current_exe()
         .expect("test executable")

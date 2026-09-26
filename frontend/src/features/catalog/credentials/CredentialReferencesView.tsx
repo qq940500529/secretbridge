@@ -57,6 +57,8 @@ export function CredentialReferencesView({
           listTitle: "已登记的引用",
           states: { not_configured: "未配置", available: "已安全保存" },
           secret: "输入新秘密值",
+          editSecret: "更换秘密值",
+          cancelSecret: "取消更换",
           secretPlaceholder: "保存后立即从页面清空",
           setSecret: "保存到系统凭据库",
           clearSecret: "清除秘密",
@@ -86,6 +88,8 @@ export function CredentialReferencesView({
             available: "Stored securely",
           },
           secret: "Enter a new secret",
+          editSecret: "Replace secret",
+          cancelSecret: "Cancel replacement",
           secretPlaceholder: "Cleared from the page after save",
           setSecret: "Save to OS credential store",
           clearSecret: "Clear secret",
@@ -110,6 +114,7 @@ export function CredentialReferencesView({
   const editorReturnFocus = useRef<HTMLElement | null>(null);
   const [secretDrafts, setSecretDrafts] = useState<Record<string, string>>({});
   const [secretBusyId, setSecretBusyId] = useState<string | null>(null);
+  const [editingSecretId, setEditingSecretId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -213,6 +218,7 @@ export function CredentialReferencesView({
         current.map((entry) => (entry.id === item.id ? updated : entry)),
       );
       setSecretDrafts((current) => ({ ...current, [item.id]: "" }));
+      setEditingSecretId(null);
     } catch (error) {
       if (
         error instanceof SecretBridgeApiError &&
@@ -336,27 +342,41 @@ export function CredentialReferencesView({
             )}
           </select>
         </Field>
-        <Field label={text.address} htmlFor="credential-address">
-          <input
-            id="credential-address"
-            maxLength={2048}
-            value={address}
-            onChange={(event) => setAddress(event.target.value)}
-            placeholder={text.addressPlaceholder}
-            className={inputClass}
-          />
-        </Field>
-        <Field label={text.username} htmlFor="credential-username">
-          <input
-            id="credential-username"
-            maxLength={256}
-            autoComplete="username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            placeholder={text.usernamePlaceholder}
-            className={inputClass}
-          />
-        </Field>
+        <details className="rounded-xl border border-slate-200 px-4 py-3 text-sm">
+          <summary className="cursor-pointer font-medium text-slate-700">
+            {language === "zh-CN"
+              ? "高级描述字段"
+              : "Advanced descriptive fields"}
+          </summary>
+          <p className="text-slate-600">
+            {language === "zh-CN"
+              ? "主机和登录账号请优先在连接中维护；这里的可选字段仅描述凭据，不会覆盖连接设置。"
+              : "Maintain host and login account on the connection. These optional fields only describe the credential and do not override connection settings."}
+          </p>
+          <div className="space-y-4">
+            <Field label={text.address} htmlFor="credential-address">
+              <input
+                id="credential-address"
+                maxLength={2048}
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                placeholder={text.addressPlaceholder}
+                className={inputClass}
+              />
+            </Field>
+            <Field label={text.username} htmlFor="credential-username">
+              <input
+                id="credential-username"
+                maxLength={256}
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder={text.usernamePlaceholder}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+        </details>
         <Field label={text.purpose} htmlFor="credential-purpose">
           <textarea
             id="credential-purpose"
@@ -429,51 +449,93 @@ export function CredentialReferencesView({
               </div>
             </div>
             <div className="mt-4 border-t border-slate-100 pt-4">
-              <label
-                htmlFor={`secret-${item.id}`}
-                className="mb-1.5 block text-xs font-semibold text-slate-600"
-              >
-                {text.secret}
-              </label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <CredentialSecretInput
-                  id={`secret-${item.id}`}
-                  kind={item.kind}
-                  value={secretDrafts[item.id] ?? ""}
-                  onChange={(value) =>
-                    setSecretDrafts((current) => ({
-                      ...current,
-                      [item.id]: value,
-                    }))
-                  }
-                  onError={() => setError(text.secretError)}
-                  placeholder={text.secretPlaceholder}
-                  className={inputClass}
-                  zh={language === "zh-CN"}
-                  disabled={secretBusyId === item.id}
-                />
-                <button
-                  type="button"
-                  disabled={
-                    secretBusyId === item.id || !(secretDrafts[item.id] ?? "")
-                  }
-                  onClick={() => void saveSecret(item)}
-                  className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
-                >
-                  {text.setSecret}
-                </button>
-                {item.secret_state === "available" && (
+              {editingSecretId !== item.id ? (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="m-0 text-sm text-slate-600">
+                    {item.secret_state === "available"
+                      ? language === "zh-CN"
+                        ? "秘密值已保存在系统凭据库，不会在此显示。"
+                        : "Stored in the OS credential store; the value is never shown here."
+                      : language === "zh-CN"
+                        ? "尚未保存秘密值。"
+                        : "No secret has been saved yet."}
+                  </p>
+                  <button
+                    type="button"
+                    className="workbench-button"
+                    onClick={() => setEditingSecretId(item.id)}
+                  >
+                    {text.editSecret}
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <label
+                    htmlFor={`secret-${item.id}`}
+                    className="mb-1.5 block text-xs font-semibold text-slate-600"
+                  >
+                    {text.secret}
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <CredentialSecretInput
+                      id={`secret-${item.id}`}
+                      kind={item.kind}
+                      value={secretDrafts[item.id] ?? ""}
+                      onChange={(value) =>
+                        setSecretDrafts((current) => ({
+                          ...current,
+                          [item.id]: value,
+                        }))
+                      }
+                      onError={() => setError(text.secretError)}
+                      placeholder={text.secretPlaceholder}
+                      className={inputClass}
+                      zh={language === "zh-CN"}
+                      disabled={secretBusyId === item.id}
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        secretBusyId === item.id ||
+                        !(secretDrafts[item.id] ?? "")
+                      }
+                      onClick={() => void saveSecret(item)}
+                      className="shrink-0 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-50"
+                    >
+                      {text.setSecret}
+                    </button>
+                    <button
+                      type="button"
+                      className="workbench-button"
+                      onClick={() => {
+                        setEditingSecretId(null);
+                        setSecretDrafts((current) => ({
+                          ...current,
+                          [item.id]: "",
+                        }));
+                      }}
+                    >
+                      {text.cancelSecret}
+                    </button>
+                  </div>
+                </>
+              )}
+              {item.secret_state === "available" && (
+                <details className="mt-4 border-t border-slate-100 pt-3 text-xs text-slate-500">
+                  <summary className="cursor-pointer">
+                    {language === "zh-CN" ? "危险操作" : "Danger zone"}
+                  </summary>
                   <button
                     type="button"
                     disabled={secretBusyId === item.id}
                     onClick={() => void clearSecret(item)}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                    className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-200 px-3 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
                   >
                     <Eraser className="size-4" />
                     {text.clearSecret}
                   </button>
-                )}
-              </div>
+                </details>
+              )}
             </div>
           </article>
         ))}

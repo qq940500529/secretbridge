@@ -511,6 +511,9 @@ def build_package(binary: Path, output: Path, allow_dirty: bool = False) -> Path
             ROOT / "skills" / "secretbridge-operations",
             package / "skills" / "secretbridge-operations",
         )
+        # Codex integration is preassembled at build time. Installation may
+        # personalize its non-secret MCP path, but must not compile a plugin.
+        shutil.copytree(ROOT / "plugins" / "secretbridge", package / "plugins" / "secretbridge")
         for document in DOCUMENTS:
             shutil.copy2(ROOT / document, package / document)
         for asset in BRAND_ASSETS:

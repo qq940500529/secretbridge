@@ -47,7 +47,7 @@ export function CommandReview({
             ? "查看数据库、查询与结果范围"
             : "Review database, query and result scope"}
         </summary>
-        <pre className="mt-3 overflow-auto whitespace-pre-wrap break-all text-xs">
+        <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
           {JSON.stringify(
             {
               ...config.database,
@@ -71,7 +71,7 @@ export function CommandReview({
         <summary className="cursor-pointer text-sm font-semibold text-cyan-800">
           {zh ? "查看 Git 仓库与操作" : "Review Git repository and operation"}
         </summary>
-        <pre className="mt-3 overflow-auto text-xs">
+        <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
           {JSON.stringify(
             {
               program: config.program,
@@ -200,7 +200,7 @@ export function CommandReview({
         <p className="mt-3 break-all font-mono text-xs">
           {config.http.method} {config.http.url}
         </p>
-        <pre className="mt-3 overflow-auto text-xs">
+        <pre className="mt-3 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs leading-5 text-slate-100">
           {JSON.stringify(
             {
               headers: config.http.headers,

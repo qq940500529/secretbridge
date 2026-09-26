@@ -5,6 +5,20 @@
 @import "@xterm/xterm/css/xterm.css";
 
 :root {
+  --sb-ink: #172033;
+  --sb-muted: #526276;
+  --sb-canvas: #f4f7fb;
+  --sb-surface: #ffffff;
+  --sb-line: #e2e8f0;
+  --sb-brand: #0e7490;
+  --sb-brand-hover: #155e75;
+  --sb-focus: #0ea5e9;
+  --sb-space-1: 0.25rem;
+  --sb-space-2: 0.5rem;
+  --sb-space-3: 0.75rem;
+  --sb-space-4: 1rem;
+  --sb-space-6: 1.5rem;
+  --sb-space-8: 2rem;
   font-family:
     Inter,
     ui-sans-serif,
@@ -14,8 +28,8 @@
     "Segoe UI",
     "Microsoft YaHei",
     sans-serif;
-  color: #172033;
-  background: #f4f7fb;
+  color: var(--sb-ink);
+  background: var(--sb-canvas);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -42,7 +56,7 @@ select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: 3px solid rgba(14, 165, 233, 0.35);
+  outline: 3px solid color-mix(in srgb, var(--sb-focus) 35%, transparent);
   outline-offset: 2px;
 }
 
@@ -118,9 +132,12 @@ summary:focus-visible,
   font-weight: 600;
 }
 .workbench-primary {
-  background: #0e7490;
+  background: var(--sb-brand);
   color: white;
-  border-color: #0e7490;
+  border-color: var(--sb-brand);
+}
+.workbench-primary:hover:not(:disabled) {
+  background: var(--sb-brand-hover);
 }
 .workbench-button {
   background: white;

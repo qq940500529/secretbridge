@@ -87,6 +87,10 @@ async function openCase({
       .getByRole("navigation", { name: "主导航" })
       .getByRole("button", { name: "设置", exact: true })
       .click();
+    await page
+      .getByRole("navigation", { name: "工作区分区" })
+      .getByRole("button", { name: "身份与配对", exact: true })
+      .click();
     await page.getByRole("heading", { name: "浏览器身份验证" }).waitFor();
   }
   if (initialMethod !== "pairing_link") await showSettings();

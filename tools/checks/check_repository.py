@@ -74,6 +74,7 @@ TEXT_SUFFIXES = {
 }
 BINARY_ASSETS = {
     "brand/secretbridge-logo.png": (b"\x89PNG\r\n\x1a\n", 2_000_000),
+    "plugins/secretbridge/assets/secretbridge-logo.png": (b"\x89PNG\r\n\x1a\n", 2_000_000),
     ".github/assets/social-preview.png": (b"\x89PNG\r\n\x1a\n", 1_000_000),
 }
 SKIP_PARTS = {".git", ".ruff_cache", "__pycache__", "dist", "node_modules", "target"}

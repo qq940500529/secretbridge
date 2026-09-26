@@ -52,6 +52,7 @@ flowchart TD
 | 威胁模型与边界 | [安全模型与验收](./security/安全模型.md) |
 | 凭据泄漏和原生凭据库回归 | [自动化安全验收](./testing/自动化安全验收.md) |
 | 跨平台与界面 | [跨平台与 UI 规范](./development/跨平台与UI规范.md) |
+| 工作台信息架构与视觉体系 | [工作台设计体系](./development/工作台设计体系.md) |
 | 支持范围与资源基线 | [支持矩阵与性能基线](./release/支持矩阵与性能基线.md) |
 | 稳定性与故障注入 | [稳定性与故障注入验收](./testing/稳定性与故障注入.md) |
 | AI 操作 Skill 的合成验收 | [AI 操作 Skill 验收](./testing/AI操作Skill验收.md) |

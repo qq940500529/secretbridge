@@ -1,0 +1,25 @@
+{
+  "name": "secretbridge",
+  "version": "0.3.0-beta.2",
+  "description": "Connect Codex to the local SecretBridge credential-use broker.",
+  "author": {
+    "name": "数链创元（天津）信息技术有限责任公司",
+    "url": "https://github.com/qq940500529"
+  },
+  "repository": "https://github.com/qq940500529/secretbridge",
+  "license": "AGPL-3.0-or-later",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "SecretBridge · 秘桥",
+    "shortDescription": "Human-approved local operations without giving AI a credential.",
+    "longDescription": "Use a local MCP broker and a guided skill to request, approve and inspect credential-backed operations. The broker enforces the permission boundary; the plugin never stores credentials.",
+    "developerName": "数链创元（天津）信息技术有限责任公司",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "brandColor": "#0E7490",
+    "logo": "./assets/secretbridge-logo.png",
+    "composerIcon": "./assets/secretbridge-logo.png",
+    "defaultPrompt": ["Use SecretBridge to inspect my saved connections and request an approved operation."]
+  },
+  "mcpServers": "./.mcp.json"
+}
