@@ -91,8 +91,7 @@ try {
         token_type: "Bearer",
         expires_in_seconds: 3600,
       };
-    }
-    else if (path === "/api/v1/session" && method === "DELETE") {
+    } else if (path === "/api/v1/session" && method === "DELETE") {
       await route.fulfill({ status: 204 });
       return;
     } else if (path === "/api/v1/session") {
@@ -100,8 +99,7 @@ try {
         status = 401;
         body = { code: "unauthorized" };
       } else body = { authenticated: true, expires_in_seconds: 3600 };
-    }
-    else if (path === "/api/v1/session/methods")
+    } else if (path === "/api/v1/session/methods")
       body = {
         pin_enabled: true,
         totp_enabled: false,
@@ -714,14 +712,28 @@ try {
   await page.reload();
   const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
   await staleQueue.waitFor();
-  for (const viewport of [{ width: 1366, height: 768 }, { width: 1920, height: 1080 }]) {
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+  ]) {
     await page.setViewportSize(viewport);
     const box = await staleQueue.boundingBox();
-    const approveBox = await staleQueue.getByRole("button", { name: "批准当前项" }).boundingBox();
+    const approveBox = await staleQueue
+      .getByRole("button", { name: "批准当前项" })
+      .boundingBox();
     assert.ok(box && approveBox);
-    assert.ok(Math.abs(box.x + box.width / 2 - viewport.width / 2) <= 2, "Approval modal is horizontally centered");
-    assert.ok(Math.abs(box.y + box.height / 2 - viewport.height / 2) <= 2, "Approval modal is vertically centered");
-    assert.ok(approveBox.y + approveBox.height <= viewport.height, "Approval decision remains in the viewport");
+    assert.ok(
+      Math.abs(box.x + box.width / 2 - viewport.width / 2) <= 2,
+      "Approval modal is horizontally centered",
+    );
+    assert.ok(
+      Math.abs(box.y + box.height / 2 - viewport.height / 2) <= 2,
+      "Approval modal is vertically centered",
+    );
+    assert.ok(
+      approveBox.y + approveBox.height <= viewport.height,
+      "Approval decision remains in the viewport",
+    );
   }
   await staleQueue
     .getByText("操作快照不可用或已变化", { exact: true })
@@ -761,7 +773,12 @@ try {
   rejectSession = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await page.getByRole("heading", { name: "登录本机管理页" }).waitFor();
-  assert.equal(await page.evaluate(() => sessionStorage.getItem("secretbridge.page-session.v1")), null);
+  assert.equal(
+    await page.evaluate(() =>
+      sessionStorage.getItem("secretbridge.page-session.v1"),
+    ),
+    null,
+  );
   assert.deepEqual(errors, []);
   console.log(
     `Workbench UI smoke passed (${browserName}): six sections, credential/connection/task/authorization/run/result workflow, retry, focus, search, language, narrow layouts and unpairing.`,

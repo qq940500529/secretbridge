@@ -284,7 +284,9 @@ function StatusDatum({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-1 px-5 py-3 sm:grid-cols-[14rem_1fr] sm:items-center">
       <dt className="text-sm font-medium text-slate-500">{label}</dt>
-      <dd className="m-0 break-all text-sm font-semibold text-slate-900">{value}</dd>
+      <dd className="m-0 break-all text-sm font-semibold text-slate-900">
+        {value}
+      </dd>
     </div>
   );
 }

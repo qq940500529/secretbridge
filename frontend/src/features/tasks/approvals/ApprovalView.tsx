@@ -747,7 +747,9 @@ export function ApprovalView({
                     <h3 className="mb-0 mt-3 text-base font-semibold text-slate-950">
                       {item.action_template_id
                         ? (reviewTemplate(item)?.name ??
-                          (language === "zh-CN" ? "已移除的操作模板" : "Removed operation template"))
+                          (language === "zh-CN"
+                            ? "已移除的操作模板"
+                            : "Removed operation template"))
                         : operationLabels[language][item.operation]}
                     </h3>
                     <p className="mb-0 mt-2 text-sm text-slate-500">
@@ -769,8 +771,12 @@ export function ApprovalView({
                 </p>
                 {Object.keys(item.parameters).length > 0 && (
                   <details className="mt-2 text-xs text-slate-600">
-                    <summary className="cursor-pointer">{language === "zh-CN" ? "申请参数" : "Request parameters"}</summary>
-                    <pre className="whitespace-pre-wrap break-all">{JSON.stringify(item.parameters, null, 2)}</pre>
+                    <summary className="cursor-pointer">
+                      {language === "zh-CN" ? "申请参数" : "Request parameters"}
+                    </summary>
+                    <pre className="whitespace-pre-wrap break-all">
+                      {JSON.stringify(item.parameters, null, 2)}
+                    </pre>
                   </details>
                 )}
                 {item.reason && (
