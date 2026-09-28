@@ -6,17 +6,17 @@ use crate::{
     AUTHORIZATION, ActionTemplate, AppState, Approval, Arc, AxumPath, BEARER_PREFIX,
     BrowserAuthMode, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CancelSyntheticRun, CancellationToken,
     Catalog, CatalogError, ConfigurationStorage, ConstantTimeEq, CreateActionTemplate,
-    CreateApproval, CreateCredentialReference, CreateRunOutcome, CreateSyntheticRun, CreateTarget,
-    CreateTerminal, CredentialReference, CredentialService, CredentialServiceError, DecideApproval,
-    DefaultBodyLimit, Deserialize, Digest, Duration, Error, HeaderMap, HeaderName, HeaderValue,
-    Instant, IntoResponse, Json, MAX_WEBSOCKET_MESSAGE_BYTES, Message, Method, Next, Path, PathBuf,
-    PolicyEvaluation, Request, Response, Router, SafeEvent, SecretStoreError, Serialize, ServeDir,
-    SetResponseHeaderLayer, Sha256, State, StatusCode, StatusResponse, SyntheticRun, SystemTime,
-    Target, TerminalCapabilities, TerminalConnection, TerminalError, TerminalEvent, TerminalShell,
-    TerminalStatus, TerminalSummary, UNIX_EPOCH, UpdateActionTemplate, UpdateCredentialReference,
-    UpdateTarget, Uuid, WEBSOCKET_AUTH_TIMEOUT, WEBSOCKET_SEND_TIMEOUT, WebSocket,
-    WebSocketUpgrade, Zeroize, broadcast, catalog, command, credential_service, delete,
-    drive_postgres_check, get, middleware, post, put, runtime, sleep, task, timeout, totp_auth,
+    CreateApproval, CreateRunOutcome, CreateSyntheticRun, CreateTerminal, CredentialReference,
+    CredentialService, CredentialServiceError, DecideApproval, DefaultBodyLimit, Deserialize,
+    Digest, Duration, Error, HeaderMap, HeaderName, HeaderValue, Instant, IntoResponse, Json,
+    MAX_WEBSOCKET_MESSAGE_BYTES, Message, Method, Next, Path, PathBuf, PolicyEvaluation, Request,
+    Response, Router, SafeEvent, SecretStoreError, Serialize, ServeDir, SetResponseHeaderLayer,
+    Sha256, State, StatusCode, StatusResponse, SyntheticRun, SystemTime, TerminalCapabilities,
+    TerminalConnection, TerminalError, TerminalEvent, TerminalShell, TerminalStatus,
+    TerminalSummary, UNIX_EPOCH, UpdateActionTemplate, Uuid, WEBSOCKET_AUTH_TIMEOUT,
+    WEBSOCKET_SEND_TIMEOUT, WebSocket, WebSocketUpgrade, Zeroize, broadcast, catalog, command,
+    credential_service, delete, drive_postgres_check, get, middleware, post, put, runtime, sleep,
+    task, timeout, totp_auth,
 };
 
 mod auth;
@@ -26,7 +26,9 @@ mod conversations;
 mod maintenance;
 pub(crate) mod notifications;
 mod pin;
+mod resources;
 mod runs;
+mod terminal_history;
 mod terminal_routes;
 pub(crate) mod totp;
 
@@ -39,12 +41,9 @@ pub(crate) use auth::{
 };
 use auth::{browser_auth_methods, pair, revoke_session, session, status};
 use catalog_routes::{
-    approve_approval, clear_credential_secret, create_action_template, create_approval,
-    create_credential_reference, create_target, delete_action_template,
-    delete_credential_reference, delete_target, deny_approval, evaluate_action_template,
-    get_action_template, list_action_templates, list_approvals, list_credential_references,
-    list_targets, revoke_approval, set_credential_secret, update_action_template,
-    update_credential_reference, update_target,
+    approve_approval, create_action_template, create_approval, delete_action_template,
+    deny_approval, evaluate_action_template, get_action_template, list_action_templates,
+    list_approvals, revoke_approval, update_action_template,
 };
 use pin::{pair_with_pin, recover_pin, regenerate_recovery_key, set_browser_auth_method};
 pub(crate) use pin::{valid_browser_pin, verify_current_browser_auth};
@@ -159,12 +158,6 @@ struct TerminalListResponse {
     terminals: Vec<TerminalSummary>,
 }
 
-#[derive(Serialize)]
-struct CredentialReferenceListResponse {
-    items: Vec<CredentialReference>,
-    storage: ConfigurationStorage,
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetCredentialSecretRequest {
@@ -176,12 +169,6 @@ struct SetCredentialSecretRequest {
 #[serde(deny_unknown_fields)]
 struct ClearCredentialSecretRequest {
     expected_version: u64,
-}
-
-#[derive(Serialize)]
-struct TargetListResponse {
-    items: Vec<Target>,
-    storage: ConfigurationStorage,
 }
 
 #[derive(Serialize)]
@@ -477,23 +464,6 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/session/method", put(set_browser_auth_method))
         .route("/api/v1/session", get(session).delete(revoke_session))
         .route(
-            "/api/v1/credential-references",
-            get(list_credential_references).post(create_credential_reference),
-        )
-        .route(
-            "/api/v1/credential-references/{id}",
-            delete(delete_credential_reference).put(update_credential_reference),
-        )
-        .route(
-            "/api/v1/credential-references/{id}/secret",
-            put(set_credential_secret).delete(clear_credential_secret),
-        )
-        .route("/api/v1/targets", get(list_targets).post(create_target))
-        .route(
-            "/api/v1/targets/{id}",
-            delete(delete_target).put(update_target),
-        )
-        .route(
             "/api/v1/action-templates",
             get(list_action_templates).post(create_action_template),
         )
@@ -539,6 +509,8 @@ fn api_router(state: AppState) -> Router {
         .route("/api/v1/events", get(attach_events))
         .merge(maintenance_api::routes(state.clone()))
         .merge(conversation_api::routes())
+        .merge(resources::routes())
+        .merge(terminal_history::routes())
         .merge(notifications::routes())
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(

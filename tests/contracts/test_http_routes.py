@@ -23,11 +23,12 @@ EXPECTED_ROUTES = {
     "/api/v1/session/auth-events",
     "/api/v1/session/method",
     "/api/v1/session",
-    "/api/v1/credential-references",
-    "/api/v1/credential-references/{id}",
-    "/api/v1/credential-references/{id}/secret",
-    "/api/v1/targets",
-    "/api/v1/targets/{id}",
+    "/api/v1/resources",
+    "/api/v1/resources/{id}",
+    "/api/v1/resources/{id}/secret",
+    "/api/v1/resources/{id}/test",
+    "/api/v1/terminal-history",
+    "/api/v1/terminal-history/{id}",
     "/api/v1/action-templates",
     "/api/v1/action-templates/{id}",
     "/api/v1/action-templates/{id}/policy-evaluation",
@@ -51,7 +52,14 @@ EXPECTED_ROUTES = {
 
 class HttpRouteContractTests(unittest.TestCase):
     def test_router_declares_exact_public_paths_once(self):
-        source = ROUTER.read_text(encoding="utf-8")
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ROUTER,
+                ROUTER.parent / "resources.rs",
+                ROUTER.parent / "terminal_history.rs",
+            )
+        )
         paths = re.findall(r'\.route\(\s*"([^"]+)"', source)
         self.assertEqual(len(paths), len(set(paths)), "duplicate HTTP route declaration")
         self.assertEqual(set(paths), EXPECTED_ROUTES)

@@ -16,7 +16,7 @@ pub(crate) fn config(engine: DatabaseEngine, port: u16, credential: Uuid) -> Com
     serde_json::from_value(json!({"program":"","working_directory":"","arguments":[],
         "slots":[{"name":"password","credential_id":credential,"injection":"protocol","environment_variable":null}],
         "database":{"engine":engine,"operation":"query","host":"127.0.0.1","port":port,
-            "database":"secretbridge","username":"secretbridge","password_slot":"password","tls_mode":"loopback_plaintext",
+            "database":"secretbridge","username":"secretbridge","password_slot":"password","tls_mode":"disabled",
             "ca_certificate":null,"query":"SELECT {{param:company}} AS company, {{param:amount}} AS amount, {{param:ready}} AS ready, NULL AS empty_value, '12345678901234567890.123456' AS precise, 'not-selected' AS hidden",
             "columns":["company","amount","ready","empty_value","precise"],"max_rows":100},
         "parameters":[{"name":"company","label":"公司","kind":"string","required":true,"default":"100","choices":[],"max_length":128},
@@ -200,7 +200,7 @@ fn validate_protocol_modes_paths_limits_and_exclusive_configuration() {
     for host in ["localhost", "db.example.com", "192.0.2.10"] {
         let mut c = original.clone();
         c.database.as_mut().unwrap().host = host.into();
-        assert!(c.validate().is_err());
+        assert!(c.validate().is_ok());
     }
     let mut c = original.clone();
     c.database.as_mut().unwrap().tls_mode = DatabaseTls::VerifyFull;

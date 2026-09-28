@@ -28,6 +28,7 @@ import {
   getApprovalNotificationSettings,
   getSession,
   getStatus,
+  setBrokerLanguage,
   pair,
   pairWithPin,
   pairWithTotp,
@@ -176,6 +177,11 @@ export function App() {
     [refreshBrowserAuthMethods],
   );
 
+  useEffect(() => {
+    if (sessionToken)
+      void setBrokerLanguage(sessionToken, language).catch(() => undefined);
+  }, [sessionToken, language]);
+
   function changeLanguage(nextLanguage: Language) {
     setLanguage(nextLanguage);
     storeLanguage(nextLanguage);
@@ -249,8 +255,17 @@ export function App() {
               );
               return;
             }
-          } catch {
-            window.sessionStorage.removeItem(PAGE_SESSION_KEY);
+            clearPageSession();
+          } catch (error) {
+            if (
+              error instanceof SecretBridgeApiError &&
+              [401, 403].includes(error.status)
+            )
+              clearPageSession();
+            else {
+              setConnection("offline");
+              return;
+            }
           }
         }
 
@@ -315,7 +330,10 @@ export function App() {
       }
     }
     function checkOnReturn() {
-      if (document.visibilityState === "visible") void checkSession();
+      if (document.visibilityState === "visible") {
+        setNow(Date.now());
+        void checkSession();
+      }
     }
     const heartbeat = window.setInterval(() => void checkSession(), 10_000);
     const countdown = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -369,7 +387,7 @@ export function App() {
                 <p className="m-0 text-base font-semibold tracking-wide text-white">
                   SecretBridge
                 </p>
-                <p className="m-0 text-xs text-slate-400">秘桥</p>
+                <p className="m-0 text-xs text-slate-400">Secrets broker</p>
               </div>
             )}
           </div>
@@ -568,7 +586,7 @@ export function App() {
                     : "Set a PIN in the onboarding dialog and save the recovery key securely."}
                 </p>
               </section>
-            ) : activePage === "settings" ? (
+            ) : activePage === "settings" && sessionToken ? (
               <>
                 <SectionTabs
                   selected={settingsSection}
@@ -737,6 +755,7 @@ export function App() {
                 )}
                 <PairingRequired
                   text={text}
+                  reauthenticate={sessionExpired}
                   page={text[activePage]}
                   language={language}
                   pinEnabled={pinEnabled}
@@ -766,7 +785,9 @@ export function App() {
                   onRecover={recoverPin}
                   onRecoveredSession={(response) => {
                     setSessionToken(response.session_token);
-                    setSessionDeadline(null);
+                    setSessionDeadline(
+                      Date.now() + response.expires_in_seconds * 1000,
+                    );
                     window.sessionStorage.setItem(
                       PAGE_SESSION_KEY,
                       response.session_token,

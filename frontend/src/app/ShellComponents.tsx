@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { Activity, CheckCircle2, CircleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { PinActionDialog } from "../features/auth/PinActionDialog";
 import { SecretBridgeApiError, type RecoveredSessionResponse } from "../api";
 import type { Language } from "./preferences";
 import type { AuthMethodStatus } from "../features/auth/BrowserAuthenticationSettings";
@@ -59,6 +60,7 @@ export function PairingRequired({
   onTotp,
   onRecover,
   onRecoveredSession,
+  reauthenticate = false,
 }: {
   text: Copy;
   page: string;
@@ -74,28 +76,28 @@ export function PairingRequired({
     newPin: string,
   ) => Promise<RecoveredSessionResponse>;
   onRecoveredSession: (response: RecoveredSessionResponse) => void;
+  reauthenticate?: boolean;
 }) {
-  const [pin, setPin] = useState("");
-  const [loginMethod, setLoginMethod] = useState<"pin" | "totp">("pin");
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [retryAfter, setRetryAfter] = useState(0);
+  const [pinFailed, setPinFailed] = useState(false);
+  const [login, setLogin] = useState<"pin" | "totp" | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [newPin, setNewPin] = useState("");
-  const [confirmPin, setConfirmPin] = useState("");
   const [recoveredSession, setRecoveredSession] =
     useState<RecoveredSessionResponse | null>(null);
   const [recoverySaved, setRecoverySaved] = useState(false);
   const zh = language === "zh-CN";
+  const opened = useRef(false);
   useEffect(() => {
-    if (retryAfter <= 0) return;
-    const timer = window.setTimeout(
-      () => setRetryAfter((value) => Math.max(0, value - 1)),
-      1_000,
-    );
-    return () => window.clearTimeout(timer);
-  }, [retryAfter]);
+    if (
+      reauthenticate &&
+      authMethodStatus === "ready" &&
+      !opened.current &&
+      (pinEnabled || totpEnabled)
+    ) {
+      opened.current = true;
+      setLogin(pinEnabled ? "pin" : "totp");
+    }
+  }, [reauthenticate, authMethodStatus, pinEnabled, totpEnabled]);
   return (
     <section className="grid min-h-[65vh] place-items-center rounded-3xl border border-dashed border-slate-300 bg-white/65 p-10 text-center">
       <div className="max-w-lg">
@@ -142,109 +144,48 @@ export function PairingRequired({
           </div>
         )}
         {authMethodStatus === "ready" && (pinEnabled || totpEnabled) && (
-          <form
-            className="mx-auto mt-6 max-w-sm space-y-3 text-left"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              setBusy(true);
-              setFailed(false);
+          <div className="mx-auto mt-6 flex max-w-sm flex-col gap-3">
+            {pinEnabled && (
+              <button
+                className="workbench-primary"
+                onClick={() => setLogin("pin")}
+              >
+                {zh ? "使用 PIN 登录" : "Sign in with PIN"}
+              </button>
+            )}
+            {totpEnabled && (
+              <button
+                className="workbench-button"
+                onClick={() => setLogin("totp")}
+              >
+                {zh ? "使用验证码登录" : "Sign in with authenticator"}
+              </button>
+            )}
+          </div>
+        )}
+        {login && (
+          <PinActionDialog
+            title={zh ? "登录管理页" : "Sign in to console"}
+            language={language}
+            verificationCode={login === "totp"}
+            onClose={() => setLogin(null)}
+            onConfirm={async (pin) => {
               try {
-                if (loginMethod === "totp") await onTotp(pin);
+                if (login === "totp") await onTotp(pin);
                 else await onPin(pin);
-                setPin("");
-              } catch (error) {
+              } catch (failure) {
                 if (
-                  error instanceof SecretBridgeApiError &&
-                  error.status === 429
-                ) {
-                  setRetryAfter(error.retryAfterSeconds);
-                }
-                setFailed(true);
-              } finally {
-                setBusy(false);
+                  login === "pin" &&
+                  failure instanceof SecretBridgeApiError &&
+                  [401, 429].includes(failure.status)
+                )
+                  setPinFailed(true);
+                throw failure;
               }
             }}
-          >
-            {pinEnabled && totpEnabled && (
-              <div className="flex gap-3 text-sm">
-                <button
-                  type="button"
-                  className="workbench-button"
-                  aria-pressed={loginMethod === "pin"}
-                  onClick={() => {
-                    setLoginMethod("pin");
-                    setPin("");
-                  }}
-                >
-                  {zh ? "PIN/口令" : "PIN/passphrase"}
-                </button>
-                <button
-                  type="button"
-                  className="workbench-button"
-                  aria-pressed={loginMethod === "totp"}
-                  onClick={() => {
-                    setLoginMethod("totp");
-                    setPin("");
-                  }}
-                >
-                  {zh ? "验证码" : "Authenticator code"}
-                </button>
-              </div>
-            )}
-            <label
-              htmlFor="browser-pin"
-              className="block text-sm font-semibold text-slate-700"
-            >
-              {loginMethod === "totp"
-                ? zh
-                  ? "身份验证器验证码"
-                  : "Authenticator code"
-                : zh
-                  ? "本机 PIN 或口令"
-                  : "Local PIN or passphrase"}
-            </label>
-            <input
-              id="browser-pin"
-              type={loginMethod === "totp" ? "text" : "password"}
-              minLength={6}
-              maxLength={loginMethod === "totp" ? 6 : 64}
-              inputMode={loginMethod === "totp" ? "numeric" : undefined}
-              pattern={loginMethod === "totp" ? "[0-9]{6}" : undefined}
-              required
-              autoComplete={
-                loginMethod === "totp" ? "one-time-code" : "current-password"
-              }
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-              className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5"
-            />
-            <button
-              type="submit"
-              disabled={busy || retryAfter > 0}
-              className="workbench-button w-full"
-            >
-              {busy
-                ? zh
-                  ? "验证中…"
-                  : "Verifying…"
-                : zh
-                  ? "验证并进入"
-                  : "Verify and continue"}
-            </button>
-            {failed && (
-              <p role="alert" className="text-sm text-rose-700">
-                {retryAfter > 0
-                  ? zh
-                    ? `尝试次数过多，请在 ${retryAfter} 秒后重试。等待时间会随连续错误增加。`
-                    : `Too many attempts. Try again in ${retryAfter} seconds; repeated failures increase the wait.`
-                  : zh
-                    ? "验证失败，请检查输入。"
-                    : "Verification failed. Check your entry."}
-              </p>
-            )}
-          </form>
+          />
         )}
-        {authMethodStatus === "ready" && pinEnabled && (
+        {authMethodStatus === "ready" && pinEnabled && pinFailed && (
           <div className="mx-auto mt-5 max-w-sm text-left">
             <button
               type="button"
@@ -254,94 +195,40 @@ export function PairingRequired({
               {zh ? "忘记 PIN？使用恢复密钥" : "Forgot PIN? Use recovery key"}
             </button>
             {recovering && !recoveredSession && (
-              <form
-                className="mt-4 space-y-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-5"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  if (newPin !== confirmPin || newPin.length < 6) return;
-                  setBusy(true);
-                  setFailed(false);
-                  try {
-                    const response = await onRecover(
-                      recoveryCode.trim(),
-                      newPin,
-                    );
-                    setRecoveredSession(response);
-                    setRecoveryCode("");
-                    setNewPin("");
-                    setConfirmPin("");
-                  } catch (error) {
-                    if (
-                      error instanceof SecretBridgeApiError &&
-                      error.status === 429
-                    )
-                      setRetryAfter(error.retryAfterSeconds);
-                    setFailed(true);
-                  } finally {
-                    setBusy(false);
-                  }
+              <PinActionDialog
+                title={
+                  zh ? "使用恢复密钥重置 PIN" : "Reset PIN with recovery key"
+                }
+                language={language}
+                currentPin={false}
+                newPin
+                onClose={() => {
+                  setRecovering(false);
+                  setRecoveryCode("");
+                }}
+                onConfirm={async (_pin, replacement) => {
+                  const response = await onRecover(
+                    recoveryCode.trim(),
+                    replacement,
+                  );
+                  setRecoveredSession(response);
+                  setRecoveryCode("");
                 }}
               >
-                <p className="m-0 text-sm leading-6 text-slate-700">
-                  {zh
-                    ? "输入此前安全保存的恢复密钥。成功后旧密钥立即失效，必须保存新密钥。"
-                    : "Enter the recovery key you saved. The old key is invalidated after reset; save the new one."}
-                </p>
-                <input
-                  aria-label={zh ? "恢复密钥" : "Recovery key"}
-                  value={recoveryCode}
-                  onChange={(event) => setRecoveryCode(event.target.value)}
-                  autoComplete="off"
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 font-mono text-sm"
-                  required
-                />
-                <input
-                  aria-label={zh ? "新 PIN" : "New PIN"}
-                  type="password"
-                  value={newPin}
-                  onChange={(event) => setNewPin(event.target.value)}
-                  autoComplete="new-password"
-                  minLength={6}
-                  maxLength={64}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                  required
-                />
-                <input
-                  aria-label={zh ? "确认新 PIN" : "Confirm new PIN"}
-                  type="password"
-                  value={confirmPin}
-                  onChange={(event) => setConfirmPin(event.target.value)}
-                  autoComplete="new-password"
-                  minLength={6}
-                  maxLength={64}
-                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5"
-                  required
-                />
-                {newPin && confirmPin && newPin !== confirmPin && (
-                  <p role="alert" className="text-sm text-rose-700">
-                    {zh ? "两次 PIN 不一致。" : "The PINs do not match."}
-                  </p>
-                )}
-                {failed && (
-                  <p role="alert" className="text-sm text-rose-700">
-                    {zh
-                      ? "恢复失败，请核对密钥。"
-                      : "Recovery failed. Check the key."}
-                  </p>
-                )}
-                <button
-                  type="submit"
-                  className="workbench-primary w-full"
-                  disabled={
-                    busy ||
-                    retryAfter > 0 ||
-                    newPin.length < 6 ||
-                    newPin !== confirmPin
-                  }
-                >
-                  {zh ? "重置 PIN" : "Reset PIN"}
-                </button>
-              </form>
+                <label className="block text-sm font-semibold">
+                  {zh ? "恢复密钥" : "Recovery key"}
+                  <input
+                    autoFocus
+                    required
+                    type="password"
+                    autoComplete="off"
+                    aria-label={zh ? "恢复密钥" : "Recovery key"}
+                    value={recoveryCode}
+                    onChange={(event) => setRecoveryCode(event.target.value)}
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2.5"
+                  />
+                </label>
+              </PinActionDialog>
             )}
             {recoveredSession && (
               <div className="mt-4 space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-5">

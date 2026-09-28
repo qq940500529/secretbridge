@@ -109,7 +109,7 @@ export function LegalConsent({
                   className="size-5 rounded-md"
                   aria-hidden="true"
                 />
-                {zh ? "秘桥 · SecretBridge Beta" : "SecretBridge Beta"}
+                {"SecretBridge Beta"}
               </div>
               <h1
                 id="legal-consent-title"

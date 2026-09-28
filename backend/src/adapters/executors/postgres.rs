@@ -8,7 +8,7 @@ use rustls_tokio_postgres::{
 };
 use tokio_postgres::{Config, IsolationLevel, config::SslMode};
 
-use crate::catalog::PostgresTargetConfig;
+use crate::catalog::{PostgresTargetConfig, PostgresTlsMode};
 
 const POSTGRES_CA_CERT_ENV: &str = "SECRETBRIDGE_POSTGRES_CA_CERT";
 const MAX_CA_CERT_BYTES: u64 = 64 * 1024;
@@ -55,9 +55,6 @@ async fn native_connection_check_with_ca(
     password: &str,
     ca_certificate: Option<&Path>,
 ) -> PostgresCheckOutcome {
-    let Ok(tls_config) = postgres_tls_config(ca_certificate) else {
-        return PostgresCheckOutcome::ConfigurationInvalid;
-    };
     let mut config = Config::new();
     config
         .host(&target.host)
@@ -68,13 +65,38 @@ async fn native_connection_check_with_ca(
         .application_name("SecretBridge")
         .ssl_mode(SslMode::Require);
 
-    let Ok((mut client, connection)) = config.connect(MakeRustlsConnect::new(tls_config)).await
-    else {
+    let connected = if target.tls_mode == PostgresTlsMode::Disabled {
+        config.ssl_mode(SslMode::Disable);
+        config
+            .connect(tokio_postgres::NoTls)
+            .await
+            .map(|(client, connection)| {
+                (
+                    client,
+                    tokio::spawn(async move {
+                        let _ = connection.await;
+                    }),
+                )
+            })
+    } else {
+        let Ok(tls_config) = postgres_tls_config(ca_certificate) else {
+            return PostgresCheckOutcome::ConfigurationInvalid;
+        };
+        config
+            .connect(MakeRustlsConnect::new(tls_config))
+            .await
+            .map(|(client, connection)| {
+                (
+                    client,
+                    tokio::spawn(async move {
+                        let _ = connection.await;
+                    }),
+                )
+            })
+    };
+    let Ok((mut client, connection_task)) = connected else {
         return PostgresCheckOutcome::ConnectionFailed;
     };
-    let connection_task = tokio::spawn(async move {
-        let _ = connection.await;
-    });
     let checked = async {
         let transaction = client
             .build_transaction()

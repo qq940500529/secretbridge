@@ -22,11 +22,12 @@ mod conversation;
 pub(crate) mod errors;
 mod ready;
 use crate::adapters::native_ipc as native_bridge;
+use contracts::ConversationLanguage;
 use contracts::{
-    ApprovalSummary, CancelRunParams, CatalogSummary, ConfirmApprovalParams, ConnectionSummary,
-    CreateRunParams, CreateRunSummary, CredentialSummary, DynamicCredentialSlot, DynamicInjection,
-    EventList, EventSummary, IdentifierParams, PolicySummary, RequestApprovalParams,
-    RequestCommandParams, RequestSshParams, RunSummary, TemplateList, TemplateSummary,
+    ApprovalSummary, CancelRunParams, CatalogSummary, ConfirmApprovalParams, CreateRunParams,
+    CreateRunSummary, DynamicCredentialSlot, DynamicInjection, EventList, EventSummary,
+    IdentifierParams, PolicySummary, RequestApprovalParams, RequestCommandParams, RequestSshParams,
+    ResourceSummary, RunSummary, TemplateList, TemplateSummary,
 };
 use conversation::{BeginConversationParams, resolve_conversation_id};
 use errors::{catalog_error, parse_uuid, recoverable_error, validate_dynamic_arguments};
@@ -222,15 +223,11 @@ impl McpBackend {
                 let catalog = state.catalog.clone();
                 catalog_task(move || {
                     Ok(CatalogSummary {
-                        credentials: catalog
-                            .list_credential_references()?
+                        ui_language: catalog.ui_language()?,
+                        resources: catalog
+                            .list_resources()?
                             .into_iter()
-                            .map(CredentialSummary::from)
-                            .collect(),
-                        connections: catalog
-                            .list_targets()?
-                            .into_iter()
-                            .map(ConnectionSummary::from)
+                            .map(ResourceSummary::from)
                             .collect(),
                     })
                 })
@@ -267,11 +264,14 @@ impl McpBackend {
                     authorization_mode: params.authorization_mode,
                     action_template_id: parse_uuid(&params.action_template_id)?,
                     conversation_id: Some(conversation_id),
-                    reason: Some(
-                        params
-                            .reason
-                            .unwrap_or_else(|| params.language.default_reason("template")),
-                    ),
+                    reason: Some(params.reason.unwrap_or_else(|| {
+                        if state.catalog.ui_language().as_deref() == Ok("zh-CN") {
+                            ConversationLanguage::Zh
+                        } else {
+                            ConversationLanguage::En
+                        }
+                        .default_reason("template")
+                    })),
                     expires_in_seconds: params.expires_in_seconds,
                 };
                 let approval = catalog_task(move || catalog.create_approval(&request)).await?;
@@ -827,7 +827,7 @@ impl SecretBridgeMcp {
 
     #[tool(
         name = "secretbridge_list_catalog",
-        description = "List non-secret credential and connection metadata for planning commands: opaque IDs, types, addresses, accounts, environments and availability only. Secret values are never returned.",
+        description = "Read ui_language first, then plan with unified non-secret resources: opaque IDs, addresses, accounts, environment, labels, authentication availability and missing fields. Secret values are never returned.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<CatalogSummary>()
     )]
     async fn list_catalog(&self) -> Result<McpJson<CatalogSummary>, ErrorData> {

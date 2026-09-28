@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use super::{Catalog, CatalogError, Target, Uuid, target_by_id, target_from_row};
+#[cfg(test)]
 use super::{
-    Catalog, CatalogError, CreateTarget, MAX_ADDRESS_CHARS, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS,
-    MAX_TARGETS, MAX_USERNAME_CHARS, Target, TargetKind, UpdateTarget, Uuid, ensure_capacity,
-    ensure_credential_exists, normalize_optional, normalize_postgres_config, normalize_required,
-    now_unix_ms_i64, params, target_by_id, target_from_row,
+    CreateTarget, MAX_ADDRESS_CHARS, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_TARGETS,
+    MAX_USERNAME_CHARS, TargetKind, UpdateTarget, ensure_capacity, ensure_credential_exists,
+    normalize_optional, normalize_postgres_config, normalize_required, now_unix_ms_i64, params,
 };
 
 impl Catalog {
@@ -33,6 +34,7 @@ impl Catalog {
         target_by_id(&self.lock(), id)?.ok_or(CatalogError::NotFound)
     }
 
+    #[cfg(test)]
     pub fn create_target(&self, request: &CreateTarget) -> Result<Target, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
@@ -80,6 +82,7 @@ impl Catalog {
         target_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
+    #[cfg(test)]
     pub fn update_target(&self, id: Uuid, request: &UpdateTarget) -> Result<Target, CatalogError> {
         let name = normalize_required(&request.name, MAX_NAME_CHARS)?;
         let description =
@@ -134,6 +137,7 @@ impl Catalog {
         }
         target_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
+    #[cfg(test)]
     pub fn delete_target(&self, id: Uuid) -> Result<(), CatalogError> {
         let connection = self.lock();
         let references = connection

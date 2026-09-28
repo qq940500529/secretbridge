@@ -387,8 +387,8 @@ async fn real_ssh_authenticates_unencrypted_and_encrypted_private_keys_without_f
         let (status, credential) = web_request(
             &state,
             &token,
-            "/api/v1/credential-references",
-            json!({"name":"SSH key via Web","kind":"ssh_key"}),
+            "/api/v1/resources",
+            json!({"name":"SSH key via Web","kind":"ssh_host","authentication_kind":"ssh_key","environment":"test"}),
         )
         .await;
         assert_eq!(status, StatusCode::CREATED);
@@ -405,12 +405,12 @@ async fn real_ssh_authenticates_unencrypted_and_encrypted_private_keys_without_f
             &state,
             &token,
             "PUT",
-            &format!("/api/v1/credential-references/{credential_id}/secret"),
+            &format!("/api/v1/resources/{credential_id}/secret"),
             json!({"secret":encoded.as_str(),"expected_version":credential["version"]}),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(saved["secret_state"], "available");
+        assert_eq!(saved["authentication"]["secret_state"], "available");
         assert!(!saved.to_string().contains(encoded.as_str()));
         assert!(saved.get("secret").is_none());
         let passphrase = if encrypted {

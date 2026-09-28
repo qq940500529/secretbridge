@@ -94,7 +94,7 @@ fn conversation_policies_preserve_human_control_and_task_scope() {
         .unwrap();
     assert_eq!(
         catalog.get_approval(changed.id).unwrap().state,
-        ApprovalState::Approved
+        ApprovalState::Pending
     );
     let broad = catalog
         .create_approval(&request(second_template.id))
@@ -118,7 +118,7 @@ fn conversation_policies_preserve_human_control_and_task_scope() {
     );
     assert_eq!(
         catalog.get_approval(changed.id).unwrap().state,
-        ApprovalState::Revoked
+        ApprovalState::Pending
     );
     assert_eq!(
         catalog.get_approval(approved.id).unwrap().state,
@@ -2433,5 +2433,67 @@ fn same_directory_soak_records_resource_trend_and_restores_history() {
     println!(
         "SOAK_METRIC {}",
         serde_json::json!({"phase":"backup_restore","runs":report.runs,"backup_bytes":backup.len()})
+    );
+}
+
+#[test]
+fn approval_and_conversation_policy_are_committed_atomically() {
+    let catalog = Catalog::in_memory().unwrap();
+    let credential = create_credential(&catalog);
+    let target = create_target(&catalog, credential.id);
+    let template = create_action_template(&catalog, target.id);
+    let conversation = catalog
+        .create_ai_conversation("Synthetic atomic decision")
+        .unwrap();
+    let approval = catalog
+        .create_approval(&CreateApproval {
+            authorization_mode: crate::parameters::AuthorizationMode::default(),
+            parameters: crate::parameters::ParameterValues::new(),
+            action_template_id: template.id,
+            conversation_id: Some(conversation.id),
+            reason: None,
+            expires_in_seconds: 300,
+        })
+        .unwrap();
+    let decision = DecideApproval {
+        expected_version: approval.version,
+        note: Some("Synthetic human feedback".into()),
+    };
+    let mut policy = SetAiConversationPolicy {
+        expected_version: conversation.version,
+        approval_policy: ConversationApprovalPolicy::ConversationOnce,
+        risk_acknowledgement: None,
+    };
+    assert!(
+        catalog
+            .approve_with_conversation_policy(approval.id, &decision, Some(&policy))
+            .is_err()
+    );
+    assert_eq!(
+        catalog.get_approval(approval.id).unwrap().state,
+        ApprovalState::Pending
+    );
+    assert_eq!(
+        catalog
+            .get_ai_conversation(conversation.id)
+            .unwrap()
+            .version,
+        conversation.version
+    );
+    policy.risk_acknowledgement = Some(ALL_OPERATIONS_ACKNOWLEDGEMENT.into());
+    let approved = catalog
+        .approve_with_conversation_policy(approval.id, &decision, Some(&policy))
+        .unwrap();
+    assert_eq!(approved.state, ApprovalState::Approved);
+    assert_eq!(
+        approved.decision_note.as_deref(),
+        Some("Synthetic human feedback")
+    );
+    assert_eq!(
+        catalog
+            .get_ai_conversation(conversation.id)
+            .unwrap()
+            .approval_policy,
+        ConversationApprovalPolicy::ConversationOnce
     );
 }

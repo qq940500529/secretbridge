@@ -20,7 +20,12 @@ struct UpdateNotificationSettings {
 }
 
 pub(super) fn routes() -> Router<AppState> {
-    Router::new().route("/api/v1/notification-settings", get(read).put(update))
+    Router::new()
+        .route("/api/v1/notification-settings", get(read).put(update))
+        .route(
+            "/api/v1/preferences/language",
+            get(read_language).put(update_language),
+        )
 }
 
 async fn read(
@@ -52,4 +57,34 @@ async fn update(
     Ok(Json(NotificationSettings {
         channel: request.channel,
     }))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LanguagePreference {
+    language: String,
+}
+
+async fn read_language(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<LanguagePreference>, ApiError> {
+    require_session(&state, &headers).await?;
+    Ok(Json(LanguagePreference {
+        language: state.catalog.ui_language().map_err(map_catalog_error)?,
+    }))
+}
+async fn update_language(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<LanguagePreference>,
+) -> Result<Json<LanguagePreference>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    state
+        .catalog
+        .set_ui_language(&request.language)
+        .map_err(map_catalog_error)?;
+    let _ = state.changes.send(());
+    Ok(Json(request))
 }

@@ -49,8 +49,10 @@ pub struct HttpField {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ValueSource {
     Literal { value: String },
+    JsonLiteral { value: Value },
     Parameter { name: String },
     Credential { name: String, prefix: String },
+    BasicCredential { name: String, username: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -159,6 +161,14 @@ impl HttpConfig {
                     }
                 }
                 match &field.source {
+                    ValueSource::JsonLiteral { value } => {
+                        if headers
+                            || query
+                            || serde_json::to_vec(value).map_err(|_| invalid())?.len() > 8192
+                        {
+                            return Err(invalid());
+                        }
+                    }
                     ValueSource::Literal { value } => {
                         if value.len() > 8192 || value.contains('\0') {
                             return Err(invalid());
@@ -171,6 +181,18 @@ impl HttpConfig {
                         if !config.parameters.iter().any(|p| p.name == *name) {
                             return Err(invalid());
                         }
+                    }
+                    ValueSource::BasicCredential { name, username } => {
+                        if !headers
+                            || !field.name.eq_ignore_ascii_case("authorization")
+                            || !slots.contains(name.as_str())
+                            || username.is_empty()
+                            || username.len() > 256
+                            || username.contains([':', '\0', '\r', '\n'])
+                        {
+                            return Err(invalid());
+                        }
+                        used.insert(name.as_str());
                     }
                     ValueSource::Credential { name, prefix } => {
                         if query
@@ -209,7 +231,22 @@ fn resolve(
     secrets: &[Zeroizing<String>],
 ) -> Result<Value, &'static str> {
     match source {
+        ValueSource::BasicCredential { name, username } => {
+            use base64::Engine as _;
+            let secret = config
+                .slots
+                .iter()
+                .position(|s| s.name == *name)
+                .and_then(|i| secrets.get(i))
+                .ok_or("credential_unavailable")?;
+            let material = Zeroizing::new(format!("{username}:{}", secret.as_str()));
+            Ok(Value::String(format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(material.as_bytes())
+            )))
+        }
         ValueSource::Literal { value } => Ok(Value::String(value.clone())),
+        ValueSource::JsonLiteral { value } => Ok(value.clone()),
         ValueSource::Parameter { name } => parameters.get(name).cloned().ok_or("invalid_input"),
         ValueSource::Credential { name, prefix } => config
             .slots
@@ -341,6 +378,19 @@ pub async fn drive(
     };
     let text = Zeroizing::new(serde_json::to_string(&output).unwrap_or_default());
     let mut redactor = Redactor::new(secrets);
+    for header in &http.headers {
+        if matches!(header.source, ValueSource::BasicCredential { .. })
+            && let Ok(Value::String(encoded)) = resolve(&header.source, config, parameters, secrets)
+        {
+            let encoded = Zeroizing::new(encoded);
+            redactor.extend(&[Zeroizing::new(
+                encoded
+                    .strip_prefix("Basic ")
+                    .unwrap_or(&encoded)
+                    .to_owned(),
+            )]);
+        }
+    }
     let filtered = redactor.feed(text.as_bytes(), true);
     let _ = state
         .catalog
@@ -401,9 +451,15 @@ pub(crate) mod tests {
             hits.fetch_add(100, Ordering::SeqCst);
             StatusCode::OK
         }
+        async fn authentication_headers(headers: HeaderMap) -> Json<Value> {
+            Json(
+                json!({"authorization": headers.get("authorization").and_then(|v| v.to_str().ok()), "api_key": headers.get("x-api-key").and_then(|v| v.to_str().ok())}),
+            )
+        }
         let hits = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route("/echo", post(echo))
+            .route("/headers", get(authentication_headers))
             .route("/redirect", get(|| async { Redirect::temporary("/trap") }))
             .route("/trap", get(trap))
             .route(
@@ -820,6 +876,83 @@ pub(crate) mod tests {
             "invalid_header"
         );
         assert_eq!(server.hits.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn basic_and_api_key_authentication_are_injected_and_echoes_are_redacted() {
+        use base64::Engine as _;
+        let server = server().await;
+        let (state, _) = AppState::new([]);
+        let template = configure(&state, &server.url, 5);
+        let original = state.catalog.get_action_template(template).unwrap();
+        let mut command = original.command.unwrap();
+        let http = command.http.as_mut().unwrap();
+        http.method = "GET".into();
+        http.url = format!("{}/headers", server.url);
+        http.query.clear();
+        http.body.clear();
+        command.parameters.clear();
+        http.headers = vec![
+            HttpField {
+                name: "Authorization".into(),
+                source: ValueSource::BasicCredential {
+                    name: "token".into(),
+                    username: "synthetic-user".into(),
+                },
+            },
+            HttpField {
+                name: "X-API-Key".into(),
+                source: ValueSource::Credential {
+                    name: "token".into(),
+                    prefix: String::new(),
+                },
+            },
+        ];
+        http.response_fields = vec![ResponseField {
+            name: "echo".into(),
+            pointer: String::new(),
+        }];
+        assert!(command.validate().is_ok());
+        let updated = state.catalog.update_action_template(template, &serde_json::from_value(json!({"name": "Synthetic Basic API", "target_id": original.target_id, "operation":"command_execution", "result_scope":"sanitized_output", "timeout_seconds":5, "expected_version":original.version, "enabled":true, "command":command})).unwrap()).unwrap();
+        let approval = approve(&state, updated.id);
+        let run = crate::create_run_for_state(
+            &state,
+            CreateSyntheticRun {
+                approval_id: approval,
+                idempotency_key: Uuid::new_v4().to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        let page = wait(&state, run.run.id).await;
+        assert_eq!(page.state, RunState::Succeeded);
+        let output = page
+            .items
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect::<String>();
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains(SECRET));
+        assert!(!output.contains(
+            &base64::engine::general_purpose::STANDARD.encode(format!("synthetic-user:{SECRET}"))
+        ));
+        let mut invalid = command.clone();
+        invalid.http.as_mut().unwrap().query.push(HttpField {
+            name: "q".into(),
+            source: ValueSource::BasicCredential {
+                name: "token".into(),
+                username: "synthetic-user".into(),
+            },
+        });
+        assert!(invalid.validate().is_err());
+        invalid = command;
+        invalid.http.as_mut().unwrap().body.push(HttpField {
+            name: "data".into(),
+            source: ValueSource::JsonLiteral {
+                value: json!({"items":[1,true]}),
+            },
+        });
+        invalid.http.as_mut().unwrap().method = "POST".into();
+        assert!(invalid.validate().is_ok());
     }
     #[test]
     fn invalid_configs_cannot_change_authentication_destination_or_protocol() {

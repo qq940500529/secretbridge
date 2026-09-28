@@ -92,10 +92,10 @@ async fn status_stream_requires_origin_and_first_frame_auth_and_closes_on_revoca
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             token,
             &origin,
-            r#"{"name":"Live updates reference","kind":"password"}"#,
+            r#"{"name":"Live updates resource","kind":"generic","environment":"test","authentication_kind":"password"}"#,
         ))
         .await
         .expect("create");
@@ -109,10 +109,10 @@ async fn status_stream_requires_origin_and_first_frame_auth_and_closes_on_revoca
         .clone()
         .oneshot(request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             token,
             &origin,
-            r#"{"name":"","kind":"password"}"#,
+            r#"{"name":"","kind":"generic","environment":"test","authentication_kind":"password"}"#,
         ))
         .await
         .expect("invalid mutation");

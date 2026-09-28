@@ -36,6 +36,7 @@ pub struct CredentialReference {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub struct CreateCredentialReference {
     pub(crate) name: String,
     pub(crate) kind: CredentialKind,
@@ -48,6 +49,7 @@ pub struct CreateCredentialReference {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub struct UpdateCredentialReference {
     pub(crate) name: String,
     pub(crate) kind: CredentialKind,

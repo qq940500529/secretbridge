@@ -194,6 +194,9 @@ pub(super) async fn recover_pin(
     if retry_after > 0 {
         return Err(ApiError::RateLimited(retry_after));
     }
+    if !state.catalog.pin_has_failed().map_err(map_catalog_error)? {
+        return Err(ApiError::Unauthorized);
+    }
     let catalog = state.catalog.clone();
     let recovery_key = Zeroizing::new(request.recovery_key);
     let new_pin = Zeroizing::new(request.new_pin);

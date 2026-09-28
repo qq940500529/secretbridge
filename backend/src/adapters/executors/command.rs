@@ -620,6 +620,20 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
     ) else {
         return ("command_failed", None);
     };
+    // A long typed PowerShell command makes PSReadLine redraw it for every key.
+    // Execute the exact approved wrapper from a private temporary script instead;
+    // it contains secret-file references, never secret values, and is removed below.
+    let command = if shell == crate::terminal::TerminalShell::PowerShell {
+        let Ok(path) = secret_file(&state.command_directory, &mut files, &command) else {
+            return ("command_failed", None);
+        };
+        Zeroizing::new(format!(
+            ". ([scriptblock]::Create([IO.File]::ReadAllText('{}')))\r\n",
+            path.to_string_lossy().replace('\'', "''")
+        ))
+    } else {
+        command
+    };
     // The PTY echo is visible to terminal attachments, not only to this run reader.
     let private_paths = files
         .paths
@@ -627,6 +641,23 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
         .map(|path| Zeroizing::new(path.to_string_lossy().into_owned()))
         .collect::<Vec<_>>();
     broker.add_redaction_secrets(&private_paths);
+    let serialized = serde_json::to_vec(
+        &serde_json::json!({"command":config,"parameters":parameters,"run_id":run_id}),
+    )
+    .unwrap_or_default();
+    let safe_data = Redactor::new(secrets).feed(&serialized, true);
+    let metadata = serde_json::from_slice(&safe_data)
+        .unwrap_or_else(|_| serde_json::json!({"run_id":run_id,"details":"redacted"}));
+    let safe_program =
+        String::from_utf8_lossy(&Redactor::new(secrets).feed(config.program.as_bytes(), true))
+            .into_owned();
+    if state
+        .catalog
+        .record_terminal_history(terminal_id, "command", &safe_program, &metadata)
+        .is_err()
+    {
+        return ("command_failed", None);
+    }
     if broker.write(command.as_bytes()).is_err() {
         return ("command_failed", None);
     }
@@ -713,11 +744,17 @@ async fn execute_in_terminal(execution: TerminalExecution<'_>) -> (&'static str,
     if !files.cleanup() {
         return ("command_cleanup_failed", result.1);
     }
+    let _ = state.catalog.record_terminal_history(
+        terminal_id,
+        "result",
+        result.0,
+        &serde_json::json!({"run_id":run_id,"exit_code":result.1}),
+    );
     result
 }
 
 #[derive(Default)]
-struct TerminalOutputCleaner {
+pub(crate) struct TerminalOutputCleaner {
     escape: EscapeState,
     last_was_cr: bool,
 }
@@ -733,7 +770,7 @@ enum EscapeState {
 }
 
 impl TerminalOutputCleaner {
-    fn feed(&mut self, input: &str) -> String {
+    pub(crate) fn feed(&mut self, input: &str) -> String {
         let mut output = String::with_capacity(input.len());
         for character in input.chars() {
             match self.escape {

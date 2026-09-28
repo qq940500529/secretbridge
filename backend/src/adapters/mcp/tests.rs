@@ -261,61 +261,25 @@ async fn bridge_validation_failure_records_only_a_safe_diagnostic_code() {
 )]
 async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_terminal() {
     let (state, _) = AppState::new([]);
-    let credential = state
-        .catalog
-        .create_credential_reference(
-            &serde_json::from_value(json!({
-                "name": "Dynamic MCP credential",
-                "kind": "password",
-                "purpose": "Synthetic MCP test",
-                "address": "service.example.test",
-                "username": "synthetic-user"
-            }))
-            .expect("credential request"),
-        )
-        .expect("create credential metadata");
+    let resource=state.catalog.save_resource(None,&serde_json::from_value(json!({
+        "name":"Dynamic MCP connection","kind":"http_service","environment":"test","authentication_kind":"password",
+        "address":"service.example.test:22","username":"synthetic-user"
+    })).unwrap()).unwrap();
+    let target = resource.target;
+    let credential = state.catalog.get_credential_reference(target.id).unwrap();
     state
         .secret_store
         .set(credential.id, "synthetic-dynamic-secret")
-        .expect("store synthetic secret");
+        .unwrap();
     state
         .catalog
         .set_credential_secret_state(credential.id, credential.version, true)
-        .expect("mark synthetic secret available");
-    let target = state
-        .catalog
-        .create_target(&CreateTarget {
-            name: "Dynamic MCP connection".to_owned(),
-            kind: TargetKind::HttpService,
-            environment: TargetEnvironment::Test,
-            description: None,
-            address: Some("service.example.test:22".to_owned()),
-            username: Some("synthetic-user".to_owned()),
-            allow_insecure_protocol: false,
-            credential_reference_id: Some(credential.id),
-            postgres: None,
-        })
-        .expect("create connection metadata");
-    state
-        .catalog
-        .create_target(&CreateTarget {
-            name: "Synthetic PostgreSQL check".to_owned(),
-            kind: TargetKind::Database,
-            environment: TargetEnvironment::Test,
-            description: None,
-            address: None,
-            username: None,
-            allow_insecure_protocol: false,
-            credential_reference_id: Some(credential.id),
-            postgres: Some(crate::catalog::PostgresTargetConfig {
-                host: "database.example.test".to_owned(),
-                port: 6543,
-                database: "sample".to_owned(),
-                username: "sample_user".to_owned(),
-                tls_mode: crate::catalog::PostgresTlsMode::VerifyFull,
-            }),
-        })
-        .expect("create PostgreSQL check metadata");
+        .unwrap();
+    state.catalog.save_resource(None,&serde_json::from_value(json!({
+        "name":"Synthetic PostgreSQL check","kind":"database","environment":"test","authentication_kind":"password",
+        "address":"database.example.test","username":"sample_user",
+        "connection":{"protocol":"database","engine":"postgres","port":6543,"database":"sample","tls_mode":"verify_full","ca_certificate":null}
+    })).unwrap()).unwrap();
     let terminal = state
         .terminals
         .create(&crate::terminal::CreateTerminal {
@@ -334,8 +298,10 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
         .await
         .expect("list safe catalog");
     let catalog = catalog.structured_content.expect("catalog content");
-    assert_eq!(catalog["credentials"][0]["address"], "service.example.test");
-    let connections = catalog["connections"].as_array().expect("connections");
+    assert!(catalog.get("credentials").is_none());
+    assert!(catalog.get("connections").is_none());
+    assert_eq!(catalog["ui_language"], "en");
+    let connections = catalog["resources"].as_array().expect("resources");
     let command_target = connections
         .iter()
         .find(|item| item["id"] == target.id.to_string())
@@ -345,13 +311,10 @@ async fn dynamic_command_uses_catalog_metadata_and_requires_a_running_secure_ter
         .iter()
         .find(|item| item["name"] == "Synthetic PostgreSQL check")
         .expect("PostgreSQL metadata");
-    assert_eq!(
-        postgres_target["postgres_check"]["host"],
-        "database.example.test"
-    );
-    assert_eq!(postgres_target["postgres_check"]["port"], 6543);
-    assert_eq!(postgres_target["postgres_check"]["database"], "sample");
-    assert_eq!(postgres_target["postgres_check"]["tls_mode"], "verify_full");
+    assert_eq!(postgres_target["address"], "database.example.test");
+    assert_eq!(postgres_target["connection"]["port"], 6543);
+    assert_eq!(postgres_target["connection"]["database"], "sample");
+    assert_eq!(postgres_target["connection"]["tls_mode"], "verify_full");
 
     let executable = std::env::current_exe()
         .expect("test executable")
@@ -1708,7 +1671,8 @@ async fn native_mcp_controls_real_terminal_without_reexecuting_on_reconnect() {
     )
     .await;
     let mut output = Vec::new();
-    for _ in 0..40 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    while tokio::time::Instant::now() < deadline {
         let read = terminal_tool(
             &client,
             "secretbridge_terminal_read",
@@ -1766,7 +1730,8 @@ async fn native_mcp_controls_real_terminal_without_reexecuting_on_reconnect() {
     )
     .await;
     let mut continued = String::new();
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline {
         let read = terminal_tool(
             &other,
             "secretbridge_terminal_read",
@@ -1810,7 +1775,8 @@ async fn native_mcp_controls_real_terminal_without_reexecuting_on_reconnect() {
     )
     .await;
     let mut exited = false;
-    for _ in 0..40 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+    while tokio::time::Instant::now() < deadline {
         let read = terminal_tool(
             &other,
             "secretbridge_terminal_read",

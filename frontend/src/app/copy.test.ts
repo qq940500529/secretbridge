@@ -12,7 +12,7 @@ const renderedViews = [
   "../features/tasks/templates/ActionTemplatesView.tsx",
   "../features/tasks/approvals/ApprovalView.tsx",
   "../features/history/AuditView.tsx",
-  "../features/catalog/CatalogView.tsx",
+  "../features/catalog/ResourcesView.tsx",
   "../features/tasks/runs/OperationsView.tsx",
   "../features/terminal/TerminalView.tsx",
   "../features/tasks/templates/editors/CommandEditor.tsx",

@@ -6,4 +6,5 @@ pub(crate) mod manage_credentials;
 pub(crate) mod notifications;
 pub(crate) mod postgres_check;
 pub(crate) mod redaction;
+pub(crate) mod resource_test;
 pub(crate) mod status;

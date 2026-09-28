@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    Catalog, CatalogError, CreateCredentialReference, CredentialReference, MAX_ADDRESS_CHARS,
-    MAX_CREDENTIAL_REFERENCES, MAX_DESCRIPTION_CHARS, MAX_NAME_CHARS, MAX_USERNAME_CHARS,
-    SecretState, UpdateCredentialReference, Uuid, credential_by_id, credential_from_row,
-    ensure_capacity, ensure_credential_reference_unlinked, normalize_optional, normalize_required,
+    Catalog, CatalogError, CredentialReference, Uuid, credential_by_id, credential_from_row,
     now_unix_ms_i64, params,
+};
+#[cfg(test)]
+use super::{
+    CreateCredentialReference, MAX_ADDRESS_CHARS, MAX_CREDENTIAL_REFERENCES, MAX_DESCRIPTION_CHARS,
+    MAX_NAME_CHARS, MAX_USERNAME_CHARS, SecretState, UpdateCredentialReference, ensure_capacity,
+    ensure_credential_reference_unlinked, normalize_optional, normalize_required,
 };
 
 impl Catalog {
@@ -28,6 +31,7 @@ impl Catalog {
             .map_err(|_| CatalogError::Storage)
     }
 
+    #[cfg(test)]
     pub fn create_credential_reference(
         &self,
         request: &CreateCredentialReference,
@@ -64,6 +68,7 @@ impl Catalog {
         credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
+    #[cfg(test)]
     pub fn update_credential_reference(
         &self,
         id: Uuid,
@@ -248,14 +253,7 @@ impl Catalog {
         credential_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
 
-    pub fn ensure_credential_reference_deletable(&self, id: Uuid) -> Result<(), CatalogError> {
-        let connection = self.lock();
-        if credential_by_id(&connection, id)?.is_none() {
-            return Err(CatalogError::NotFound);
-        }
-        ensure_credential_reference_unlinked(&connection, id)
-    }
-
+    #[cfg(test)]
     pub fn delete_credential_reference(&self, id: Uuid) -> Result<(), CatalogError> {
         let connection = self.lock();
         ensure_credential_reference_unlinked(&connection, id)?;

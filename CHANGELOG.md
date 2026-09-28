@@ -4,6 +4,18 @@
 
 This file records public release behavior rather than preserving a development diary for every internal build. Pull requests and Git history remain the source for implementation history.
 
+## 0.3.0-beta.3 — 2026-09-28
+
+- Combine connection and credential management into one resource workspace. Create resources with a name, address and write-only secret; account, environment, labels and protocol details are optional. Incomplete configuration is saved without guessing missing execution parameters.
+- Add explicit connection checks for PostgreSQL, MySQL, SSH and HTTP APIs, with bounded timeouts and redacted results. Database TLS is selectable; verification stays enabled by default and never downgrades automatically.
+- Pre-fill task snapshots from resources. Support HTTP API Bearer, Basic and custom API Key headers, common methods and nested JSON field values. Filter the actual Basic authentication payload from returned results.
+- Persist timestamped terminal input, controlled command data, parameters, results and redacted output after sessions close or the broker restarts. Keep bounded pagination and transcript export separate from live terminal replay.
+- Place conversation approval requirements in the approval dialog; commit the selected policy and approval atomically. Return optional rejection feedback to the AI without treating it as permission to retry unchanged requests.
+- Report the management-page language to AI clients and require matching descriptive text. Product interfaces use SecretBridge; the Chinese name remains in documentation introductions only.
+- Request PIN verification in an action-first dialog. Reveal recovery-key entry only after a failed PIN attempt, and automatically open login when the management session expires, including on return from a background tab.
+- Advance SQLite to schema 25 and configuration exports to format 2. This beta does not accept earlier database or export formats; use a new empty data directory rather than overwriting an existing deployment.
+- Ship preassembled Codex plugin files with native packages. Exporting client configuration or installing the plugin does not compile the application or plugin.
+
 ## 0.3.0-beta.2 — 2026-09-26
 
 - Introduce a new installation line; earlier installation layouts and databases are not supported as in-place upgrade inputs.

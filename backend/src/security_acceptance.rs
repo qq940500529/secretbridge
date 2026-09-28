@@ -93,8 +93,8 @@ async fn api_surfaces(state: &AppState, run_id: Uuid) -> Vec<(String, Vec<u8>)> 
     let (token, _) = state.issue_session().await.expect("issue session");
     let mut surfaces = Vec::new();
     for path in [
-        "/api/v1/credential-references",
-        "/api/v1/targets",
+        "/api/v1/resources",
+        "/api/v1/terminal-history",
         "/api/v1/action-templates",
         "/api/v1/approvals",
         "/api/v1/runs",

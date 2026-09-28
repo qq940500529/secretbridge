@@ -12,11 +12,11 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::CatalogOpenError;
 
-pub(crate) const SCHEMA_VERSION: i64 = 24;
+pub(crate) const SCHEMA_VERSION: i64 = 25;
 
 pub(super) fn prepare(connection: &Connection) -> Result<(), CatalogOpenError> {
     let version = connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
-    if version > SCHEMA_VERSION {
+    if version != 0 && version != SCHEMA_VERSION {
         return Err(CatalogOpenError::UnsupportedSchema(version));
     }
     initialize_schema(connection, version)
@@ -47,7 +47,7 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              CREATE TABLE targets (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-                kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host', 'telnet_host')),
+                kind TEXT NOT NULL CHECK (kind IN ('generic', 'database', 'http_service', 'ssh_host', 'telnet_host')),
                 environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
                 description TEXT CHECK (description IS NULL OR length(description) <= 240),
                 address TEXT CHECK (address IS NULL OR length(address) <= 2048),
@@ -58,7 +58,7 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
                 postgres_database TEXT,
                 postgres_username TEXT,
-                postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full'),
+                postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode IN ('verify_full', 'disabled')),
                 created_at_unix_ms INTEGER NOT NULL,
                 updated_at_unix_ms INTEGER NOT NULL,
                 version INTEGER NOT NULL CHECK (version >= 1)
@@ -341,7 +341,7 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
             "CREATE TABLE targets_v17 (
                 id TEXT PRIMARY KEY NOT NULL,
                 name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 80),
-                kind TEXT NOT NULL CHECK (kind IN ('database', 'http_service', 'ssh_host', 'telnet_host')),
+                kind TEXT NOT NULL CHECK (kind IN ('generic', 'database', 'http_service', 'ssh_host', 'telnet_host')),
                 environment TEXT NOT NULL CHECK (environment IN ('development', 'test', 'production')),
                 description TEXT CHECK (description IS NULL OR length(description) <= 240),
                 address TEXT CHECK (address IS NULL OR length(address) <= 2048),
@@ -352,7 +352,7 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
                 postgres_port INTEGER CHECK (postgres_port IS NULL OR postgres_port BETWEEN 1 AND 65535),
                 postgres_database TEXT,
                 postgres_username TEXT,
-                postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full'),
+                postgres_tls_mode TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode IN ('verify_full', 'disabled')),
                 created_at_unix_ms INTEGER NOT NULL,
                 updated_at_unix_ms INTEGER NOT NULL,
                 version INTEGER NOT NULL CHECK (version >= 1)
@@ -514,6 +514,15 @@ fn initialize_schema(connection: &Connection, version: i64) -> Result<(), Catalo
              COMMIT;",
         )?;
     }
+    if !column_exists(connection, "browser_auth_settings", "ui_language")? {
+        connection.execute_batch("BEGIN IMMEDIATE;
+            ALTER TABLE browser_auth_settings ADD COLUMN ui_language TEXT NOT NULL DEFAULT 'en' CHECK (ui_language IN ('en', 'zh-CN'));
+            CREATE TABLE resource_configuration (resource_id TEXT PRIMARY KEY NOT NULL REFERENCES targets(id) ON DELETE CASCADE, labels_json TEXT NOT NULL, options_json TEXT NOT NULL);
+            CREATE TABLE terminal_history (cursor INTEGER PRIMARY KEY AUTOINCREMENT, terminal_id TEXT NOT NULL, occurred_at_unix_ms INTEGER NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL, metadata_json TEXT NOT NULL);
+            CREATE INDEX terminal_history_session ON terminal_history(terminal_id,cursor);
+            PRAGMA user_version = 25; COMMIT;")?;
+    }
+
     Ok(())
 }
 
@@ -599,7 +608,7 @@ fn migrate_native_secret_and_postgres_schema(connection: &Connection) -> rusqlit
         (
             "targets",
             "postgres_tls_mode",
-            "TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode = 'verify_full')",
+            "TEXT CHECK (postgres_tls_mode IS NULL OR postgres_tls_mode IN ('verify_full', 'disabled'))",
         ),
     ] {
         if !column_exists(connection, table, column)? {

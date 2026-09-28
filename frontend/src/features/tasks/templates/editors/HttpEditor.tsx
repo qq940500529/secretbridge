@@ -185,6 +185,7 @@ export function HttpEditor({
         title={
           zh ? "请求头（如 Authorization）" : "Headers (e.g. Authorization)"
         }
+        basic
         fields={value.headers}
         onChange={(headers) => onChange({ ...value, headers })}
         config={config}
@@ -206,6 +207,7 @@ export function HttpEditor({
       {!["GET", "HEAD"].includes(value.method) && (
         <Fields
           title={zh ? "JSON 请求体字段" : "JSON body fields"}
+          json
           fields={value.body}
           onChange={(body) => onChange({ ...value, body })}
           config={config}
@@ -336,6 +338,8 @@ function Fields({
   config,
   secret,
   zh,
+  basic = false,
+  json = false,
 }: {
   title: string;
   fields: HttpField[];
@@ -343,6 +347,8 @@ function Fields({
   config: CommandConfig;
   secret: boolean;
   zh: boolean;
+  basic?: boolean;
+  json?: boolean;
 }) {
   const edit = (i: number, c: Partial<HttpField>) =>
     onChange(fields.map((f, j) => (i === j ? { ...f, ...c } : f)));
@@ -374,15 +380,29 @@ function Fields({
                   source:
                     kind === "literal"
                       ? { kind, value: "" }
-                      : kind === "parameter"
-                        ? { kind, name: "" }
-                        : { kind, name: "", prefix: "" },
+                      : kind === "json_literal"
+                        ? { kind, value: {} }
+                        : kind === "parameter"
+                          ? { kind, name: "" }
+                          : kind === "basic_credential"
+                            ? { kind, name: "", username: "" }
+                            : { kind, name: "", prefix: "" },
                 });
               }}
               className={input}
             >
               <option value="literal">{zh ? "固定文本" : "Literal"}</option>
+              {json && (
+                <option value="json_literal">
+                  {zh ? "JSON 数据" : "JSON value"}
+                </option>
+              )}
               <option value="parameter">{zh ? "普通参数" : "Parameter"}</option>
+              {basic && (
+                <option value="basic_credential">
+                  {zh ? "Basic 认证" : "Basic authentication"}
+                </option>
+              )}
               {secret && (
                 <option value="credential">
                   {zh ? "凭据插槽" : "Credential slot"}
@@ -405,6 +425,14 @@ function Fields({
                   className={input}
                 />
               </label>
+            ) : f.source.kind === "json_literal" ? (
+              <JsonValueInput
+                value={f.source.value}
+                zh={zh}
+                onChange={(value) =>
+                  edit(i, { source: { kind: "json_literal", value } })
+                }
+              />
             ) : (
               <label className="text-xs">
                 {f.source.kind === "parameter"
@@ -437,6 +465,25 @@ function Fields({
                     </option>
                   ))}
                 </select>
+              </label>
+            )}
+            {f.source.kind === "basic_credential" && (
+              <label className="mt-2 block text-xs">
+                {zh ? "Basic 认证账号" : "Basic account"}
+                <input
+                  required
+                  maxLength={256}
+                  value={f.source.username}
+                  onChange={(e) =>
+                    edit(i, {
+                      source: {
+                        ...f.source,
+                        username: e.target.value,
+                      } as HttpValueSource,
+                    })
+                  }
+                  className={input}
+                />
               </label>
             )}
             {f.source.kind === "credential" && (
@@ -520,3 +567,50 @@ function Remove({ zh, onClick }: { zh: boolean; onClick: () => void }) {
 }
 const input =
   "mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal outline-none focus:border-cyan-600";
+
+function JsonValueInput({
+  value,
+  onChange,
+  zh,
+}: {
+  value: unknown;
+  onChange: (value: unknown) => void;
+  zh: boolean;
+}) {
+  const [text, setText] = useState(() => JSON.stringify(value, null, 2));
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    setText(JSON.stringify(value, null, 2));
+    setError(false);
+  }, [value]);
+  return (
+    <label className="text-xs">
+      {zh ? "JSON 数据（勿填秘密）" : "JSON value (no secrets)"}
+      <textarea
+        className={input}
+        maxLength={8192}
+        value={text}
+        aria-invalid={error}
+        onChange={(event) => {
+          setText(event.target.value);
+          try {
+            const parsed: unknown = JSON.parse(event.target.value);
+            event.target.setCustomValidity("");
+            setError(false);
+            onChange(parsed);
+          } catch {
+            setError(true);
+            event.target.setCustomValidity(
+              zh ? "请输入有效 JSON" : "Enter valid JSON",
+            );
+          }
+        }}
+      />
+      {error && (
+        <span role="alert" className="text-rose-700">
+          {zh ? "JSON 格式无效" : "Invalid JSON"}
+        </span>
+      )}
+    </label>
+  );
+}

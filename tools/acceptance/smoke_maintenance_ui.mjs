@@ -14,10 +14,9 @@ try {
   page.on("pageerror", (error) => errors.push(error.message));
   const bundle = {
     format: "secretbridge-configuration",
-    format_version: 1,
+    format_version: 2,
     exported_at_unix_ms: 1,
-    credentials: [],
-    connections: [],
+    resources: [],
     templates: [],
   };
   const report = {
@@ -76,8 +75,8 @@ try {
       } else body = { ...report, replayed: true };
     } else if (path.endsWith("/backup/preview"))
       body = {
-        schema_version: 14,
-        restore_schema_version: 16,
+        schema_version: 25,
+        restore_schema_version: 25,
         integrity_ok: true,
         credentials: 1,
         connections: 1,
@@ -267,14 +266,25 @@ try {
   await page
     .getByText("terminal_lease / terminal_busy", { exact: false })
     .waitFor();
-  await page
-    .getByRole("region", { name: "数据维护" })
-    .getByLabel("PIN/口令")
-    .fill("synthetic-export-pin");
+  assert.equal(
+    await page.locator("input[type=password]").count(),
+    0,
+    "PIN is requested only after choosing an action",
+  );
   await page.getByRole("button", { name: "解锁并预览所选内容" }).click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("当前 PIN / 口令")
+    .fill("synthetic-export-pin");
+  await page.getByRole("button", { name: "验证并继续" }).click();
   await page.getByText("已解锁记录: 1").waitFor();
   download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下载预览内容", exact: true }).click();
+  await page.getByRole("button", { name: "导出所选诊断", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("当前 PIN / 口令")
+    .fill("synthetic-export-pin");
+  await page.getByRole("button", { name: "验证并继续" }).click();
   assert.equal(
     (await download).suggestedFilename(),
     "secretbridge-diagnostics-selected.json",

@@ -30,3 +30,18 @@ export async function setApprovalNotificationSettings(
     }),
   );
 }
+
+export async function setBrokerLanguage(
+  sessionToken: string,
+  language: "en" | "zh-CN",
+): Promise<void> {
+  await readJson(
+    await fetch("/api/v1/preferences/language", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "omit",
+      headers: sessionJsonHeaders(sessionToken),
+      body: JSON.stringify({ language }),
+    }),
+  );
+}

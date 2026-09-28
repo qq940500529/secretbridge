@@ -4,6 +4,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   type ActionTemplate,
+  type AiConversation,
+  type ConversationApprovalPolicy,
+  listAiConversations,
   type Approval,
   type Target,
   decideApproval,
@@ -43,6 +46,10 @@ export function ApprovalQueueDialog({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [conversation, setConversation] = useState<AiConversation | null>(null);
+  const [policy, setPolicy] =
+    useState<ConversationApprovalPolicy>("every_task");
+  const [riskAccepted, setRiskAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const current = pending[0];
 
@@ -161,6 +168,29 @@ export function ApprovalQueueDialog({
   }, [reload, zh]);
 
   useEffect(() => {
+    let active = true;
+    setConversation(null);
+    setPolicy("every_task");
+    setRiskAccepted(false);
+    setNote("");
+    if (current?.conversation_id)
+      void listAiConversations(sessionToken)
+        .then((result) => {
+          const value = result.items.find(
+            (item) => item.id === current.conversation_id,
+          );
+          if (active && value) {
+            setConversation(value);
+            setPolicy(value.approval_policy);
+          }
+        })
+        .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [current?.id, current?.conversation_id, current?.version, sessionToken]);
+
+  useEffect(() => {
     if (!current?.action_template_id) {
       setTemplate(null);
       setTemplateLoading(false);
@@ -199,12 +229,31 @@ export function ApprovalQueueDialog({
   }
 
   async function decide(decision: "approve" | "deny") {
-    if (!current || (decision === "approve" && !canApprove)) return;
+    if (
+      !current ||
+      (decision === "approve" &&
+        (!canApprove || (policy === "conversation_once" && !riskAccepted)))
+    )
+      return;
     setBusy(true);
     setError(null);
     try {
       await decideApproval(sessionToken, current.id, decision, {
         expected_version: current.version,
+        ...(decision === "approve" && conversation
+          ? {
+              conversation_policy: {
+                expected_version: conversation.version,
+                approval_policy: policy,
+                ...(policy === "conversation_once"
+                  ? {
+                      risk_acknowledgement:
+                        "allow_all_operations_in_this_ai_conversation",
+                    }
+                  : {}),
+              },
+            }
+          : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       });
       setNote("");
@@ -218,6 +267,17 @@ export function ApprovalQueueDialog({
       );
       try {
         await reload();
+        if (current.conversation_id) {
+          const result = await listAiConversations(sessionToken);
+          const value = result.items.find(
+            (item) => item.id === current.conversation_id,
+          );
+          if (value) {
+            setConversation(value);
+            setPolicy(value.approval_policy);
+            setRiskAccepted(false);
+          }
+        }
       } catch {
         // Keep the actionable error and the current review visible.
       }
@@ -355,8 +415,16 @@ export function ApprovalQueueDialog({
                 <p className="break-all">{current.id}</p>
               </details>
               <label className="block text-sm font-semibold text-slate-700">
-                {zh ? "决定备注（可选）" : "Decision note (optional)"}
-                <input
+                {zh
+                  ? "决定备注 / 拒绝反馈（可选）"
+                  : "Decision note / rejection feedback (optional)"}
+                <textarea
+                  rows={2}
+                  placeholder={
+                    zh
+                      ? "要求 AI 更换方式或补充信息；不要填写秘密"
+                      : "Ask the AI to change approach or supply information; never include secrets"
+                  }
                   maxLength={240}
                   value={note}
                   onChange={(event) => setNote(event.target.value)}
@@ -375,15 +443,71 @@ export function ApprovalQueueDialog({
                   ? "决定前请核对上方操作快照"
                   : "Review the operation snapshot before deciding"}
               </span>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  disabled={busy || !canApprove}
-                  onClick={() => void decide("approve")}
-                  className="workbench-primary"
-                >
-                  {zh ? "批准当前项" : "Approve current"}
-                </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {policy === "conversation_once" && (
+                  <label className="max-w-60 text-xs text-rose-700">
+                    <input
+                      type="checkbox"
+                      checked={riskAccepted}
+                      onChange={(event) =>
+                        setRiskAccepted(event.target.checked)
+                      }
+                    />
+                    {zh
+                      ? "我理解：此会话后续所有操作将自动批准，可随时撤销。"
+                      : "I understand: all subsequent operations in this chat will be approved automatically. Revocable at any time."}
+                  </label>
+                )}
+                <div className="inline-flex items-stretch rounded-lg bg-cyan-700">
+                  <button
+                    type="button"
+                    disabled={
+                      busy ||
+                      !canApprove ||
+                      (current.conversation_id != null && !conversation) ||
+                      (policy === "conversation_once" && !riskAccepted)
+                    }
+                    onClick={() => void decide("approve")}
+                    className={`workbench-primary ${conversation ? "rounded-r-none" : ""}`}
+                  >
+                    {zh ? "批准当前项" : "Approve current"}
+                  </button>
+                  {conversation && (
+                    <label className="flex items-center border-l border-cyan-500">
+                      <span className="sr-only">
+                        {zh
+                          ? "此 AI 会话的审批要求"
+                          : "Approval policy for this AI chat"}
+                      </span>
+                      <select
+                        aria-label={zh ? "审批要求" : "Approval policy"}
+                        className="h-10 max-w-64 rounded-r-lg border-0 bg-cyan-700 px-3 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-60"
+                        value={policy}
+                        disabled={busy}
+                        onChange={(event) => {
+                          setPolicy(
+                            event.target.value as ConversationApprovalPolicy,
+                          );
+                          setRiskAccepted(false);
+                        }}
+                      >
+                        <option value="every_task">
+                          {zh ? "逐项确认" : "Review every task"}
+                        </option>
+                        <option value="same_task_once">
+                          {zh
+                            ? "同一操作批准一次（1 小时）"
+                            : "Same operation once (1 hour)"}
+                        </option>
+                        <option value="conversation_once">
+                          {zh
+                            ? "本会话所有操作（1 小时）"
+                            : "All operations in this chat (1 hour)"}
+                        </option>
+                      </select>
+                    </label>
+                  )}
+                </div>
                 <button
                   type="button"
                   disabled={busy}

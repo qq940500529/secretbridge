@@ -56,7 +56,7 @@ try {
             pairing_link_enabled: false,
           };
         else if (
-          /credential-references|targets|action-templates|approvals|runs|events|terminals/.test(
+          /resources|action-templates|approvals|runs|events|terminals/.test(
             path,
           )
         )

@@ -115,39 +115,40 @@ def main(pairing_url: str) -> dict[str, object]:
 
         _, credential, _ = call(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             bearer=session,
-            payload={"name": "Native acceptance credential", "kind": "password"},
+            payload={
+                "name": "Native acceptance resource",
+                "kind": "http_service",
+                "environment": "test",
+                "authentication_kind": "password",
+            },
             expected=201,
         )
         credential_id = credential["id"]
         _, configured, _ = call(
             "PUT",
-            f"/api/v1/credential-references/{credential_id}/secret",
+            f"/api/v1/resources/{credential_id}/secret",
             bearer=session,
-            payload={"secret": generated_secret, "expected_version": credential["version"]},
+            payload={
+                "secret": generated_secret,
+                "expected_version": credential["authentication"]["secret_version"],
+            },
         )
-        credential_version = configured["version"]
-        require(configured["secret_state"] == "available", "credential was not configured")
+        credential_version = configured["authentication"]["secret_version"]
+        require(
+            configured["authentication"]["secret_state"] == "available",
+            "credential was not configured",
+        )
         call(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             bearer=session,
             payload={"name": "Rejected secret field", "kind": "password", "secret": "forbidden"},
             expected=422,
         )
 
-        _, target, _ = call(
-            "POST",
-            "/api/v1/targets",
-            bearer=session,
-            payload={
-                "name": "Local acceptance target",
-                "kind": "http_service",
-                "environment": "test",
-            },
-            expected=201,
-        )
+        target = configured
         command = {
             "program": "/bin/sh",
             "working_directory": "/tmp",
@@ -279,14 +280,15 @@ def main(pairing_url: str) -> dict[str, object]:
         if session and credential_id and credential_version is not None:
             _, cleared, _ = call(
                 "DELETE",
-                f"/api/v1/credential-references/{credential_id}/secret",
+                f"/api/v1/resources/{credential_id}/secret",
                 bearer=session,
                 payload={"expected_version": credential_version},
                 expected=(200, 404, 409),
             )
             if isinstance(cleared, dict):
                 require(
-                    cleared.get("secret_state") == "not_configured", "credential cleanup failed"
+                    cleared.get("authentication", {}).get("secret_state") == "not_configured",
+                    "credential cleanup failed",
                 )
         if session:
             call("DELETE", "/api/v1/session", bearer=session, expected=(204, 401))

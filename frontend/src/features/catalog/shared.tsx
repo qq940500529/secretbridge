@@ -86,12 +86,14 @@ export const credentialKindLabels: Record<
 
 export const targetKindLabels: Record<Language, Record<TargetKind, string>> = {
   "zh-CN": {
+    generic: "通用资源",
     database: "数据库",
     http_service: "HTTP 服务",
     ssh_host: "SSH 主机",
     telnet_host: "Telnet 旧设备",
   },
   en: {
+    generic: "Generic resource",
     database: "Database",
     http_service: "HTTP service",
     ssh_host: "SSH host",
@@ -198,37 +200,47 @@ export function CatalogForm({
       busy={busy}
       returnFocusTarget={returnFocusTarget}
     >
-      {error && (
-        <p role="alert" className="px-5 text-sm text-rose-700">
-          {error}
-        </p>
-      )}
-      <form onSubmit={onSubmit} className="max-w-4xl p-5">
-        <div className="grid gap-4 md:grid-cols-2">{children}</div>
-        <div className="mt-5 flex justify-end gap-2">
-          {onCancel && (
-            <button
-              type="button"
-              onClick={onCancel}
-              disabled={busy}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-            >
-              <X className="size-4" />
-              {cancelLabel}
-            </button>
+      <form
+        onSubmit={onSubmit}
+        className="flex h-[calc(100dvh-4.5rem)] min-h-0 flex-col"
+      >
+        <fieldset
+          disabled={busy}
+          className="m-0 grid min-h-0 min-w-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain border-0 p-5 md:grid-cols-2"
+        >
+          {children}
+        </fieldset>
+        <div className="shrink-0 border-t border-slate-200 bg-white p-5">
+          {error && (
+            <p role="alert" className="mb-3 mt-0 text-sm text-rose-700">
+              {error}
+            </p>
           )}
-          <button
-            type="submit"
-            disabled={busy}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cyan-700 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-60"
-          >
-            {busy ? (
-              <LoaderCircle className="size-4 animate-spin" />
-            ) : (
-              <Plus className="size-4" />
-            )}
-            {busy ? busyLabel : submitLabel}
-          </button>
+          <div className="flex justify-end gap-2">
+            {
+              <button
+                type="button"
+                onClick={onCancel ?? onClose}
+                disabled={busy}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                <X className="size-4" />
+                {cancelLabel}
+              </button>
+            }
+            <button
+              type="submit"
+              disabled={busy}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cyan-700 px-5 text-sm font-semibold text-white hover:bg-cyan-800 disabled:opacity-60"
+            >
+              {busy ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
+              {busy ? busyLabel : submitLabel}
+            </button>
+          </div>
         </div>
       </form>
     </EditorDialog>

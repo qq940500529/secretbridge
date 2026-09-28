@@ -12,13 +12,12 @@ use uuid::Uuid;
 
 use super::{
     ApprovalOperation, ApprovalResultScope, Catalog, CatalogError, CreateActionTemplate,
-    CreateCredentialReference, CreateTarget, CredentialKind, PostgresTargetConfig, SCHEMA_VERSION,
-    TargetEnvironment, TargetKind, ensure_capacity, now_unix_ms_i64, validate_command,
+    SCHEMA_VERSION, ensure_capacity, now_unix_ms_i64, validate_command,
 };
 
 pub(crate) const MAX_CONFIGURATION_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
-const TABLES: [&str; 16] = [
+const TABLES: [&str; 18] = [
     "credential_references",
     "targets",
     "action_templates",
@@ -35,6 +34,8 @@ const TABLES: [&str; 16] = [
     "diagnostic_vault",
     "diagnostic_records",
     "ai_conversations",
+    "resource_configuration",
+    "terminal_history",
 ];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -43,38 +44,15 @@ pub(crate) struct ConfigurationBundle {
     pub format: String,
     pub format_version: u32,
     pub exported_at_unix_ms: u64,
-    pub credentials: Vec<PortableCredential>,
-    pub connections: Vec<PortableConnection>,
+    pub resources: Vec<PortableResource>,
     pub templates: Vec<PortableTemplate>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PortableCredential {
+pub(crate) struct PortableResource {
     pub id: Uuid,
-    pub name: String,
-    pub kind: CredentialKind,
-    pub purpose: Option<String>,
-    #[serde(default)]
-    pub address: Option<String>,
-    #[serde(default)]
-    pub username: Option<String>,
-}
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PortableConnection {
-    pub id: Uuid,
-    pub name: String,
-    pub kind: TargetKind,
-    pub environment: TargetEnvironment,
-    pub description: Option<String>,
-    #[serde(default)]
-    pub address: Option<String>,
-    #[serde(default)]
-    pub username: Option<String>,
-    #[serde(default)]
-    pub allow_insecure_protocol: bool,
-    pub credential_reference_id: Option<Uuid>,
-    pub postgres: Option<PostgresTargetConfig>,
+    #[serde(flatten)]
+    pub configuration: crate::domain::resources::ResourceRequest,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -157,35 +135,26 @@ impl Catalog {
         let snapshot = clone_catalog(&self.lock())?;
         let bundle = ConfigurationBundle {
             format: "secretbridge-configuration".into(),
-            format_version: 1,
+            format_version: 2,
             exported_at_unix_ms: u64::try_from(now_unix_ms_i64()?)
                 .map_err(|_| CatalogError::Storage)?,
-            credentials: snapshot
-                .list_credential_references()?
+            resources: snapshot
+                .list_resources()?
                 .into_iter()
-                .map(|item| PortableCredential {
-                    id: item.id,
-                    name: item.name,
-                    kind: item.kind,
-                    purpose: item.purpose,
-                    address: item.address,
-                    username: item.username,
-                })
-                .collect(),
-            connections: snapshot
-                .list_targets()?
-                .into_iter()
-                .map(|item| PortableConnection {
-                    id: item.id,
-                    name: item.name,
-                    kind: item.kind,
-                    environment: item.environment,
-                    description: item.description,
-                    address: item.address,
-                    username: item.username,
-                    allow_insecure_protocol: item.allow_insecure_protocol,
-                    credential_reference_id: item.credential_reference_id,
-                    postgres: item.postgres,
+                .map(|item| PortableResource {
+                    id: item.target.id,
+                    configuration: crate::domain::resources::ResourceRequest {
+                        name: item.target.name,
+                        kind: item.target.kind,
+                        environment: item.target.environment,
+                        description: item.target.description,
+                        address: item.target.address,
+                        username: item.target.username,
+                        authentication_kind: item.authentication.kind,
+                        labels: item.labels,
+                        connection: item.connection,
+                        expected_version: None,
+                    },
                 })
                 .collect(),
             templates: snapshot
@@ -247,26 +216,16 @@ impl Catalog {
         let mut credentials = HashMap::new();
         let mut targets = HashMap::new();
         let mut template_ids = HashSet::new();
-        for item in &bundle.credentials {
-            if credentials.contains_key(&item.id) || item.id.is_nil() {
+        for item in &bundle.resources {
+            if targets.contains_key(&item.id)
+                || item.id.is_nil()
+                || item.configuration.expected_version.is_some()
+            {
                 return Err(CatalogError::Invalid);
             }
-            let request: CreateCredentialReference = serde_json::from_value(
-                serde_json::json!({"name":item.name,"kind":item.kind,"purpose":item.purpose,"address":item.address,"username":item.username}),
-            )
-            .map_err(|_| CatalogError::Invalid)?;
-            credentials.insert(item.id, staged.create_credential_reference(&request)?.id);
-        }
-        for item in &bundle.connections {
-            if targets.contains_key(&item.id) || item.id.is_nil() {
-                return Err(CatalogError::Invalid);
-            }
-            let credential = item
-                .credential_reference_id
-                .map(|id| credentials.get(&id).copied().ok_or(CatalogError::Invalid))
-                .transpose()?;
-            let request: CreateTarget = serde_json::from_value(serde_json::json!({"name":item.name,"kind":item.kind,"environment":item.environment,"description":item.description,"address":item.address,"username":item.username,"allow_insecure_protocol":item.allow_insecure_protocol,"credential_reference_id":credential,"postgres":item.postgres})).map_err(|_| CatalogError::Invalid)?;
-            targets.insert(item.id, staged.create_target(&request)?.id);
+            let created = staged.save_resource(None, &item.configuration)?;
+            credentials.insert(item.id, created.target.id);
+            targets.insert(item.id, created.target.id);
         }
         for item in &bundle.templates {
             if !template_ids.insert(item.id) || item.id.is_nil() {
@@ -342,9 +301,8 @@ impl Catalog {
 
 fn bundle_digest(bundle: &ConfigurationBundle) -> Result<String, CatalogError> {
     if bundle.format != "secretbridge-configuration"
-        || bundle.format_version != 1
-        || bundle.credentials.len() > 128
-        || bundle.connections.len() > 128
+        || bundle.format_version != 2
+        || bundle.resources.len() > 128
         || bundle.templates.len() > 256
     {
         return Err(CatalogError::Invalid);

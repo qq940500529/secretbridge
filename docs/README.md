@@ -4,7 +4,7 @@
 
 [项目首页](../README.zh-CN.md) / 文档
 
-这里按读者要完成的事情组织文档。`0.3.0-beta.2` 不支持覆盖旧版安装；请使用独立的空白数据目录与合成凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
+这里按读者要完成的事情组织文档。`0.3.0-beta.3` 不支持覆盖旧版安装；请使用独立的空白数据目录与合成凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
 
 ## 首先部署：把提示词交给本机 AI 助手
 

@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { AiConversationsView } from "../tasks/approvals/AiConversationsView";
 import { SectionTabs } from "../../shared/ui/SectionTabs";
+import { TerminalHistoryView } from "./TerminalHistoryView";
 import { AuditView } from "./AuditView";
 import { RunHistoryView } from "./RunHistoryView";
 
@@ -14,9 +15,9 @@ export function HistoryWorkspace({
   language: "zh-CN" | "en";
   sessionToken: string;
 }) {
-  const [section, setSection] = useState<"logs" | "runs" | "conversations">(
-    "logs",
-  );
+  const [section, setSection] = useState<
+    "logs" | "runs" | "terminals" | "conversations"
+  >("logs");
   const [requestedRunId, setRequestedRunId] = useState<string | null>(null);
   return (
     <>
@@ -27,7 +28,11 @@ export function HistoryWorkspace({
           { id: "logs", label: language === "zh-CN" ? "安全日志" : "Safe log" },
           {
             id: "runs",
-            label: language === "zh-CN" ? "运行与终端" : "Runs & terminals",
+            label: language === "zh-CN" ? "运行记录" : "Run history",
+          },
+          {
+            id: "terminals",
+            label: language === "zh-CN" ? "终端历史" : "Terminal history",
           },
           {
             id: "conversations",
@@ -50,6 +55,8 @@ export function HistoryWorkspace({
           sessionToken={sessionToken}
           requestedRunId={requestedRunId}
         />
+      ) : section === "terminals" ? (
+        <TerminalHistoryView language={language} sessionToken={sessionToken} />
       ) : (
         <AiConversationsView language={language} sessionToken={sessionToken} />
       )}

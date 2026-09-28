@@ -14,6 +14,28 @@ pub enum ApprovalNotificationChannel {
 }
 
 impl Catalog {
+    pub fn ui_language(&self) -> Result<String, CatalogError> {
+        self.lock()
+            .query_row(
+                "SELECT ui_language FROM browser_auth_settings WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| CatalogError::Storage)
+    }
+    pub fn set_ui_language(&self, language: &str) -> Result<(), CatalogError> {
+        if !matches!(language, "en" | "zh-CN") {
+            return Err(CatalogError::Invalid);
+        }
+        self.lock()
+            .execute(
+                "UPDATE browser_auth_settings SET ui_language = ?1 WHERE singleton = 1",
+                [language],
+            )
+            .map_err(|_| CatalogError::Storage)?;
+        Ok(())
+    }
+
     pub fn approval_notification_channel(
         &self,
     ) -> Result<ApprovalNotificationChannel, CatalogError> {

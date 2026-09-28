@@ -50,7 +50,7 @@ export interface Copy {
 
 export const copy: Record<Language, Copy> = {
   "zh-CN": {
-    catalog: "连接与凭据",
+    catalog: "资源",
     credentials: "凭据",
     targets: "连接",
     operations: "任务",
@@ -95,7 +95,7 @@ export const copy: Record<Language, Copy> = {
     feedback: "反馈问题",
   },
   en: {
-    catalog: "Connections & credentials",
+    catalog: "Resources",
     credentials: "Credentials",
     targets: "Connections",
     operations: "Tasks",
