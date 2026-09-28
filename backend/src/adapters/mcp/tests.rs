@@ -153,7 +153,7 @@ async fn native_bridge_accepts_bounded_script_without_putting_it_in_approval_sum
         directory.join("mcp-bridge.json"),
     )))
     .await;
-    let content = format!("# synthetic input\n{}", "x".repeat(24_000));
+    let content = format!("# test input\n{}", "x".repeat(24_000));
     let approval = terminal_tool(
         &client,
         "secretbridge_request_command",

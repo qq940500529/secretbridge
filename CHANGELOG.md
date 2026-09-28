@@ -145,4 +145,4 @@ This file records public release behavior rather than preserving a development d
 
 ## Versioning before 1.0
 
-`0.2.0-beta.5` intentionally does not migrate databases or packages from unpublished development builds. Compatibility between public Betas is defined by each Release note until 1.0; keep independent backups and test upgrades with synthetic data. Each public release receives a dated changelog section and immutable tag.
+`0.2.0-beta.5` intentionally does not migrate databases or packages from unpublished development builds. Compatibility between public Betas is defined by each Release note until 1.0; keep independent backups and test upgrades with test data. Each public release receives a dated changelog section and immutable tag.

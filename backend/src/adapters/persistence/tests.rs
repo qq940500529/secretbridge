@@ -1614,7 +1614,7 @@ fn policy_evaluation_is_explainable_and_fails_closed_on_version_drift() {
 fn create_credential(catalog: &Catalog) -> super::CredentialReference {
     catalog
         .create_credential_reference(&CreateCredentialReference {
-            name: "Synthetic database operator".to_owned(),
+            name: "test database operator".to_owned(),
             kind: CredentialKind::Password,
             purpose: None,
             address: Some("db.test.example".to_owned()),

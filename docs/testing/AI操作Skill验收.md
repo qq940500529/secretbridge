@@ -6,7 +6,7 @@
 
 ## 自动化场景
 
-以下测试均使用合成数据；可在仓库根目录运行 `cargo test -p secretbridge adapters::mcp::tests -- --nocapture`。检查的是协议和流程的不变量，不把测试夹具当作真实 AI 客户端或真实凭据库。
+以下测试均使用测试数据；可在仓库根目录运行 `cargo test -p secretbridge adapters::mcp::tests -- --nocapture`。检查的是协议和流程的不变量，不把测试夹具当作真实 AI 客户端或真实凭据库。
 
 | 场景 | 可复现的自动化证据 |
 |---|---|

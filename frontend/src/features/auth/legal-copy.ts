@@ -32,7 +32,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
     introduction:
       "请在使用 SecretBridge 前完整阅读。选择同意表示你理解本软件的开源许可、预发行状态、安全边界及使用责任。",
     prerelease:
-      "Beta 预发行版：功能、数据格式和兼容性可能在后续版本中变化。请先使用合成数据评估，并自行备份重要配置。",
+      "Beta 预发行版：功能、数据格式和兼容性可能在后续版本中变化。请先使用测试数据（不含真实业务信息）评估，并自行备份重要配置。",
     languageLabel: "协议语言",
     licenseHeading: "一、最终用户许可协议",
     disclaimerHeading: "二、预发行软件免责协议",
@@ -69,7 +69,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
         title: "5. 本机数据与隐私",
         paragraphs: [
           "SecretBridge 按设计在本机运行，并将秘密值交由操作系统凭据库保存；项目不因此承诺你的操作系统、浏览器、扩展、Shell、第三方服务或同账号运行的其他程序均可信。你负责设备安全、账号访问控制、备份和数据保留。",
-          "公开提交 Issue、日志、截图或诊断信息是你主动向 GitHub 等外部服务披露内容。请只使用合成凭据并删除私有地址、个人路径、令牌、业务数据和其他敏感信息。安全漏洞应通过私密渠道报告。",
+          "公开提交 Issue、日志、截图或诊断信息是你主动向 GitHub 等外部服务披露内容。请只使用测试凭据并删除私有地址、个人路径、令牌、业务数据和其他敏感信息。安全漏洞应通过私密渠道报告。",
         ],
       },
       {
@@ -122,7 +122,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
       {
         title: "7. 反馈与支持",
         paragraphs: [
-          "公开仓库和社区反馈不构成付费支持或修复承诺。提交问题前请更新到最新 Beta、使用合成数据复现并清理输出。普通缺陷使用公开 Issue；可能导致秘密、隐私或安全边界受损的问题使用私密安全报告。",
+          "公开仓库和社区反馈不构成付费支持或修复承诺。提交问题前请更新到最新 Beta、使用测试数据复现并清理输出。普通缺陷使用公开 Issue；可能导致秘密、隐私或安全边界受损的问题使用私密安全报告。",
         ],
       },
     ],
@@ -140,7 +140,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
     introduction:
       "Read these terms before using SecretBridge. By accepting, you acknowledge the open-source license, prerelease status, security boundaries and your responsibilities.",
     prerelease:
-      "Beta prerelease: features, data formats and compatibility may change. Evaluate with synthetic data first and keep independent backups of important configuration.",
+      "Beta prerelease: features, data formats and compatibility may change. Evaluate with test data (not real business information) first and keep independent backups of important configuration.",
     languageLabel: "Agreement language",
     licenseHeading: "I. End User License Agreement",
     disclaimerHeading: "II. Prerelease Software Disclaimer",
@@ -177,7 +177,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
         title: "5. Local data and privacy",
         paragraphs: [
           "SecretBridge is designed to run locally and store secret values in the operating-system credential store. This does not warrant that your operating system, browser, extensions, shell, third-party services or other software running as the same account are trustworthy. You remain responsible for device security, account access, backups and retention.",
-          "Publishing an Issue, log, screenshot or diagnostic is your decision to disclose that content to external services such as GitHub. Use synthetic credentials and remove private addresses, personal paths, tokens, business data and other sensitive information. Report vulnerabilities through the private channel.",
+          "Publishing an Issue, log, screenshot or diagnostic is your decision to disclose that content to external services such as GitHub. Use disposable test credentials and remove private addresses, personal paths, tokens, business data and other sensitive information. Report vulnerabilities through the private channel.",
         ],
       },
       {
@@ -230,7 +230,7 @@ export const legalCopy: Record<Language, LegalCopy> = {
       {
         title: "7. Feedback and support",
         paragraphs: [
-          "The public repository and community feedback do not create paid support or a commitment to fix. Before reporting, update to the latest Beta, reproduce with synthetic data and sanitize output. Use a public Issue for ordinary defects and a private security report for anything that may compromise secrets, privacy or a security boundary.",
+          "The public repository and community feedback do not create paid support or a commitment to fix. Before reporting, update to the latest Beta, reproduce with test data and sanitize output. Use a public Issue for ordinary defects and a private security report for anything that may compromise secrets, privacy or a security boundary.",
         ],
       },
     ],

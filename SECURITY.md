@@ -3,7 +3,7 @@
 [Home](./README.md) / Security
 
 > [!WARNING]
-> The supported public version is a Beta prerelease. Start with synthetic credentials and the package-specific Release notes; do not treat Beta availability as an independent security audit or a production-readiness claim.
+> The supported public version is a Beta prerelease. Start with disposable test credentials and the package-specific Release notes; do not treat Beta availability as an independent security audit or a production-readiness claim.
 
 ## Report a vulnerability privately
 
@@ -13,7 +13,7 @@ Use [GitHub private vulnerability reporting](https://github.com/qq940500529/secr
 | :--- | :--- |
 | Affected commit or version | Passwords, tokens, private keys and session cookies |
 | Platform and relevant configuration, sanitized | Production endpoints, personal paths and business exports |
-| Minimal synthetic reproduction | Screenshots or logs containing unreviewed sensitive data |
+| Minimal reproduction with test data | Screenshots or logs containing unreviewed sensitive data |
 | Expected/actual behavior and security impact | Unauthorized tests against third-party systems |
 
 If private reporting is unavailable, open an issue requesting a private channel **without vulnerability details**, then wait for that channel before sharing evidence.
@@ -22,7 +22,7 @@ If private reporting is unavailable, open an issue requesting a private channel 
 
 1. **Triage:** confirm the affected scope, reproduction and impact.
 2. **Contain:** prevent further exposure where possible and identify affected credentials or sessions.
-3. **Remediate:** develop a fix and a regression test using synthetic data.
+3. **Remediate:** develop a fix and a regression test using test data.
 4. **Validate:** review the original attack path and adjacent failure modes.
 5. **Disclose:** coordinate a public advisory and version guidance without exposing private information.
 

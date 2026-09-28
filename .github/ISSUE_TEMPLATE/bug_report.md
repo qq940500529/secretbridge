@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible problem using synthetic data
+about: Report a reproducible problem using test data
 title: ""
 labels: ""
 assignees: ""
@@ -20,7 +20,7 @@ Repository commit or package version, OS/version, architecture, install method a
 ## Reproduction
 
 1. Start from a stated clean or existing configuration.
-2. Prepare synthetic input only.
+2. Prepare test input only.
 3. Describe the exact operation and whether it is reproducible after restart.
 4. Describe the observed result.
 
@@ -32,7 +32,7 @@ Provide sanitized output only.
 
 ## Data and cleanup
 
-State whether the report uses only synthetic credentials, whether any temporary service remains, and whether uninstall/data retention behaved as documented.
+State whether the report uses only disposable test credentials, whether any temporary service remains, and whether uninstall/data retention behaved as documented.
 
 ## Checks already performed
 

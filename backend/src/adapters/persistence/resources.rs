@@ -301,7 +301,7 @@ impl Catalog {
 mod tests {
     use super::*;
     fn request() -> ResourceRequest {
-        serde_json::from_value(serde_json::json!({"name":"Synthetic database","kind":"database","environment":"test","address":"db.example.invalid","username":"reader","authentication_kind":"password","labels":["reporting","reporting"],"connection":{"protocol":"database","engine":"postgres","database":"synthetic","port":5432,"tls_mode":"disabled","ca_certificate":null}})).unwrap()
+        serde_json::from_value(serde_json::json!({"name":"test database","kind":"database","environment":"test","address":"db.example.invalid","username":"reader","authentication_kind":"password","labels":["reporting","reporting"],"connection":{"protocol":"database","engine":"postgres","database":"synthetic","port":5432,"tls_mode":"disabled","ca_certificate":null}})).unwrap()
     }
     #[test]
     fn incomplete_optional_settings_can_be_saved_without_fabricated_defaults() {

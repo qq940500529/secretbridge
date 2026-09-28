@@ -10,7 +10,7 @@ SecretBridge is a local credential-use broker. Preserve its trust boundary while
 
 ## Security
 
-- Use only synthetic credentials. Never read existing credential-store entries or place secrets in commands, environment variables, source, logs, screenshots, reports, issues or pull requests.
+- Use only disposable test credentials. Never read existing credential-store entries or place secrets in commands, environment variables, source, logs, screenshots, reports, issues or pull requests.
 - Keep the broker loopback-only. Do not weaken OS security, permissions, TLS, host-key verification, approval checks or output filtering to make a test pass.
 - Do not add a secret read/export API. Web approval decisions remain unavailable to MCP.
 - Redact usernames, hostnames, personal paths, private addresses and credential values from public evidence.

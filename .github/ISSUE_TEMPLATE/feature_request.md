@@ -28,4 +28,4 @@ State whether the proposal fits the personal, single-machine open-source scope. 
 
 How would a contributor or reviewer verify that the proposal is complete?
 
-Include reader-facing documentation, synthetic test data, failure/cleanup behavior and the platforms that must be checked.
+Include reader-facing documentation, test data, failure/cleanup behavior and the platforms that must be checked.

@@ -152,7 +152,7 @@ async fn credential_canary_is_absent_from_persistence_and_normal_apis() {
         state
             .secret_store
             .set(credential, &secret)
-            .expect("replace synthetic secret");
+            .expect("replace test secret");
         let parent_environment = std::env::var_os("SB_TEST_SECRET");
         let outcome = crate::create_run_for_state(
             &state,
@@ -209,7 +209,7 @@ async fn cancellation_and_timeout_remove_temporary_credential_files() {
         state
             .secret_store
             .set(credential, &secret)
-            .expect("replace synthetic secret");
+            .expect("replace test secret");
         let outcome = crate::create_run_for_state(
             &state,
             CreateSyntheticRun {

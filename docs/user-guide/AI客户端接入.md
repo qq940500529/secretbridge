@@ -28,9 +28,9 @@ Skill 的 [兼容性文件](../../skills/secretbridge-operations/references/comp
 
 ## 可复现验收
 
-`cargo test -p secretbridge skill_examples_follow_advertised_contracts` 检查 Skill 的合成 JSON 示例确实使用当前 MCP 工具字段、必填输入和可解析类型；`skill_compatibility_and_recovery_examples_follow_server` 检查版本及常见错误的 `next_actions`。服务端原有 MCP 测试仍覆盖 `tools/list`、授权、幂等、取消和游标。例子同步检查能防止文档和接口漂移，但不能单独证明模型执行正确。
+`cargo test -p secretbridge skill_examples_follow_advertised_contracts` 检查 Skill 的测试 JSON 示例确实使用当前 MCP 工具字段、必填输入和可解析类型；`skill_compatibility_and_recovery_examples_follow_server` 检查版本及常见错误的 `next_actions`。服务端原有 MCP 测试仍覆盖 `tools/list`、授权、幂等、取消和游标。例子同步检查能防止文档和接口漂移，但不能单独证明模型执行正确。
 
-人工或模型回归使用隔离的合成环境，每个场景记录“工具选择、是否在正确位置停下等待用户、是否重复执行、是否误用秘密或旧 ID”，并保存脱敏的调用序列。建议覆盖：
+人工或模型回归使用隔离的测试环境，每个场景记录“工具选择、是否在正确位置停下等待用户、是否重复执行、是否误用秘密或旧 ID”，并保存脱敏的调用序列。建议覆盖：
 
 1. 首次初始化：收到 `initialization_required` 后引导人在本机页面操作，AI 不接触 PIN。
 2. 新对话：登记新的 conversation ID，后续请求复用本次 ID。
@@ -40,7 +40,7 @@ Skill 的 [兼容性文件](../../skills/secretbridge-operations/references/comp
 6. 取消与截断：按最新 run version 取消；输出截断时报告缺口，不重跑命令。
 7. 不确定交付：先查询审批、运行和终端状态；只有确认同一意图时复用幂等键。
 
-比较升级前后的 AI 错误率时，应使用同一模型、任务、合成夹具和评分标准；未运行模型回归前，不宣称错误率下降。仓库测试提供可复现的契约一致性证据。
+比较升级前后的 AI 错误率时，应使用同一模型、任务、测试夹具和评分标准；未运行模型回归前，不宣称错误率下降。仓库测试提供可复现的契约一致性证据。
 
 ---
 
