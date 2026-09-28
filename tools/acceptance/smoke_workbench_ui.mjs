@@ -552,6 +552,18 @@ try {
       true,
     );
     await queue.getByLabel("审批要求").selectOption("every_task");
+    await page.waitForFunction(
+      () => {
+        const dialog = document.querySelector(
+          "dialog[open]:not([data-presentation])",
+        );
+        if (!dialog) return false;
+        const footer = dialog.querySelector("footer");
+        return footer && footer.getBoundingClientRect().bottom <= innerHeight;
+      },
+      null,
+      { timeout: 2000 },
+    );
     assert.equal(
       await queue.evaluate(
         (element) => element.scrollWidth <= element.clientWidth + 1,
@@ -568,7 +580,7 @@ try {
           box.x >= 0 &&
           box.x + box.width <= width &&
           box.y + box.height <= 700,
-        "decision must be visible without scrolling",
+        `decision must be visible without scrolling at ${width}px: ${JSON.stringify(box)}`,
       );
     }
   }
