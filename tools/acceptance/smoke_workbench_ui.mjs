@@ -208,6 +208,13 @@ try {
         status = 201;
       } else body = { items: approvals };
     } else if (path === "/api/v1/approvals/approval/approve") {
+      assert.equal(input.conversation_policy.approval_policy, "same_task_once");
+      assert.equal(
+        input.conversation_policy.expected_version,
+        conversation.version,
+      );
+      conversation.approval_policy = "same_task_once";
+      conversation.version++;
       body = { ...approvals[0], state: "approved", version: 2 };
       approvals[0] = body;
       approvals.push(
@@ -219,6 +226,7 @@ try {
         },
       );
     } else if (path === "/api/v1/approvals/approval-2/deny") {
+      assert.equal(input.note, "Use a bounded alternative.");
       body = { ...approvals[1], state: "denied", version: 2 };
       approvals[1] = body;
     } else if (path === "/api/v1/approvals/stale-approval/deny") {
@@ -536,9 +544,41 @@ try {
   await page.evaluate(() => {
     document.documentElement.style.zoom = "";
   });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 700 });
+    await queue.getByLabel("审批要求").selectOption("conversation_once");
+    assert.equal(
+      await queue.getByRole("button", { name: "批准当前项" }).isDisabled(),
+      true,
+    );
+    await queue.getByLabel("审批要求").selectOption("every_task");
+    assert.equal(
+      await queue.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+      true,
+      "approval dialog horizontal overflow",
+    );
+    for (const action of ["批准当前项", "拒绝当前项"]) {
+      const box = await queue
+        .getByRole("button", { name: action })
+        .boundingBox();
+      assert.ok(
+        box &&
+          box.x >= 0 &&
+          box.x + box.width <= width &&
+          box.y + box.height <= 700,
+        "decision must be visible without scrolling",
+      );
+    }
+  }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await queue.getByLabel("审批要求").selectOption("same_task_once");
   await queue.getByRole("button", { name: "批准当前项" }).click();
   await queue.getByText("共 1 项，正在处理第 1 项；按申请时间排序").waitFor();
+  await queue
+    .getByLabel("决定备注 / 拒绝反馈（可选）")
+    .fill("Use a bounded alternative.");
   await queue.getByRole("button", { name: "拒绝当前项" }).click();
   await queue.waitFor({ state: "hidden" });
   await nav("执行与结果").click();

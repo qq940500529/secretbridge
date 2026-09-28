@@ -443,7 +443,7 @@ export function ApprovalQueueDialog({
                   ? "决定前请核对上方操作快照"
                   : "Review the operation snapshot before deciding"}
               </span>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="grid w-full min-w-0 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
                 {policy === "conversation_once" && (
                   <label className="max-w-60 text-xs text-rose-700">
                     <input
@@ -458,7 +458,7 @@ export function ApprovalQueueDialog({
                       : "I understand: all subsequent operations in this chat will be approved automatically. Revocable at any time."}
                   </label>
                 )}
-                <div className="inline-flex items-stretch rounded-lg bg-cyan-700">
+                <div className="inline-flex min-w-0 items-stretch rounded-lg bg-cyan-700">
                   <button
                     type="button"
                     disabled={
@@ -468,12 +468,20 @@ export function ApprovalQueueDialog({
                       (policy === "conversation_once" && !riskAccepted)
                     }
                     onClick={() => void decide("approve")}
-                    className={`workbench-primary ${conversation ? "rounded-r-none" : ""}`}
+                    className="workbench-primary shrink-0"
+                    style={
+                      conversation
+                        ? {
+                            borderTopRightRadius: 0,
+                            borderBottomRightRadius: 0,
+                          }
+                        : undefined
+                    }
                   >
                     {zh ? "批准当前项" : "Approve current"}
                   </button>
                   {conversation && (
-                    <label className="flex items-center border-l border-cyan-500">
+                    <label className="flex min-w-0 flex-1 items-center border-l border-cyan-500">
                       <span className="sr-only">
                         {zh
                           ? "此 AI 会话的审批要求"
@@ -481,7 +489,7 @@ export function ApprovalQueueDialog({
                       </span>
                       <select
                         aria-label={zh ? "审批要求" : "Approval policy"}
-                        className="h-10 max-w-64 rounded-r-lg border-0 bg-cyan-700 px-3 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-60"
+                        className="h-10 min-w-0 w-full sm:w-56 max-w-64 rounded-r-lg border-0 bg-cyan-700 px-3 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-700 disabled:opacity-60"
                         value={policy}
                         disabled={busy}
                         onChange={(event) => {
