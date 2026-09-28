@@ -836,11 +836,42 @@ try {
   await page.reload();
   const staleQueue = page.getByRole("dialog", { name: "待审批请求" });
   await staleQueue.waitFor();
-  for (const viewport of [
+  const approvalViewports = [
     { width: 1366, height: 768 },
     { width: 1920, height: 1080 },
-  ]) {
+  ];
+  for (const viewport of Array.from(
+    { length: 5 },
+    () => approvalViewports,
+  ).flat()) {
     await page.setViewportSize(viewport);
+    // Viewport-dependent CSS and the native dialog top layer are updated on
+    // rendering frames, not necessarily when setViewportSize resolves. Wait
+    // for the actual bounded layout, without weakening the assertions below.
+    await page.waitForFunction(
+      ({ width, height }) => {
+        const dialog = document.querySelector(
+          "dialog[open]:not([data-presentation])",
+        );
+        const footer = dialog?.querySelector("footer");
+        if (!dialog || !footer) return false;
+        const box = dialog.getBoundingClientRect();
+        const decisions = [...footer.querySelectorAll("button")];
+        return (
+          innerWidth === width &&
+          innerHeight === height &&
+          box.height <= height &&
+          Math.abs(box.x + box.width / 2 - width / 2) <= 2 &&
+          Math.abs(box.y + box.height / 2 - height / 2) <= 2 &&
+          decisions.every((button) => {
+            const rect = button.getBoundingClientRect();
+            return rect.top >= 0 && rect.bottom <= height;
+          })
+        );
+      },
+      viewport,
+      { timeout: 2000 },
+    );
     const box = await staleQueue.boundingBox();
     const approveBox = await staleQueue
       .getByRole("button", { name: "批准当前项" })
@@ -856,7 +887,7 @@ try {
     );
     assert.ok(
       approveBox.y + approveBox.height <= viewport.height,
-      "Approval decision remains in the viewport",
+      `Approval decision remains in the viewport: ${JSON.stringify({ viewport, box, approveBox })}`,
     );
   }
   await staleQueue

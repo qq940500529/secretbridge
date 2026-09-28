@@ -4,7 +4,9 @@
 
 This file records public release behavior rather than preserving a development diary for every internal build. Pull requests and Git history remain the source for implementation history.
 
-## 0.3.0-beta.3 — 2026-09-28
+## 0.3.0-beta.4 — 2026-09-28
+
+- Synchronize browser geometry checks with viewport and dialog layout readiness, retaining strict centering and decision-visibility assertions across repeated resize transitions.
 
 - Combine connection and credential management into one resource workspace. Create resources with a name, address and write-only secret; account, environment, labels and protocol details are optional. Incomplete configuration is saved without guessing missing execution parameters.
 - Add explicit connection checks for PostgreSQL, MySQL, SSH and HTTP APIs, with bounded timeouts and redacted results. Database TLS is selectable; verification stays enabled by default and never downgrades automatically.
