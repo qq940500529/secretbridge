@@ -2,6 +2,24 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 
 @import "tailwindcss";
+
+.pin-action-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(92vw, 30rem);
+  max-height: 90dvh;
+  overflow-y: auto;
+  padding: 0;
+  border: 1px solid var(--color-slate-200);
+  border-radius: 1rem;
+  background: white;
+  color: var(--color-slate-950);
+  box-shadow: 0 24px 80px #02061740;
+}
+.pin-action-dialog::backdrop {
+  background: #02061799;
+}
 @import "@xterm/xterm/css/xterm.css";
 
 :root {

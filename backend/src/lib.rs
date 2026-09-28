@@ -71,9 +71,8 @@ use zeroize::Zeroize;
 use catalog::{
     ActionTemplate, Approval, BrowserAuthChannel, BrowserAuthEventKind, BrowserAuthMode,
     CancelSyntheticRun, Catalog, CatalogError, CatalogOpenError, CreateActionTemplate,
-    CreateApproval, CreateCredentialReference, CreateRunOutcome, CreateSyntheticRun, CreateTarget,
-    CredentialReference, DecideApproval, PolicyEvaluation, SafeEvent, SecretState, SyntheticRun,
-    Target, UpdateActionTemplate, UpdateCredentialReference, UpdateTarget,
+    CreateApproval, CreateRunOutcome, CreateSyntheticRun, CredentialReference, DecideApproval,
+    PolicyEvaluation, SafeEvent, SecretState, SyntheticRun, UpdateActionTemplate,
 };
 use credential_service::{CredentialService, CredentialServiceError};
 use postgres::PostgresExecutor;
@@ -204,6 +203,7 @@ impl AppState {
         secret_store: Arc<dyn SecretStore>,
         postgres_executor: Arc<dyn PostgresExecutor>,
     ) -> (Self, String) {
+        let terminals = terminals.with_history(catalog.clone());
         let bootstrap_token = new_token();
         let (session_revocations, _) = broadcast::channel(64);
         let state = Self {

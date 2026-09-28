@@ -442,6 +442,24 @@ async fn recovery_key_resets_a_six_character_pin_and_rotates_itself() {
             ))
             .unwrap()
     };
+    // A recovery key cannot be used until PIN verification has failed.
+    let premature = app.clone().oneshot(recover(&initial_key)).await.unwrap();
+    assert_eq!(premature.status(), StatusCode::UNAUTHORIZED);
+    assert!(state.catalog.verify_diagnostic_pin("123456").unwrap());
+    let failed_pin = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/session/pin")
+                .header("Origin", ORIGIN)
+                .header("Content-Type", "application/json")
+                .body(Body::from(r#"{"pin":"000000"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed_pin.status(), StatusCode::UNAUTHORIZED);
     let incorrect = app.clone().oneshot(recover(&"0".repeat(64))).await.unwrap();
     assert_eq!(incorrect.status(), StatusCode::UNAUTHORIZED);
     let recovered = app.clone().oneshot(recover(&initial_key)).await.unwrap();
@@ -500,7 +518,7 @@ async fn installed_broker_blocks_operations_until_pin_initialization() {
         .clone()
         .oneshot(authenticated_request(
             "GET",
-            "/api/v1/targets",
+            "/api/v1/resources",
             &token,
             None,
         ))
@@ -522,7 +540,7 @@ async fn installed_broker_blocks_operations_until_pin_initialization() {
     let after = app
         .oneshot(authenticated_request(
             "GET",
-            "/api/v1/targets",
+            "/api/v1/resources",
             &token,
             None,
         ))
@@ -739,10 +757,10 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
         .clone()
         .oneshot(authenticated_json_request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             &token,
             ORIGIN,
-            r#"{"name":"Database reader","kind":"password"}"#,
+            r#"{"name":"Database reader","kind":"database","authentication_kind":"password","environment":"test"}"#,
         ))
         .await
         .expect("router response");
@@ -753,7 +771,7 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
         .clone()
         .oneshot(authenticated_json_request(
             "PUT",
-            &format!("/api/v1/credential-references/{id}/secret"),
+            &format!("/api/v1/resources/{id}/secret"),
             &token,
             ORIGIN,
             r#"{"secret":"test-only-password","expected_version":1}"#,
@@ -762,15 +780,15 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
         .expect("router response");
     assert_eq!(stored.status(), StatusCode::OK);
     let stored_body = response_json(stored).await;
-    assert_eq!(stored_body["secret_state"], "available");
-    assert_eq!(stored_body["version"], 2);
+    assert_eq!(stored_body["authentication"]["secret_state"], "available");
+    assert_eq!(stored_body["authentication"]["secret_version"], 2);
     assert!(!stored_body.to_string().contains("test-only-password"));
 
     let read_attempt = app
         .clone()
         .oneshot(authenticated_request(
             "GET",
-            &format!("/api/v1/credential-references/{id}/secret"),
+            &format!("/api/v1/resources/{id}/secret"),
             &token,
             None,
         ))
@@ -782,7 +800,7 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
         .clone()
         .oneshot(authenticated_json_request(
             "DELETE",
-            &format!("/api/v1/credential-references/{id}/secret"),
+            &format!("/api/v1/resources/{id}/secret"),
             &token,
             ORIGIN,
             r#"{"expected_version":2}"#,
@@ -791,8 +809,11 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
         .expect("router response");
     assert_eq!(cleared.status(), StatusCode::OK);
     let cleared_body = response_json(cleared).await;
-    assert_eq!(cleared_body["secret_state"], "not_configured");
-    assert_eq!(cleared_body["version"], 3);
+    assert_eq!(
+        cleared_body["authentication"]["secret_state"],
+        "not_configured"
+    );
+    assert_eq!(cleared_body["authentication"]["secret_version"], 3);
 
     let oversized_body = serde_json::json!({
         "secret": "x".repeat(17 * 1024),
@@ -802,7 +823,7 @@ async fn credential_secret_is_write_only_versioned_and_clearable() {
     let oversized = app
         .oneshot(authenticated_json_request(
             "PUT",
-            &format!("/api/v1/credential-references/{id}/secret"),
+            &format!("/api/v1/resources/{id}/secret"),
             &token,
             ORIGIN,
             &oversized_body,
@@ -952,105 +973,63 @@ async fn terminal_creation_requires_a_trusted_origin() {
 }
 
 #[tokio::test]
-async fn catalog_relationships_are_session_protected_and_deletable_in_order() {
+async fn resource_lifecycle_is_unified_and_session_protected() {
     let (app, bootstrap) = test_app();
     let token = pair_test_session(&app, &bootstrap).await;
-
-    let created = app
-            .clone()
-            .oneshot(authenticated_json_request(
-                "POST",
-                "/api/v1/credential-references",
-                &token,
-                ORIGIN,
-                r#"{"name":"Synthetic database operator","kind":"password","purpose":"Test-only metadata"}"#,
-            ))
-            .await
-            .expect("router response");
+    let created=app.clone().oneshot(authenticated_json_request("POST","/api/v1/resources",&token,ORIGIN,
+      r#"{"name":"Synthetic resource","kind":"database","environment":"test","authentication_kind":"password","labels":["reporting"]}"#)).await.unwrap();
     assert_eq!(created.status(), StatusCode::CREATED);
-    let credential = response_json(created).await;
-    assert_eq!(credential["secret_state"], "not_configured");
-    assert!(credential.get("secret").is_none());
-    let credential_id = credential["id"].as_str().expect("credential id");
-
-    let target_body = serde_json::json!({
-        "name": "Synthetic reporting database",
-        "kind": "database",
-        "environment": "test",
-        "description": "No network address is accepted in this alpha",
-        "credential_reference_id": credential_id,
-    })
-    .to_string();
-    let target = app
-        .clone()
-        .oneshot(authenticated_json_request(
-            "POST",
-            "/api/v1/targets",
-            &token,
-            ORIGIN,
-            &target_body,
-        ))
-        .await
-        .expect("router response");
-    assert_eq!(target.status(), StatusCode::CREATED);
-    let target = response_json(target).await;
-    let target_id = target["id"].as_str().expect("target id");
-
-    let in_use = app
-        .clone()
-        .oneshot(authenticated_request(
-            "DELETE",
-            &format!("/api/v1/credential-references/{credential_id}"),
-            &token,
-            Some(ORIGIN),
-        ))
-        .await
-        .expect("router response");
-    assert_eq!(in_use.status(), StatusCode::CONFLICT);
-
-    let targets = app
+    let item = response_json(created).await;
+    assert_eq!(item["authentication"]["secret_state"], "not_configured");
+    assert!(item.get("credential_reference_id").is_none());
+    assert!(item.get("secret").is_none());
+    let id = item["id"].as_str().unwrap();
+    let list = app
         .clone()
         .oneshot(authenticated_request(
             "GET",
-            "/api/v1/targets",
+            "/api/v1/resources",
             &token,
             None,
         ))
         .await
-        .expect("router response");
-    assert_eq!(targets.status(), StatusCode::OK);
-    let body = targets
-        .into_body()
-        .collect()
+        .unwrap();
+    assert_eq!(
+        response_json(list).await["items"].as_array().unwrap().len(),
+        1
+    );
+    let denied = app
+        .clone()
+        .oneshot(authenticated_request(
+            "GET",
+            "/api/v1/resources",
+            "invalid",
+            None,
+        ))
         .await
-        .expect("response body")
-        .to_bytes();
-    let targets: serde_json::Value = serde_json::from_slice(&body).expect("targets JSON");
-    assert_eq!(targets["storage"], "memory_only");
-    assert_eq!(targets["items"].as_array().map(Vec::len), Some(1));
-
-    let deleted_target = app
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    let deleted = app
         .clone()
         .oneshot(authenticated_request(
             "DELETE",
-            &format!("/api/v1/targets/{target_id}"),
+            &format!("/api/v1/resources/{id}"),
             &token,
             Some(ORIGIN),
         ))
         .await
-        .expect("router response");
-    assert_eq!(deleted_target.status(), StatusCode::NO_CONTENT);
-
-    let deleted_credential = app
+        .unwrap();
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+    let legacy = app
         .oneshot(authenticated_request(
-            "DELETE",
-            &format!("/api/v1/credential-references/{credential_id}"),
+            "GET",
+            "/api/v1/credential-references",
             &token,
-            Some(ORIGIN),
+            None,
         ))
         .await
-        .expect("router response");
-    assert_eq!(deleted_credential.status(), StatusCode::NO_CONTENT);
+        .unwrap();
+    assert_eq!(legacy.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1061,10 +1040,10 @@ async fn credential_reference_api_rejects_secret_fields() {
         .clone()
         .oneshot(authenticated_json_request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             &token,
             ORIGIN,
-            r#"{"name":"Rejected input","kind":"api_token","secret":"synthetic-placeholder"}"#,
+            r#"{"name":"Rejected input","kind":"database","secret":"synthetic-placeholder","authentication_kind":"api_token","environment":"test"}"#,
         ))
         .await
         .expect("router response");
@@ -1073,7 +1052,7 @@ async fn credential_reference_api_rejects_secret_fields() {
     let list = app
         .oneshot(authenticated_request(
             "GET",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             &token,
             None,
         ))
@@ -1098,10 +1077,10 @@ async fn catalog_update_requires_origin_and_increments_version() {
         .clone()
         .oneshot(authenticated_json_request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             &token,
             ORIGIN,
-            r#"{"name":"Synthetic reference","kind":"password"}"#,
+            r#"{"name":"Synthetic reference","kind":"database","authentication_kind":"password","environment":"test"}"#,
         ))
         .await
         .expect("router response");
@@ -1113,10 +1092,10 @@ async fn catalog_update_requires_origin_and_increments_version() {
         .clone()
         .oneshot(authenticated_request_with_body(
             "PUT",
-            &format!("/api/v1/credential-references/{id}"),
+            &format!("/api/v1/resources/{id}"),
             &token,
             None,
-            r#"{"name":"Blocked update","kind":"api_token","expected_version":1}"#,
+            r#"{"name":"Blocked update","kind":"database","expected_version":1,"authentication_kind":"api_token","environment":"test"}"#,
         ))
         .await
         .expect("router response");
@@ -1126,10 +1105,10 @@ async fn catalog_update_requires_origin_and_increments_version() {
             .clone()
             .oneshot(authenticated_json_request(
                 "PUT",
-                &format!("/api/v1/credential-references/{id}"),
+                &format!("/api/v1/resources/{id}"),
                 &token,
                 ORIGIN,
-                r#"{"name":"Updated reference","kind":"api_token","purpose":"Synthetic metadata","expected_version":1}"#,
+                r#"{"name":"Updated reference","kind":"database","expected_version":1,"authentication_kind":"api_token","environment":"test","description":"Synthetic metadata"}"#,
             ))
             .await
             .expect("router response");
@@ -1137,15 +1116,15 @@ async fn catalog_update_requires_origin_and_increments_version() {
     let item = response_json(updated).await;
     assert_eq!(item["name"], "Updated reference");
     assert_eq!(item["version"], 2);
-    assert_eq!(item["secret_state"], "not_configured");
+    assert_eq!(item["authentication"]["secret_state"], "not_configured");
 
     let stale = app
         .oneshot(authenticated_json_request(
             "PUT",
-            &format!("/api/v1/credential-references/{id}"),
+            &format!("/api/v1/resources/{id}"),
             &token,
             ORIGIN,
-            r#"{"name":"Stale update","kind":"password","expected_version":1}"#,
+            r#"{"name":"Stale update","kind":"database","expected_version":1,"authentication_kind":"password","environment":"test"}"#,
         ))
         .await
         .expect("router response");
@@ -1632,10 +1611,10 @@ async fn create_test_action_template(app: &axum::Router, token: &str) -> String 
         .clone()
         .oneshot(authenticated_json_request(
             "POST",
-            "/api/v1/targets",
+            "/api/v1/resources",
             token,
             ORIGIN,
-            r#"{"name":"Synthetic health target","kind":"http_service","environment":"test"}"#,
+            r#"{"name":"Synthetic health target","kind":"http_service","environment":"test","authentication_kind":"password"}"#,
         ))
         .await
         .expect("router response");
@@ -1715,10 +1694,10 @@ async fn create_test_approved_postgres_approval(
         .clone()
         .oneshot(authenticated_json_request(
             "POST",
-            "/api/v1/credential-references",
+            "/api/v1/resources",
             token,
             ORIGIN,
-            r#"{"name":"PostgreSQL reader","kind":"password","purpose":"Connection check"}"#,
+            r#"{"name":"PostgreSQL reader","kind":"database","environment":"test","authentication_kind":"password","address":"db.example.invalid","username":"secretbridge_reader","connection":{"protocol":"database","engine":"postgres","port":5432,"database":"secretbridge_test","tls_mode":"verify_full","ca_certificate":null}}"#,
         ))
         .await
         .expect("router response");
@@ -1729,7 +1708,7 @@ async fn create_test_approved_postgres_approval(
         .clone()
         .oneshot(authenticated_json_request(
             "PUT",
-            &format!("/api/v1/credential-references/{credential_id}/secret"),
+            &format!("/api/v1/resources/{credential_id}/secret"),
             token,
             ORIGIN,
             &serde_json::json!({"secret": secret, "expected_version": 1}).to_string(),
@@ -1738,31 +1717,7 @@ async fn create_test_approved_postgres_approval(
         .expect("router response");
     assert_eq!(stored.status(), StatusCode::OK);
 
-    let target = app
-        .clone()
-        .oneshot(authenticated_json_request(
-            "POST",
-            "/api/v1/targets",
-            token,
-            ORIGIN,
-            &serde_json::json!({
-                "name": "PostgreSQL integration target",
-                "kind": "database",
-                "environment": "test",
-                "credential_reference_id": credential_id,
-                "postgres": {
-                    "host": "db.example.invalid",
-                    "port": 5432,
-                    "database": "secretbridge_test",
-                    "username": "secretbridge_reader",
-                    "tls_mode": "verify_full"
-                }
-            })
-            .to_string(),
-        ))
-        .await
-        .expect("router response");
-    let target = response_json(target).await;
+    let target = credential.clone();
     let template = app
         .clone()
         .oneshot(authenticated_json_request(

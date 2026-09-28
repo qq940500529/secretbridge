@@ -141,7 +141,13 @@ impl Catalog {
         id: Uuid,
         request: &DecideApproval,
     ) -> Result<Approval, CatalogError> {
-        self.transition_approval(id, request, ApprovalState::Pending, ApprovalState::Approved)
+        self.transition_approval(
+            id,
+            request,
+            ApprovalState::Pending,
+            ApprovalState::Approved,
+            None,
+        )
     }
 
     pub fn deny_approval(
@@ -149,7 +155,13 @@ impl Catalog {
         id: Uuid,
         request: &DecideApproval,
     ) -> Result<Approval, CatalogError> {
-        self.transition_approval(id, request, ApprovalState::Pending, ApprovalState::Denied)
+        self.transition_approval(
+            id,
+            request,
+            ApprovalState::Pending,
+            ApprovalState::Denied,
+            None,
+        )
     }
 
     pub fn revoke_approval(
@@ -157,7 +169,28 @@ impl Catalog {
         id: Uuid,
         request: &DecideApproval,
     ) -> Result<Approval, CatalogError> {
-        self.transition_approval(id, request, ApprovalState::Approved, ApprovalState::Revoked)
+        self.transition_approval(
+            id,
+            request,
+            ApprovalState::Approved,
+            ApprovalState::Revoked,
+            None,
+        )
+    }
+
+    pub fn approve_with_conversation_policy(
+        &self,
+        id: Uuid,
+        request: &DecideApproval,
+        policy: Option<&super::SetAiConversationPolicy>,
+    ) -> Result<Approval, CatalogError> {
+        self.transition_approval(
+            id,
+            request,
+            ApprovalState::Pending,
+            ApprovalState::Approved,
+            policy,
+        )
     }
 
     fn transition_approval(
@@ -166,6 +199,7 @@ impl Catalog {
         request: &DecideApproval,
         expected_state: ApprovalState,
         next_state: ApprovalState,
+        policy: Option<&super::SetAiConversationPolicy>,
     ) -> Result<Approval, CatalogError> {
         let note = normalize_optional(request.note.as_deref(), MAX_DESCRIPTION_CHARS)?;
         let expected_version =
@@ -188,6 +222,10 @@ impl Catalog {
         let transaction = connection
             .unchecked_transaction()
             .map_err(|_| CatalogError::Storage)?;
+        if let Some(policy) = policy {
+            let conversation_id = current.conversation_id.ok_or(CatalogError::Invalid)?;
+            ai_conversations::apply_policy(&transaction, conversation_id, policy, now)?;
+        }
         let changed = transaction
             .execute(
                 "UPDATE approvals

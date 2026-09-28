@@ -21,8 +21,7 @@ try {
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const credentials = [],
-    targets = [],
+  const targets = [],
     tasks = [],
     approvals = [],
     runs = [];
@@ -42,6 +41,7 @@ try {
   let notificationChannel = "browser";
   let rejectSession = false;
   let failTaskSave = true;
+  let failSecretWrite = true;
   let outputReads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
@@ -105,33 +105,62 @@ try {
         totp_enabled: false,
         pairing_link_enabled: false,
       };
-    else if (path === "/api/v1/credential-references") {
-      if (method === "POST") {
-        body = {
-          ...metadata,
-          ...input,
-          id: "credential",
-          purpose: input.purpose ?? null,
-          secret_state: "not_configured",
-        };
-        credentials.push(body);
-        status = 201;
-      } else body = { items: credentials, storage: "sqlite" };
-    } else if (path === "/api/v1/credential-references/credential/secret") {
-      assert.equal(input.secret, "synthetic-secret-only");
-      body = { ...credentials[0], version: 2, secret_state: "available" };
-      credentials[0] = body;
-    } else if (path === "/api/v1/targets") {
+    else if (path === "/api/v1/preferences/language")
+      body = { language: input.language ?? "zh-CN" };
+    else if (path === `/api/v1/ai-conversations/${conversation.id}`)
+      body = conversation;
+    else if (path === "/api/v1/resources") {
       if (method === "POST") {
         body = {
           ...metadata,
           ...input,
           id: "connection",
-          postgres: input.postgres ?? null,
+          authentication: {
+            kind: input.authentication_kind,
+            secret_state: "not_configured",
+            secret_version: 1,
+          },
         };
         targets.push(body);
         status = 201;
       } else body = { items: targets, storage: "sqlite" };
+    } else if (path === "/api/v1/resources/connection" && method === "PUT") {
+      assert.equal(input.expected_version, targets[0].version);
+      body = { ...targets[0], ...input, version: targets[0].version + 1 };
+      targets[0] = body;
+    } else if (path === "/api/v1/resources/connection/secret") {
+      assert.equal(input.secret, "synthetic-secret-only");
+      if (failSecretWrite) {
+        failSecretWrite = false;
+        targets[0].version++;
+        targets[0].authentication.secret_version++;
+        await route.fulfill({
+          status: 503,
+          json: { code: "credential_store_unavailable" },
+        });
+        return;
+      }
+      assert.equal(
+        input.expected_version,
+        targets[0].authentication.secret_version,
+      );
+      body = {
+        ...targets[0],
+        authentication: {
+          ...targets[0].authentication,
+          secret_version: targets[0].authentication.secret_version + 1,
+          secret_state: "available",
+        },
+      };
+      targets[0] = body;
+    } else if (path === "/api/v1/resources/connection/test") {
+      body = {
+        resource_id: "connection",
+        success: true,
+        code: "connection_ok",
+        duration_ms: 10,
+        tested_at_unix_ms: now,
+      };
     } else if (path === "/api/v1/action-templates") {
       if (method === "POST" && failTaskSave) {
         failTaskSave = false;
@@ -152,7 +181,7 @@ try {
         requirements: [],
         policy_version: "v1",
         action_template_version: 1,
-        target_version: 1,
+        target_version: targets[0]?.version ?? 1,
       };
     else if (path === "/api/v1/approvals") {
       if (method === "POST") {
@@ -162,7 +191,7 @@ try {
           id: "approval",
           action_template_version: 1,
           target_id: "connection",
-          target_version: 1,
+          target_version: targets[0]?.version ?? 1,
           operation: "command_execution",
           result_scope: "sanitized_output",
           parameters: input.parameters ?? {},
@@ -179,6 +208,13 @@ try {
         status = 201;
       } else body = { items: approvals };
     } else if (path === "/api/v1/approvals/approval/approve") {
+      assert.equal(input.conversation_policy.approval_policy, "same_task_once");
+      assert.equal(
+        input.conversation_policy.expected_version,
+        conversation.version,
+      );
+      conversation.approval_policy = "same_task_once";
+      conversation.version++;
       body = { ...approvals[0], state: "approved", version: 2 };
       approvals[0] = body;
       approvals.push(
@@ -190,6 +226,7 @@ try {
         },
       );
     } else if (path === "/api/v1/approvals/approval-2/deny") {
+      assert.equal(input.note, "Use a bounded alternative.");
       body = { ...approvals[1], state: "denied", version: 2 };
       approvals[1] = body;
     } else if (path === "/api/v1/approvals/stale-approval/deny") {
@@ -204,7 +241,7 @@ try {
           approval_id: "approval",
           action_template_id: "task",
           target_id: "connection",
-          target_version: 1,
+          target_version: targets[0]?.version ?? 1,
           operation: "command_execution",
           state: "succeeded",
           result_status: "command_ok",
@@ -295,15 +332,11 @@ try {
     page
       .getByRole("navigation", { name: "主导航" })
       .getByRole("button", { name, exact: true });
-  const catalog = async (section) => {
-    await nav("连接与凭据").click();
-    await page
-      .getByRole("navigation", { name: "工作区分区" })
-      .getByRole("button", { name: section, exact: true })
-      .click();
+  const catalog = async () => {
+    await nav("资源").click();
   };
-  await catalog("凭据");
-  const add = page.getByRole("button", { name: "添加凭据引用", exact: true });
+  await catalog();
+  const add = page.getByRole("button", { name: "新建资源", exact: true });
   await add.click();
   const drawer = page.locator("dialog[data-presentation='side-drawer']");
   await drawer.evaluate((element) =>
@@ -348,43 +381,69 @@ try {
     true,
   );
   await add.click();
-  await page.getByLabel("引用名称").fill("工作台测试密码");
+  const fieldOrder = await drawer
+    .locator("input[id], select[id], textarea[id]")
+    .evaluateAll((fields) => fields.map((field) => field.id));
+  assert.ok(
+    fieldOrder.indexOf("resource-name") <
+      fieldOrder.indexOf("resource-address"),
+  );
+  assert.ok(
+    fieldOrder.indexOf("resource-address") <
+      fieldOrder.indexOf("resource-username"),
+  );
+  assert.ok(
+    fieldOrder.indexOf("resource-username") <
+      fieldOrder.indexOf("resource-secret"),
+  );
+  assert.equal(await drawer.locator("input[required]").count(), 1);
+  await page.getByLabel("资源名称 *").fill("工作台测试密码");
+  await page.getByLabel("秘密值（可稍后配置）").fill("synthetic-secret-only");
+  if (process.env.SECRETBRIDGE_RESOURCE_SCREENSHOT) {
+    await drawer.screenshot({
+      path: process.env.SECRETBRIDGE_RESOURCE_SCREENSHOT,
+    });
+  }
   await page.getByRole("button", { name: "添加", exact: true }).click();
+  await drawer.getByRole("alert").waitFor();
+  assert.equal(await drawer.locator("#resource-secret").inputValue(), "");
+  assert.equal(targets.length, 1);
+  await page
+    .getByLabel("替换秘密值（留空不更改）")
+    .fill("synthetic-secret-only");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
   await drawer.waitFor({ state: "hidden" });
   await page.waitForFunction(
     (button) => document.activeElement === button,
     addHandle,
     { timeout: 2_000 },
   );
-  await page.getByRole("button", { name: "更换秘密值" }).click();
-  await page.getByLabel("输入新秘密值").fill("synthetic-secret-only");
+  await page.getByRole("button", { name: "更换认证" }).click();
   await page
-    .getByRole("button", { name: "保存到系统凭据库", exact: true })
-    .click();
-  await page.getByText("已安全保存", { exact: true }).waitFor();
-  await page.getByText("秘密值已保存在系统凭据库，不会在此显示。").waitFor();
+    .getByLabel("替换秘密值（留空不更改）")
+    .fill("synthetic-secret-only");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await drawer.waitFor({ state: "hidden" });
+  await page.getByText("密码 · 已安全保存", { exact: false }).waitFor();
   const editCredential = page.getByRole("button", {
     name: "编辑",
     exact: true,
   });
   await editCredential.click();
   await drawer.waitFor({ state: "visible" });
-  await page.keyboard.press("Escape");
-  const editHandle = await editCredential.elementHandle();
-  await page.waitForFunction(
-    (button) => document.activeElement === button,
-    editHandle,
-    { timeout: 2_000 },
-  );
-  await catalog("连接");
-  await page.getByRole("button", { name: "新建连接", exact: true }).click();
-  await page.getByLabel("连接名称").fill("工作台测试连接");
-  await page.getByLabel("连接类型").selectOption("http_service");
-  await page.getByLabel("关联凭据引用（可选）").selectOption("credential");
-  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await page.getByLabel("类型", { exact: true }).selectOption("http_service");
+  await page.getByLabel("主机或地址").fill("https://example.com/status");
+  await page.getByLabel("HTTP 认证方式").selectOption("none");
+  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await drawer.waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "测试连接", exact: true }).click();
+  await page.getByText("连接与认证检查通过", { exact: false }).waitFor();
   await page.getByRole("button", { name: "新建任务", exact: true }).click();
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
-  assert.equal(await page.getByLabel("连接分组").inputValue(), "connection");
+  assert.equal(
+    await page.getByRole("dialog").getByLabel("资源").inputValue(),
+    "connection",
+  );
   await page.getByLabel("模板名称").fill("工作台测试任务");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("http");
@@ -398,7 +457,7 @@ try {
     })
     .last();
   await slots.getByRole("button", { name: "添加一行", exact: true }).click();
-  await slots.getByLabel("凭据引用").selectOption("credential");
+  await slots.getByLabel("凭据引用").selectOption("connection");
   const headers = page
     .locator("section")
     .filter({
@@ -485,9 +544,53 @@ try {
   await page.evaluate(() => {
     document.documentElement.style.zoom = "";
   });
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 700 });
+    await queue.getByLabel("审批要求").selectOption("conversation_once");
+    assert.equal(
+      await queue.getByRole("button", { name: "批准当前项" }).isDisabled(),
+      true,
+    );
+    await queue.getByLabel("审批要求").selectOption("every_task");
+    await page.waitForFunction(
+      () => {
+        const dialog = document.querySelector(
+          "dialog[open]:not([data-presentation])",
+        );
+        if (!dialog) return false;
+        const footer = dialog.querySelector("footer");
+        return footer && footer.getBoundingClientRect().bottom <= innerHeight;
+      },
+      null,
+      { timeout: 2000 },
+    );
+    assert.equal(
+      await queue.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+      true,
+      "approval dialog horizontal overflow",
+    );
+    for (const action of ["批准当前项", "拒绝当前项"]) {
+      const box = await queue
+        .getByRole("button", { name: action })
+        .boundingBox();
+      assert.ok(
+        box &&
+          box.x >= 0 &&
+          box.x + box.width <= width &&
+          box.y + box.height <= 700,
+        `decision must be visible without scrolling at ${width}px: ${JSON.stringify(box)}`,
+      );
+    }
+  }
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await queue.getByLabel("审批要求").selectOption("same_task_once");
   await queue.getByRole("button", { name: "批准当前项" }).click();
   await queue.getByText("共 1 项，正在处理第 1 项；按申请时间排序").waitFor();
+  await queue
+    .getByLabel("决定备注 / 拒绝反馈（可选）")
+    .fill("Use a bounded alternative.");
   await queue.getByRole("button", { name: "拒绝当前项" }).click();
   await queue.waitFor({ state: "hidden" });
   await nav("执行与结果").click();
@@ -539,7 +642,7 @@ try {
     .waitFor({ state: "hidden" });
   assert.equal(runs.length, 1);
   assert.equal(tasks.length, 1);
-  assert.equal(tasks[0].command.slots[0].credential_id, "credential");
+  assert.equal(tasks[0].command.slots[0].credential_id, "connection");
   await nav("历史").click();
   assert.equal(
     await page
@@ -547,7 +650,7 @@ try {
       .count(),
     0,
   );
-  await catalog("连接");
+  await catalog();
   await page.getByRole("button", { name: /工作台测试任务 · 完成/ }).waitFor();
   await page.getByLabel("搜索记录").fill("不存在");
   await page.getByText("没有匹配记录", { exact: true }).waitFor();
@@ -557,9 +660,7 @@ try {
     await page.evaluate(() => localStorage.getItem("secretbridge.language.v1")),
     "en",
   );
-  await page
-    .getByRole("heading", { name: "Connections", exact: true })
-    .waitFor();
+  await page.getByRole("heading", { name: "Resources", exact: true }).waitFor();
   await page.getByRole("button", { name: "Switch to Chinese" }).click();
   if (browserName === "chromium") {
     const accessibility = await new AxeBuilder({ page })
@@ -575,8 +676,15 @@ try {
         kind: "http_service",
         environment: "test",
         description: "个人本机规模验收数据",
-        credential_reference_id: null,
-        postgres: null,
+        address: null,
+        username: null,
+        labels: ["规模测试"],
+        connection: { protocol: "none" },
+        authentication: {
+          kind: "password",
+          secret_state: "not_configured",
+          secret_version: 1,
+        },
       });
     }
     for (let index = 1; index < 200; index++) {
@@ -600,7 +708,7 @@ try {
         approval_id: "approval",
         action_template_id: `scale-task-${String(((index - 1) % 198) + 1).padStart(3, "0")}`,
         target_id: `scale-target-${String((index % 99) + 1).padStart(3, "0")}`,
-        target_version: 1,
+        target_version: targets[0]?.version ?? 1,
         operation: "synthetic_health_check",
         result_scope: "status_only",
         state: "succeeded",
@@ -634,7 +742,7 @@ try {
     const scaleDurations = {
       tasks_ms: await searchAndOpen("任务", "规模任务 199", "规模任务 199"),
       connections_ms: await searchAndOpen(
-        "连接与凭据",
+        "资源",
         "规模连接 099",
         "规模连接 099",
       ),
@@ -658,7 +766,7 @@ try {
     console.log(
       `Personal-scale UI passed: 100 connections, 200 tasks and 500 runs (${JSON.stringify(scaleDurations)}).`,
     );
-    await catalog("连接");
+    await catalog();
   }
   if (process.env.SECRETBRIDGE_UI_SCREENSHOT)
     await page.screenshot({
@@ -714,13 +822,14 @@ try {
       path: process.env.SECRETBRIDGE_UI_SCREENSHOT,
       fullPage: true,
     });
-  targets[0].version = 2;
+  const frozenTargetVersion = targets[0].version;
+  targets[0].version++;
   approvals.push({
     ...approvals[0],
     id: "stale-approval",
     state: "pending",
     version: 1,
-    target_version: 1,
+    target_version: frozenTargetVersion,
     created_at_unix_ms: now + 2,
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -780,10 +889,14 @@ try {
   await page
     .getByRole("button", { name: "解除当前页面配对", exact: true })
     .click();
-  await nav("连接与凭据").click();
+  await nav("资源").click();
   await page.getByRole("heading", { name: "登录本机管理页" }).waitFor();
-  await page.getByLabel("本机 PIN 或口令").fill("synthetic-pin-only");
-  await page.getByRole("button", { name: "验证并进入" }).click();
+  await page.getByRole("button", { name: "使用 PIN 登录" }).click();
+  await page
+    .getByRole("dialog")
+    .getByLabel("当前 PIN / 口令")
+    .fill("synthetic-pin-only");
+  await page.getByRole("button", { name: "验证并继续" }).click();
   await page.getByText("已配对", { exact: true }).waitFor();
   rejectSession = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));

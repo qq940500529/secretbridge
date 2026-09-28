@@ -24,7 +24,7 @@ pub enum ConversationApprovalPolicy {
 }
 
 impl ConversationApprovalPolicy {
-    const fn as_storage(self) -> &'static str {
+    pub(super) const fn as_storage(self) -> &'static str {
         match self {
             Self::EveryTask => "every_task",
             Self::SameTaskOnce => "same_task_once",
@@ -191,75 +191,48 @@ impl Catalog {
         id: Uuid,
         request: &SetAiConversationPolicy,
     ) -> Result<AiConversation, CatalogError> {
-        if request.approval_policy == ConversationApprovalPolicy::ConversationOnce
-            && request.risk_acknowledgement.as_deref() != Some(ALL_OPERATIONS_ACKNOWLEDGEMENT)
-        {
-            return Err(CatalogError::Invalid);
-        }
         let connection = self.lock();
-        let current = conversation_by_id(&connection, id)?.ok_or(CatalogError::NotFound)?;
-        if current.version != request.expected_version {
-            return Err(CatalogError::VersionConflict);
-        }
-        let now = now_unix_ms_i64()?;
-        let expires_at = if request.approval_policy == ConversationApprovalPolicy::EveryTask {
-            None
-        } else {
-            Some(
-                now.checked_add(GRANT_SECONDS * 1_000)
-                    .ok_or(CatalogError::Storage)?,
-            )
-        };
         let transaction = connection
             .unchecked_transaction()
             .map_err(|_| CatalogError::Storage)?;
-        let changed = transaction
-            .execute(
-                "UPDATE ai_conversations SET approval_policy = ?1,
-                    grant_expires_at_unix_ms = ?2, updated_at_unix_ms = ?3,
-                    version = version + 1 WHERE id = ?4 AND version = ?5",
-                params![
-                    request.approval_policy.as_storage(),
-                    expires_at,
-                    now,
-                    id.to_string(),
-                    i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?
-                ],
-            )
-            .map_err(|_| CatalogError::Storage)?;
-        if changed == 0 {
-            return Err(CatalogError::VersionConflict);
-        }
-        match request.approval_policy {
-            ConversationApprovalPolicy::EveryTask | ConversationApprovalPolicy::SameTaskOnce => {
-                transaction
-                    .execute(
-                        "UPDATE approvals SET state = 'revoked', updated_at_unix_ms = ?1,
-                        version = version + 1
-                      WHERE conversation_id = ?2 AND preauthorized = 1 AND state = 'approved'",
-                        params![now, id.to_string()],
-                    )
-                    .map_err(|_| CatalogError::Storage)?;
-            }
-            ConversationApprovalPolicy::ConversationOnce => {
-                transaction
-                    .execute(
-                        "UPDATE approvals SET state = 'approved', preauthorized = 1,
-                        decision_note = 'Conversation-wide approval grant',
-                        expires_at_unix_ms = MIN(expires_at_unix_ms, ?1),
-                        updated_at_unix_ms = ?2, version = version + 1
-                      WHERE conversation_id = ?3 AND state = 'pending'
-                        AND expires_at_unix_ms > ?2",
-                        params![
-                            expires_at.ok_or(CatalogError::Storage)?,
-                            now,
-                            id.to_string()
-                        ],
-                    )
-                    .map_err(|_| CatalogError::Storage)?;
-            }
-        }
+        apply_policy(&transaction, id, request, now_unix_ms_i64()?)?;
         transaction.commit().map_err(|_| CatalogError::Storage)?;
         conversation_by_id(&connection, id)?.ok_or(CatalogError::Storage)
     }
+}
+
+/// Called inside the same transaction as an approval decision.
+pub(super) fn apply_policy(
+    connection: &Connection,
+    id: Uuid,
+    request: &SetAiConversationPolicy,
+    now: i64,
+) -> Result<(), CatalogError> {
+    if request.approval_policy == ConversationApprovalPolicy::ConversationOnce
+        && request.risk_acknowledgement.as_deref() != Some(ALL_OPERATIONS_ACKNOWLEDGEMENT)
+    {
+        return Err(CatalogError::Invalid);
+    }
+    let current = conversation_by_id(connection, id)?.ok_or(CatalogError::NotFound)?;
+    if current.version != request.expected_version {
+        return Err(CatalogError::VersionConflict);
+    }
+    let expiry = if request.approval_policy == ConversationApprovalPolicy::EveryTask {
+        None
+    } else {
+        Some(
+            now.checked_add(GRANT_SECONDS * 1000)
+                .ok_or(CatalogError::Storage)?,
+        )
+    };
+    connection.execute(
+        "UPDATE ai_conversations SET approval_policy = ?1, grant_expires_at_unix_ms = ?2, updated_at_unix_ms = ?3, version = version + 1 WHERE id = ?4 AND version = ?5",
+        params![request.approval_policy.as_storage(), expiry, now, id.to_string(), i64::try_from(request.expected_version).map_err(|_| CatalogError::Invalid)?],
+    ).map_err(|_| CatalogError::Storage)?;
+    // Previously reused decisions must not survive a narrowing of the policy.
+    if request.approval_policy != ConversationApprovalPolicy::ConversationOnce {
+        connection.execute("UPDATE approvals SET state = 'revoked', updated_at_unix_ms = ?1, version = version + 1 WHERE conversation_id = ?2 AND preauthorized = 1 AND state = 'approved'", params![now, id.to_string()]).map_err(|_| CatalogError::Storage)?;
+    }
+    // Pending operations are never silently approved here. Each still passes its snapshot checks.
+    Ok(())
 }

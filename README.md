@@ -15,7 +15,7 @@
 </div>
 
 > [!IMPORTANT]
-> The `0.3.0-beta.2` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with synthetic credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> The `0.3.0-beta.3` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with disposable test credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Start here: deploy with a local AI assistant
 
@@ -44,11 +44,12 @@ flowchart LR
 
 ## What it provides
 
+- **Unified resources:** keep the address, account, authentication and optional protocol settings in one record. Purpose labels organize resources without duplicate connection entries.
 - **Write-only credential handling:** passwords, tokens and private keys live in the OS credential store; SQLite keeps references and public state.
 - **Human-controlled approval:** review each request by default, or set a one-hour per-conversation reuse policy in the local Web console. Allowing every operation in one AI conversation requires an explicit high-risk confirmation and shows a persistent warning while active.
 - **Authenticator confirmation:** bind a standard TOTP authenticator by QR code or manual key, then confirm one reviewed approval from an AI conversation with a single-use six-digit code.
 - **Controlled connectors:** fixed programs, HTTP, SSH, SFTP, Git HTTPS, PostgreSQL and MySQL.
-- **Secure continuous terminals:** ordinary commands and human-approved credential commands can share one broker-owned shell; output is redacted before Web replay or MCP reads.
+- **Secure continuous terminals:** ordinary commands and human-approved credential commands can share one broker-owned shell; output is redacted before Web replay or MCP reads. Timestamped commands, parameters and bounded transcripts remain available after the terminal closes.
 - **Bounded results:** filter credential-task output before persistence; constrain HTTP and database fields and size.
 - **Traceable state:** version approvals, runs and fixed audit events; configuration changes invalidate stale grants.
 - **Local delivery:** background start/status/stop, login startup, upgrade, rollback, uninstall, backup and restore.
@@ -63,12 +64,12 @@ This version is not an in-place upgrade for an earlier installation. Keep existi
 
 ## Typical workflow
 
-1. Save a disposable synthetic credential and confirm that the UI cannot read it back.
-2. Register a fixed connection and its trust settings.
+1. Create a resource in the Web console, following the normal name, address, connection settings and authentication sequence. Only the name is required to save an incomplete configuration.
+2. Save a disposable test secret directly in that resource; confirm it cannot be read back. Complete protocol settings before testing a connection or creating an executable task.
 3. Define a task, ordinary parameters, credential slots and result scope.
 4. Let an AI or user request approval; decide in the Web console, or reply with a current authenticator code so the AI can relay that one-time confirmation through MCP.
 5. Run the approved operation and inspect its bounded result and audit events.
-6. Delete synthetic credentials and stop the broker when the evaluation ends.
+6. Delete disposable test credentials and stop the broker when the evaluation ends.
 
 Detailed engineering documents are currently in Simplified Chinese. Start with the [documentation hub](./docs/README.md) and [user guide](./docs/user-guide/使用指南.md).
 
@@ -88,7 +89,7 @@ These are Beta validation targets, not verified minimum OS guarantees. macOS Int
 
 ## Help test the Beta
 
-Broader real-machine validation is now community-led. After installing the latest Beta, use synthetic data to check installation, browser pairing, credential-store write/overwrite/delete, approval and rejection, redaction, restart or login recovery, upgrade/rollback and uninstall on your own environment. Do not weaken TLS, SSH host verification, the credential store or other system protections to make a test pass.
+Broader real-machine validation is now community-led. After installing the latest Beta, use test data to check installation, browser pairing, credential-store write/overwrite/delete, approval and rejection, redaction, restart or login recovery, upgrade/rollback and uninstall on your own environment. Do not weaken TLS, SSH host verification, the credential store or other system protections to make a test pass.
 
 The [community verification backlog](./docs/community/社区验证待办.md) lists outstanding real-desktop and platform scenarios. These checks are tracked separately from completed implementation issues.
 
@@ -101,7 +102,7 @@ Report a reproducible ordinary defect through the [Beta bug form](https://github
 - TLS, SSH host verification and target-system permissions must not be disabled to make a test pass.
 - Output filtering reduces accidental echo risk; it is not a program sandbox and cannot decide whether all business data is safe to share with a model.
 - Malicious software already running arbitrary code as the credential owner may bypass application controls and access that account's processes, files or credential store.
-- Use short-lived, least-privilege accounts for real systems and synthetic data in reports.
+- Use short-lived, least-privilege accounts for real systems and test data in reports.
 
 See the [security model](./docs/security/安全模型.md) and [automated security acceptance](./docs/testing/自动化安全验收.md). Report vulnerabilities privately through [SECURITY.md](./SECURITY.md).
 

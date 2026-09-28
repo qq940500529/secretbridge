@@ -3,7 +3,7 @@ name: secretbridge-operations
 description: Use SecretBridge MCP tools to run user-requested local, SSH, database, HTTP, or other saved-connection operations while keeping credentials in the local broker. Use when the user asks an AI assistant to perform a controlled operation through SecretBridge; do not use for installation or ordinary repository development.
 ---
 
-# SecretBridge controlled operations / 秘桥受控操作
+# SecretBridge controlled operations
 
 This skill describes the AI workflow. The MCP server is authoritative for tool schemas, live state, approval, credential access, output filtering, and permissions. Read [compatibility.json](./references/compatibility.json) when connecting to a new broker version. If it differs, use the server's current `tools/list` schemas and responses; do not copy fields from this skill's examples until an updated skill is installed.
 
@@ -11,7 +11,7 @@ This skill describes the AI workflow. The MCP server is authoritative for tool s
 
 ## Before requesting an operation / 申请前
 
-1. Start this AI conversation with `secretbridge_begin_conversation` and a brief summary without secrets. Keep the returned `id` as `conversation_id` for this conversation. Never reuse an ID from another chat.
+1. First call `secretbridge_list_catalog` and read `ui_language`. Use that language for names, summaries, approval reasons and other descriptive text sent to the broker, even if this chat uses a different language. Recheck after a user changes the UI language. Start this AI conversation with `secretbridge_begin_conversation` and a brief summary without secrets. Keep the returned `id` as `conversation_id` for this conversation. Never reuse an ID from another chat.
 2. Discover `secretbridge_terminal_capabilities`, `secretbridge_list_catalog`, and, when useful, `secretbridge_list_action_templates`. Use only IDs returned by the current broker. The catalog contains metadata, not credential values.
 3. Prefer an existing structured connector or saved action that fits the exact target and intent. Use `secretbridge_request_ssh` for a one-time SSH command on a saved SSH connection. Use a secure terminal plus `secretbridge_request_command` for a changing local command. Save or modify a reusable template only when the user requests reuse through the human Web console.
 4. For `secretbridge_request_command`, send an absolute executable and separate argv items. A credential argument or file slot occupies one complete argument as `{{secret:slot_name}}`; bind only the opaque credential ID. Other double braces remain literal. A non-secret script can go in bounded `stdin_content` only when it does not share stdin with a credential slot.
@@ -27,6 +27,7 @@ This skill describes the AI workflow. The MCP server is authoritative for tool s
 
 - Follow current `next_actions` as guidance, and verify current state before any retry. [Recovery examples](./references/recovery.json) cover common stable codes; the live response wins if it differs.
 - `initialization_required`: ask the person to finish setup in the local management page. Do not handle the setup material.
+- On `denied`, read `decision_note`: change the approach or ask for the requested information. Never resubmit the same rejected operation without addressing the feedback.
 - Approval consumed, expired, or changed: fetch current approval state and request a new approval only if the original intent still stands.
 - Terminal context unknown or stopped: create a new terminal and approval; do not assume a command can safely be replayed.
 - SSH host fingerprints must be verified by the person through an independent trusted channel. Do not accept an unknown or changed key automatically, or disable host verification.

@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { commandFromResource } from "./resource-command";
 import { CommandEditor, emptyCommand } from "./editors/CommandEditor";
 
 import {
@@ -23,9 +24,9 @@ import {
   createActionTemplate,
   deleteActionTemplate,
   listActionTemplates,
-  listTargets,
+  listResources,
   SecretBridgeApiError,
-  type Target,
+  type Resource,
   type CommandConfig,
   type CredentialReference,
   listCredentialReferences,
@@ -57,7 +58,7 @@ export function ActionTemplatesView({
           formEdit: "编辑操作模板",
           name: "模板名称",
           namePlaceholder: "例如：测试目标元数据检查",
-          target: "连接分组",
+          target: "资源",
           choose: "请选择目标",
           operation: "内置受控操作",
           scope: "结果范围",
@@ -69,7 +70,7 @@ export function ActionTemplatesView({
           save: "保存修改",
           cancel: "取消",
           templates: "已配置模板",
-          noTargets: "请先建立逻辑目标。",
+          noTargets: "请先建立资源。",
           empty: "尚无操作模板。",
           loading: "正在读取模板…",
           loadError: "模板读取失败，请稍后重试。",
@@ -105,7 +106,7 @@ export function ActionTemplatesView({
           formEdit: "Edit action template",
           name: "Template name",
           namePlaceholder: "Example: test-target metadata inspection",
-          target: "Connection group",
+          target: "Resource",
           choose: "Choose a target",
           operation: "Built-in controlled operation",
           scope: "Result scope",
@@ -118,7 +119,7 @@ export function ActionTemplatesView({
           save: "Save changes",
           cancel: "Cancel",
           templates: "Configured templates",
-          noTargets: "Create a logical target first.",
+          noTargets: "Create a resource first.",
           empty: "No action templates yet.",
           loading: "Loading templates…",
           loadError: "Templates could not be loaded. Try again later.",
@@ -152,7 +153,7 @@ export function ActionTemplatesView({
   const [editorOpen, setEditorOpen] = useState(false);
   const [credentials, setCredentials] = useState<CredentialReference[]>([]);
   const [command, setCommand] = useState<CommandConfig>(emptyCommand);
-  const [targets, setTargets] = useState<Target[]>([]);
+  const [targets, setTargets] = useState<Resource[]>([]);
   const [editing, setEditing] = useState<ActionTemplate | null>(null);
   const [name, setName] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -174,7 +175,7 @@ export function ActionTemplatesView({
   async function reload() {
     const [templates, targetResponse] = await Promise.all([
       listActionTemplates(sessionToken),
-      listTargets(sessionToken),
+      listResources(sessionToken),
     ]);
     setItems(templates.items);
     setTargets(targetResponse.items);
@@ -186,7 +187,10 @@ export function ActionTemplatesView({
       .then((response) => setCredentials(response.items))
       .catch(() => setError(text.loadError));
     let active = true;
-    Promise.all([listActionTemplates(sessionToken), listTargets(sessionToken)])
+    Promise.all([
+      listActionTemplates(sessionToken),
+      listResources(sessionToken),
+    ])
       .then(([templates, targetResponse]) => {
         if (!active) return;
         setItems(templates.items);
@@ -219,7 +223,15 @@ export function ActionTemplatesView({
         targets[0]?.id ??
         "",
     );
-    setOperation("inspect_metadata");
+    const resource = targets.find(
+      (item) => item.id === (initialTargetId ?? targets[0]?.id),
+    );
+    if (resource) setCommand(commandFromResource(resource));
+    setOperation(
+      resource && resource.connection.protocol !== "none"
+        ? "command_execution"
+        : "inspect_metadata",
+    );
     setScope("metadata_summary");
     setDescription("");
     setTimeoutSeconds(15);
@@ -353,7 +365,14 @@ export function ActionTemplatesView({
               <select
                 required
                 value={targetId}
-                onChange={(event) => setTargetId(event.target.value)}
+                onChange={(event) => {
+                  setTargetId(event.target.value);
+                  const resource = targets.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  if (resource && !editing)
+                    setCommand(commandFromResource(resource));
+                }}
                 className={inputClass}
               >
                 <option value="">{text.choose}</option>
@@ -368,9 +387,18 @@ export function ActionTemplatesView({
               <Field label={text.operation}>
                 <select
                   value={operation}
-                  onChange={(event) =>
-                    setOperation(event.target.value as ApprovalOperation)
-                  }
+                  onChange={(event) => {
+                    setOperation(event.target.value as ApprovalOperation);
+                    if (
+                      event.target.value === "command_execution" &&
+                      !editing
+                    ) {
+                      const resource = targets.find(
+                        (item) => item.id === targetId,
+                      );
+                      if (resource) setCommand(commandFromResource(resource));
+                    }
+                  }}
                   className={inputClass}
                 >
                   {Object.entries(text.operationLabels).map(

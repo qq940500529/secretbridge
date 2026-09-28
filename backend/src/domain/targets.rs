@@ -8,6 +8,7 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum PostgresTlsMode {
     VerifyFull,
+    Disabled,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -23,6 +24,7 @@ pub struct PostgresTargetConfig {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
+    Generic,
     Database,
     HttpService,
     SshHost,
@@ -56,6 +58,7 @@ pub struct Target {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub struct CreateTarget {
     pub(crate) name: String,
     pub(crate) kind: TargetKind,
@@ -73,6 +76,7 @@ pub struct CreateTarget {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(test)]
 pub struct UpdateTarget {
     pub(crate) name: String,
     pub(crate) kind: TargetKind,

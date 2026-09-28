@@ -4,5 +4,6 @@
 pub(crate) mod approvals;
 pub(crate) mod credentials;
 pub(crate) mod parameters;
+pub(crate) mod resources;
 pub(crate) mod runs;
 pub(crate) mod targets;

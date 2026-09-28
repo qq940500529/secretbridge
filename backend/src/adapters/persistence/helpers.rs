@@ -5,10 +5,13 @@ use super::{
     ActionTemplate, Approval, ApprovalOperation, ApprovalResultScope, CatalogError, Connection,
     CredentialKind, CredentialReference, MAX_IDEMPOTENCY_KEY_CHARS, OptionalExtension,
     POSTGRES_POLICY_VERSION, PolicyDecision, PolicyEvaluation, PolicyReasonCode, PolicyRequirement,
-    PostgresTargetConfig, RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState,
-    SyntheticRun, SystemTime, Target, TargetKind, UNIX_EPOCH, Uuid, action_template_by_id,
-    credential_from_row, params, target_from_row,
+    RunState, SYNTHETIC_POLICY_VERSION, SafeEventKind, SecretState, SyntheticRun, SystemTime,
+    Target, TargetKind, UNIX_EPOCH, Uuid, action_template_by_id, credential_from_row, params,
+    target_from_row,
 };
+
+#[cfg(test)]
+use super::PostgresTargetConfig;
 
 pub(crate) fn validate_command(
     connection: &Connection,
@@ -414,6 +417,7 @@ pub(crate) fn ensure_capacity(
         .ok_or(CatalogError::Capacity)
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_credential_reference_unlinked(
     connection: &Connection,
     id: Uuid,
@@ -444,6 +448,7 @@ pub(crate) fn normalize_idempotency_key(value: &str) -> Result<String, CatalogEr
     Ok(value.to_owned())
 }
 
+#[cfg(test)]
 pub(crate) fn normalize_postgres_config(
     kind: TargetKind,
     config: Option<&PostgresTargetConfig>,
@@ -492,6 +497,7 @@ pub(crate) fn ensure_target_exists(connection: &Connection, id: Uuid) -> Result<
     exists.then_some(()).ok_or(CatalogError::NotFound)
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_credential_exists(
     connection: &Connection,
     id: Option<Uuid>,

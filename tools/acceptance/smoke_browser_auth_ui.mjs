@@ -25,6 +25,8 @@ async function openCase({
   let method = initialMethod;
   let reads = 0;
   let writes = 0;
+  let expired = false;
+  let pinAttempts = 0;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -56,6 +58,22 @@ async function openCase({
       }
       return;
     }
+    if (path === "/api/v1/session/pin") {
+      pinAttempts++;
+      if (request.postDataJSON().pin !== "synthetic-current-pin") {
+        await route.fulfill({ status: 401, json: { code: "unauthorized" } });
+      } else {
+        expired = false;
+        await route.fulfill({
+          json: {
+            session_token: "synthetic-session",
+            token_type: "Bearer",
+            expires_in_seconds: 3600,
+          },
+        });
+      }
+      return;
+    }
     let body = { items: [] };
     if (path === "/api/v1/notification-settings") body = { channel: "browser" };
     else if (path === "/api/v1/status")
@@ -74,7 +92,7 @@ async function openCase({
         expires_in_seconds: 3600,
       };
     else if (path === "/api/v1/session")
-      body = { authenticated: true, expires_in_seconds: 3600 };
+      body = { authenticated: !expired, expires_in_seconds: 3600 };
     await route.fulfill({ json: body });
   });
   await page.goto(
@@ -100,6 +118,10 @@ async function openCase({
     showSettings,
     reads: () => reads,
     writes: () => writes,
+    expire: () => {
+      expired = true;
+    },
+    pinAttempts: () => pinAttempts,
   };
 }
 
@@ -151,10 +173,45 @@ try {
     .click();
   assert.equal(restored.writes(), 0);
   await restored.page.getByRole("button", { name: "解除验证码绑定" }).click();
-  await restored.page.getByLabel("当前 PIN/口令").fill("synthetic-current-pin");
-  await restored.page.getByRole("button", { name: "确认更改" }).click();
+  await restored.page
+    .getByLabel("当前 PIN / 口令")
+    .fill("synthetic-current-pin");
+  await restored.page.getByRole("button", { name: "验证并继续" }).click();
   await restored.page.getByText("已设置 PIN/口令").waitFor();
   assert.equal(restored.writes(), 1);
+  restored.expire();
+  await restored.page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const pinDialog = restored.page.getByRole("dialog", { name: "登录管理页" });
+  await pinDialog.waitFor();
+  assert.equal(
+    await restored.page
+      .getByRole("heading", { name: "浏览器身份验证" })
+      .count(),
+    0,
+    "expired settings cannot remain actionable",
+  );
+  assert.equal(
+    await restored.page
+      .getByRole("button", { name: "忘记 PIN？使用恢复密钥" })
+      .count(),
+    0,
+    "recovery is hidden until an actual PIN failure",
+  );
+  await pinDialog.getByLabel("当前 PIN / 口令").fill("wrong-synthetic-pin");
+  const before = await pinDialog.boundingBox();
+  await pinDialog.getByRole("button", { name: "验证并继续" }).click();
+  await pinDialog.getByText("验证或操作未完成，请检查 PIN 并重试。").waitFor();
+  const after = await pinDialog.boundingBox();
+  assert.ok(before && after && Math.abs(before.height - after.height) <= 1);
+  await pinDialog.getByRole("button", { name: "取消", exact: true }).click();
+  await restored.page
+    .getByRole("button", { name: "忘记 PIN？使用恢复密钥" })
+    .waitFor();
+  await restored.page.getByRole("button", { name: "使用 PIN 登录" }).click();
+  await pinDialog.getByLabel("当前 PIN / 口令").fill("synthetic-current-pin");
+  await pinDialog.getByRole("button", { name: "验证并继续" }).click();
+  await restored.page.getByText("已配对", { exact: true }).waitFor();
+  assert.equal(restored.pinAttempts(), 2);
   await restored.context.close();
 
   const bootstrap = await openCase({ savedSession: false });

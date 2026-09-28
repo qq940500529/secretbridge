@@ -17,29 +17,9 @@ export type ConfigurationStorage = "memory_only" | "sqlite";
 
 export interface ConfigurationBundle {
   format: "secretbridge-configuration";
-  format_version: 1;
+  format_version: 2;
   exported_at_unix_ms: number;
-  credentials: Array<
-    Pick<
-      CredentialReference,
-      "id" | "name" | "kind" | "purpose" | "address" | "username"
-    >
-  >;
-  connections: Array<
-    Pick<
-      Target,
-      | "id"
-      | "name"
-      | "kind"
-      | "environment"
-      | "description"
-      | "address"
-      | "username"
-      | "allow_insecure_protocol"
-      | "credential_reference_id"
-      | "postgres"
-    >
-  >;
+  resources: Array<ResourceRequest & { id: string }>;
   templates: Array<
     Pick<
       ActionTemplate,
@@ -261,11 +241,11 @@ export interface UpdateCredentialReference extends CreateCredentialReference {
 }
 
 export type TargetKind =
-  "database" | "http_service" | "ssh_host" | "telnet_host";
+  "generic" | "database" | "http_service" | "ssh_host" | "telnet_host";
 
 export type TargetEnvironment = "development" | "test" | "production";
 
-export type PostgresTlsMode = "verify_full";
+export type PostgresTlsMode = "verify_full" | "disabled";
 
 export interface PostgresTargetConfig {
   host: string;
@@ -381,7 +361,7 @@ export interface DatabaseConfig {
   database: string;
   username: string;
   password_slot: string;
-  tls_mode: "verify_full" | "loopback_plaintext";
+  tls_mode: "verify_full" | "disabled";
   ca_certificate: string | null;
   query: string;
   columns: string[];
@@ -391,8 +371,10 @@ export interface DatabaseConfig {
 
 export type HttpValueSource =
   | { kind: "literal"; value: string }
+  | { kind: "json_literal"; value: unknown }
   | { kind: "parameter"; name: string }
-  | { kind: "credential"; name: string; prefix: string };
+  | { kind: "credential"; name: string; prefix: string }
+  | { kind: "basic_credential"; name: string; username: string };
 
 export interface SshConfig {
   transfer?: TransferConfig | null;
@@ -536,6 +518,11 @@ export interface CreateApproval {
 export interface DecideApproval {
   expected_version: number;
   note?: string;
+  conversation_policy?: {
+    expected_version: number;
+    approval_policy: ConversationApprovalPolicy;
+    risk_acknowledgement?: string;
+  };
 }
 
 export interface ApprovalListResponse extends CatalogListResponse<Approval> {
@@ -662,4 +649,54 @@ export interface SafeEventListResponse {
 
 export interface TerminalListResponse {
   terminals: TerminalSummary[];
+}
+
+export type ConnectionOptions =
+  | { protocol: "none" }
+  | {
+      protocol: "database";
+      engine: "postgres" | "mysql";
+      port: number;
+      database: string;
+      tls_mode: "verify_full" | "disabled";
+      ca_certificate: string | null;
+    }
+  | { protocol: "ssh"; port: number; host_key_sha256: string }
+  | {
+      protocol: "http";
+      authentication: "none" | "basic" | "bearer" | "api_key";
+      header_name?: string | null;
+    }
+  | { protocol: "telnet"; allow_plaintext: boolean };
+export interface Resource extends Omit<
+  Target,
+  "credential_reference_id" | "postgres" | "allow_insecure_protocol"
+> {
+  authentication: {
+    kind: CredentialKind;
+    secret_state: "not_configured" | "available";
+    secret_version: number;
+  };
+  labels: string[];
+  connection: ConnectionOptions;
+}
+export interface ResourceRequest {
+  name: string;
+  kind: TargetKind;
+  environment: TargetEnvironment;
+  address: string | null;
+  username: string | null;
+  description: string | null;
+  authentication_kind: CredentialKind;
+  labels: string[];
+  connection: ConnectionOptions;
+  expected_version?: number;
+}
+export interface ConnectionTestResult {
+  resource_id: string;
+  success: boolean;
+  code: string;
+  duration_ms: number;
+  tested_at_unix_ms: number;
+  missing_fields: string[];
 }

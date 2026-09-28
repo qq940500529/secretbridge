@@ -4,81 +4,10 @@
 use super::{
     ActionTemplate, ActionTemplateListResponse, ApiError, AppState, Approval, ApprovalListResponse,
     AxumPath, ClearCredentialSecretRequest, CreateActionTemplate, CreateApproval,
-    CreateCredentialReference, CreateTarget, CredentialReference, CredentialReferenceListResponse,
-    CredentialService, DecideApproval, HeaderMap, Json, PolicyEvaluation,
-    SetCredentialSecretRequest, State, StatusCode, Target, TargetListResponse, TerminalStatus,
-    UpdateActionTemplate, UpdateCredentialReference, UpdateTarget, Uuid, map_catalog_error,
-    map_credential_service_error, require_session, task, validate_origin,
+    CredentialReference, CredentialService, DecideApproval, HeaderMap, Json, PolicyEvaluation,
+    SetCredentialSecretRequest, State, StatusCode, TerminalStatus, UpdateActionTemplate, Uuid,
+    map_catalog_error, map_credential_service_error, require_session, task, validate_origin,
 };
-
-pub(crate) async fn list_credential_references(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<CredentialReferenceListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_credential_references())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(CredentialReferenceListResponse {
-        items,
-        storage: state.configuration_storage,
-    }))
-}
-
-pub(crate) async fn create_credential_reference(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<CreateCredentialReference>,
-) -> Result<(StatusCode, Json<CredentialReference>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let item = task::spawn_blocking(move || catalog.create_credential_reference(&request))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(item)))
-}
-
-pub(crate) async fn update_credential_reference(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<UpdateCredentialReference>,
-) -> Result<Json<CredentialReference>, ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let _configuration = state.configuration_gate.write().await;
-    let _mutation = state.credential_mutations.lock().await;
-    let catalog = state.catalog.clone();
-    let item = task::spawn_blocking(move || catalog.update_credential_reference(id, &request))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(item))
-}
-
-pub(crate) async fn delete_credential_reference(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let _configuration = state.configuration_gate.write().await;
-    let _mutation = state.credential_mutations.lock().await;
-    CredentialService::new(
-        state.catalog.clone(),
-        state.secret_store.clone(),
-        state.native_secret_mutations.clone(),
-    )
-    .delete(id)
-    .await
-    .map_err(map_credential_service_error)?;
-    Ok(StatusCode::NO_CONTENT)
-}
 
 pub(crate) async fn set_credential_secret(
     State(state): State<AppState>,
@@ -125,69 +54,6 @@ pub(crate) async fn clear_credential_secret(
     .await
     .map_err(map_credential_service_error)?;
     Ok(Json(updated))
-}
-
-pub(crate) async fn list_targets(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<TargetListResponse>, ApiError> {
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let items = task::spawn_blocking(move || catalog.list_targets())
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(TargetListResponse {
-        items,
-        storage: state.configuration_storage,
-    }))
-}
-
-pub(crate) async fn create_target(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<CreateTarget>,
-) -> Result<(StatusCode, Json<Target>), ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    let target = task::spawn_blocking(move || catalog.create_target(&request))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok((StatusCode::CREATED, Json(target)))
-}
-
-pub(crate) async fn update_target(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-    Json(request): Json<UpdateTarget>,
-) -> Result<Json<Target>, ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let _configuration = state.configuration_gate.write().await;
-    let catalog = state.catalog.clone();
-    let target = task::spawn_blocking(move || catalog.update_target(id, &request))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(Json(target))
-}
-
-pub(crate) async fn delete_target(
-    State(state): State<AppState>,
-    AxumPath(id): AxumPath<Uuid>,
-    headers: HeaderMap,
-) -> Result<StatusCode, ApiError> {
-    validate_origin(&headers, &state)?;
-    require_session(&state, &headers).await?;
-    let catalog = state.catalog.clone();
-    task::spawn_blocking(move || catalog.delete_target(id))
-        .await
-        .map_err(|_| ApiError::Internal)?
-        .map_err(map_catalog_error)?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) async fn list_action_templates(
@@ -340,13 +206,38 @@ pub(crate) async fn create_approval(
     Ok((StatusCode::CREATED, Json(approval)))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApproveRequest {
+    expected_version: u64,
+    note: Option<String>,
+    conversation_policy: Option<crate::catalog::SetAiConversationPolicy>,
+}
+
 pub(crate) async fn approve_approval(
     State(state): State<AppState>,
     AxumPath(id): AxumPath<Uuid>,
     headers: HeaderMap,
-    Json(request): Json<DecideApproval>,
+    Json(request): Json<ApproveRequest>,
 ) -> Result<Json<Approval>, ApiError> {
-    transition_approval(state, headers, id, request, ApprovalDecision::Approve).await
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let catalog = state.catalog.clone();
+    let approval = task::spawn_blocking(move || {
+        catalog.approve_with_conversation_policy(
+            id,
+            &DecideApproval {
+                expected_version: request.expected_version,
+                note: request.note,
+            },
+            request.conversation_policy.as_ref(),
+        )
+    })
+    .await
+    .map_err(|_| ApiError::Internal)?
+    .map_err(map_catalog_error)?;
+    let _ = state.changes.send(());
+    Ok(Json(approval))
 }
 
 pub(crate) async fn deny_approval(
@@ -369,7 +260,6 @@ pub(crate) async fn revoke_approval(
 
 #[derive(Clone, Copy)]
 enum ApprovalDecision {
-    Approve,
     Deny,
     Revoke,
 }
@@ -385,7 +275,6 @@ async fn transition_approval(
     require_session(&state, &headers).await?;
     let catalog = state.catalog.clone();
     let approval = task::spawn_blocking(move || match decision {
-        ApprovalDecision::Approve => catalog.approve_approval(id, &request),
         ApprovalDecision::Deny => catalog.deny_approval(id, &request),
         ApprovalDecision::Revoke => catalog.revoke_approval(id, &request),
     })

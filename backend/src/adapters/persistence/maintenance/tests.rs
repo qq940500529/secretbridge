@@ -5,13 +5,7 @@ use crate::catalog::{BrowserAuthMode, SecretState};
 
 fn source() -> Catalog {
     let catalog = Catalog::in_memory().unwrap();
-    let credential = catalog
-        .create_credential_reference(
-            &serde_json::from_value(serde_json::json!({"name":"reference","kind":"password"}))
-                .unwrap(),
-        )
-        .unwrap();
-    catalog.create_target(&serde_json::from_value(serde_json::json!({"name":"local","kind":"http_service","environment":"development","credential_reference_id":credential.id})).unwrap()).unwrap();
+    catalog.save_resource(None, &serde_json::from_value(serde_json::json!({"name":"local","kind":"http_service","environment":"development","authentication_kind":"password","labels":["reporting"],"connection":{"protocol":"none"}})).unwrap()).unwrap();
     catalog
 }
 #[test]
@@ -39,19 +33,19 @@ fn configuration_preview_is_read_only_and_import_replay_is_idempotent() {
     let targets = catalog.list_targets().unwrap();
     assert_eq!(credentials.len(), 1);
     assert_eq!(targets.len(), 1);
-    assert_ne!(credentials[0].id, bundle.credentials[0].id);
+    assert_ne!(credentials[0].id, bundle.resources[0].id);
     assert_eq!(targets[0].credential_reference_id, Some(credentials[0].id));
     assert_eq!(credentials[0].secret_state, SecretState::NotConfigured);
 }
 #[test]
 fn invalid_bundle_never_partially_writes_and_rejects_unknown_secret_fields() {
     let mut bundle = source().export_configuration().unwrap();
-    bundle.connections[0].credential_reference_id = Some(Uuid::new_v4());
+    bundle.resources[0].configuration.expected_version = Some(7);
     let catalog = Catalog::in_memory().unwrap();
     assert!(catalog.import_configuration(&bundle, true, None).is_err());
     assert!(catalog.list_credential_references().unwrap().is_empty());
     let mut json = serde_json::to_value(&bundle).unwrap();
-    json["credentials"][0]["secret"] = "never accepted".into();
+    json["resources"][0]["secret"] = "never accepted".into();
     assert!(serde_json::from_value::<ConfigurationBundle>(json).is_err());
 }
 

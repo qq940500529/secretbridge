@@ -13,7 +13,7 @@ use mysql_async::{Conn, OptsBuilder, SslOpts, TxOpts, prelude::Queryable};
 use rustls_tokio_postgres::MakeRustlsConnect;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::HashSet, fmt::Write as _, net::IpAddr, path::Path, time::Duration};
+use std::{collections::HashSet, fmt::Write as _, path::Path, time::Duration};
 use tokio_postgres::{
     Config,
     config::SslMode,
@@ -42,7 +42,7 @@ pub enum DatabaseOperation {
 #[serde(rename_all = "snake_case")]
 pub enum DatabaseTls {
     VerifyFull,
-    LoopbackPlaintext,
+    Disabled,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -94,10 +94,7 @@ impl DatabaseConfig {
         {
             return Err(invalid());
         }
-        if self.tls_mode == DatabaseTls::LoopbackPlaintext
-            && (self.ca_certificate.is_some()
-                || !self.host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()))
-        {
+        if self.tls_mode == DatabaseTls::Disabled && self.ca_certificate.is_some() {
             return Err(invalid());
         }
         if self
@@ -458,7 +455,7 @@ async fn request(
                 .user(&database.username)
                 .password(password.as_bytes())
                 .application_name("SecretBridge");
-            let (client, connection) = if database.tls_mode == DatabaseTls::LoopbackPlaintext {
+            let (client, connection) = if database.tls_mode == DatabaseTls::Disabled {
                 options.ssl_mode(SslMode::Disable);
                 let (client, connection) = options
                     .connect(tokio_postgres::NoTls)
@@ -698,7 +695,7 @@ async fn cleanup(
         && interrupted
     {
         cleaned = tokio::time::timeout(Duration::from_secs(1), async {
-            if database.tls_mode == DatabaseTls::LoopbackPlaintext {
+            if database.tls_mode == DatabaseTls::Disabled {
                 client
                     .cancel_token()
                     .cancel_query(tokio_postgres::NoTls)
@@ -792,3 +789,30 @@ pub async fn drive(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub(crate) async fn test_connection(
+    config: &CommandConfig,
+    secrets: &[Zeroizing<String>],
+) -> Result<(), &'static str> {
+    let database = config.database.as_ref().ok_or("invalid_configuration")?;
+    let mut sessions = Sessions::default();
+    let limit = Duration::from_secs(8);
+    let result = tokio::time::timeout(
+        limit,
+        request(
+            database,
+            config,
+            &ParameterValues::new(),
+            secrets,
+            &mut sessions,
+            limit,
+        ),
+    )
+    .await;
+    let interrupted = !matches!(result, Ok(Ok(_)));
+    let cleaned = cleanup(&mut sessions, database, secrets, interrupted).await;
+    if !cleaned {
+        return Err("cleanup_failed");
+    }
+    result.map_err(|_| "timed_out")?.map(|_| ())
+}

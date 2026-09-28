@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { useState } from "react";
+import { PinActionDialog } from "./PinActionDialog";
 
 import {
   confirmTotpSetup,
@@ -32,79 +33,44 @@ export function BrowserAuthenticationSettings({
   onRetry: () => void;
   onChanged: (method: "pairing_link" | "pin" | "totp") => void;
 }) {
-  const [pin, setPin] = useState("");
   const [totpSetup, setTotpSetup] = useState<TotpSetup | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [askTotp, setAskTotp] = useState(true);
   const [confirmation, setConfirmation] = useState<
-    "pin" | "replace" | "disable" | null
+    "pin" | "replace" | "disable" | "recovery" | null
   >(null);
-  const [currentProof, setCurrentProof] = useState("");
-  const [recoveryPin, setRecoveryPin] = useState("");
   const [recoveryKey, setRecoveryKey] = useState<string | null>(null);
   const zh = language === "zh-CN";
 
-  function proof(): CurrentBrowserAuthProof {
-    if (pinEnabled) return { current_pin: currentProof };
-    return {};
-  }
-
-  function clearConfirmation() {
-    setConfirmation(null);
-    setCurrentProof("");
-  }
-
-  async function savePin() {
-    const current = proof();
-    clearConfirmation();
-    setBusy(true);
+  async function verifyAction(currentPin: string, replacement: string) {
+    const proof: CurrentBrowserAuthProof = pinEnabled
+      ? { current_pin: currentPin }
+      : {};
     setMessage(null);
-    try {
+    if (confirmation === "pin") {
       const result = await setBrowserAuthMethod(
         sessionToken,
         "pin",
-        pin,
-        current,
+        replacement,
+        proof,
       );
       if (result?.recovery_key) setRecoveryKey(result.recovery_key);
-      setPin("");
       onChanged("pin");
-      setMessage(zh ? "PIN/口令已启用。" : "PIN/passphrase enabled.");
-    } catch {
-      setMessage(zh ? "保存失败。" : "Could not save.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function beginTotpSetup() {
-    const current = proof();
-    clearConfirmation();
-    setBusy(true);
-    setMessage(null);
-    try {
-      setTotpSetup(await startTotpSetup(sessionToken, current));
+      setMessage(zh ? "PIN/口令已更新。" : "PIN/passphrase updated.");
+    } else if (confirmation === "recovery") {
+      const result = await regenerateRecoveryKey(sessionToken, currentPin);
+      setRecoveryKey(result.recovery_key);
+    } else if (confirmation === "replace") {
+      setTotpSetup(await startTotpSetup(sessionToken, proof));
       setTotpCode("");
-    } catch {
-      setMessage(zh ? "无法开始绑定。" : "Could not start enrollment.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function disableTotp() {
-    const current = proof();
-    clearConfirmation();
-    setBusy(true);
-    setMessage(null);
-    try {
+    } else {
       await setBrowserAuthMethod(
         sessionToken,
         "disable_totp",
         undefined,
-        current,
+        proof,
       );
       onChanged("pin");
       setMessage(
@@ -112,10 +78,6 @@ export function BrowserAuthenticationSettings({
           ? "已解除验证码绑定，PIN 保持有效。"
           : "Authenticator removed; the PIN remains active.",
       );
-    } catch {
-      setMessage(zh ? "修改失败。" : "Could not change the method.");
-    } finally {
-      setBusy(false);
     }
   }
   return (
@@ -164,23 +126,11 @@ export function BrowserAuthenticationSettings({
       )}
       {authMethodStatus === "ready" && (
         <div className="flex flex-col gap-3 sm:flex-row">
-          <input
-            type="password"
-            minLength={6}
-            maxLength={64}
-            value={pin}
-            onChange={(event) => setPin(event.target.value)}
-            placeholder={zh ? "至少 6 位" : "At least 6 characters"}
-            className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
-          />
           <button
             type="button"
-            disabled={busy || pin.length < 6}
+            disabled={busy}
             className="workbench-button"
-            onClick={() => {
-              if (pinEnabled || totpEnabled) setConfirmation("pin");
-              else void savePin();
-            }}
+            onClick={() => setConfirmation("pin")}
           >
             {zh ? "设置或更换" : "Set or change"}
           </button>
@@ -188,10 +138,7 @@ export function BrowserAuthenticationSettings({
             type="button"
             disabled={busy || !pinEnabled}
             className="workbench-button"
-            onClick={() => {
-              if (pinEnabled || totpEnabled) setConfirmation("replace");
-              else void beginTotpSetup();
-            }}
+            onClick={() => setConfirmation("replace")}
           >
             {totpEnabled
               ? zh
@@ -247,54 +194,26 @@ export function BrowserAuthenticationSettings({
         </div>
       )}
       {confirmation && (
-        <div
-          role="alert"
-          className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"
-        >
-          <p className="mt-0">
-            {confirmation === "disable"
+        <PinActionDialog
+          language={language}
+          title={
+            confirmation === "pin"
               ? zh
-                ? "确认解除验证码绑定？PIN 仍用于登录和解锁诊断记录。"
-                : "Remove the authenticator? Your PIN still signs you in and unlocks diagnostics."
-              : zh
-                ? "请使用当前 PIN 确认更改。更换 PIN 会重新加密诊断解锁密钥。"
-                : "Confirm with your current PIN. Changing it rewraps the diagnostic unlock key."}
-          </p>
-          {pinEnabled && (
-            <input
-              type="password"
-              aria-label={zh ? "当前 PIN/口令" : "Current PIN/passphrase"}
-              value={currentProof}
-              onChange={(event) => setCurrentProof(event.target.value)}
-              minLength={6}
-              maxLength={64}
-              autoComplete="off"
-              className="mb-3 w-full rounded-xl border border-amber-300 bg-white px-3.5 py-2.5"
-            />
-          )}
-          <div className="flex gap-3">
-            <button
-              type="button"
-              disabled={busy || (pinEnabled && currentProof.length < 6)}
-              className="workbench-button"
-              onClick={() => {
-                if (confirmation === "pin") void savePin();
-                else if (confirmation === "replace") void beginTotpSetup();
-                else void disableTotp();
-              }}
-            >
-              {zh ? "确认更改" : "Confirm change"}
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              className="workbench-button"
-              onClick={clearConfirmation}
-            >
-              {zh ? "取消" : "Cancel"}
-            </button>
-          </div>
-        </div>
+                ? "更换 PIN"
+                : "Change PIN"
+              : confirmation === "recovery"
+                ? zh
+                  ? "替换恢复密钥"
+                  : "Replace recovery key"
+                : zh
+                  ? "确认身份验证器更改"
+                  : "Confirm authenticator change"
+          }
+          currentPin={pinEnabled}
+          newPin={confirmation === "pin"}
+          onClose={() => setConfirmation(null)}
+          onConfirm={verifyAction}
+        />
       )}
       {totpSetup && (
         <div className="mt-5 grid gap-5 rounded-2xl border border-cyan-200 bg-cyan-50/60 p-5 md:grid-cols-[auto_1fr]">
@@ -379,49 +298,14 @@ export function BrowserAuthenticationSettings({
               : "The existing key cannot be viewed again. Enter your current PIN to generate a replacement; the old key stops working immediately."}
           </p>
           {!recoveryKey && (
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <input
-                aria-label={
-                  zh
-                    ? "用于更换恢复密钥的当前 PIN"
-                    : "Current PIN for recovery key replacement"
-                }
-                type="password"
-                minLength={6}
-                maxLength={64}
-                autoComplete="current-password"
-                value={recoveryPin}
-                onChange={(event) => setRecoveryPin(event.target.value)}
-                className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-2.5"
-              />
-              <button
-                type="button"
-                disabled={busy || recoveryPin.length < 6}
-                className="workbench-button"
-                onClick={async () => {
-                  setBusy(true);
-                  setMessage(null);
-                  try {
-                    const result = await regenerateRecoveryKey(
-                      sessionToken,
-                      recoveryPin,
-                    );
-                    setRecoveryKey(result.recovery_key);
-                    setRecoveryPin("");
-                  } catch {
-                    setMessage(
-                      zh
-                        ? "无法更新恢复密钥。"
-                        : "Could not replace the recovery key.",
-                    );
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                {zh ? "生成新密钥" : "Generate new key"}
-              </button>
-            </div>
+            <button
+              type="button"
+              disabled={busy}
+              className="workbench-button"
+              onClick={() => setConfirmation("recovery")}
+            >
+              {zh ? "生成新密钥" : "Generate new key"}
+            </button>
           )}
           {recoveryKey && (
             <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-4">

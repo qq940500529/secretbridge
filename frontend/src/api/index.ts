@@ -15,3 +15,5 @@ export * from "./events";
 export * from "./terminals";
 export { SecretBridgeApiError } from "./transport";
 export type * from "./models";
+
+export * from "./resources";

@@ -15,10 +15,9 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 const bundle: ConfigurationBundle = {
   format: "secretbridge-configuration",
-  format_version: 1,
+  format_version: 2,
   exported_at_unix_ms: 1,
-  credentials: [],
-  connections: [],
+  resources: [],
   templates: [],
 };
 describe("data maintenance", () => {

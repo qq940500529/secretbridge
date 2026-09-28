@@ -69,7 +69,7 @@ export function SettingsView({
           review: "查看协议",
           report: "提交普通问题",
           reportHelp:
-            "使用合成数据复现并清理日志；不要公开真实凭据或私人地址。",
+            "使用测试数据复现并清理日志；不要公开真实凭据或私人地址。",
           security: "私密报告安全问题",
         }
       : {
@@ -90,7 +90,7 @@ export function SettingsView({
           review: "Review agreement",
           report: "Report a regular issue",
           reportHelp:
-            "Reproduce with synthetic data and sanitize logs. Never publish real credentials or private addresses.",
+            "Reproduce with test data and sanitize logs. Never publish real credentials or private addresses.",
           security: "Report a security issue privately",
         };
   return (

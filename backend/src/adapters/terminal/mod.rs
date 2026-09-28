@@ -45,6 +45,7 @@ pub struct TerminalManager {
     creation_lock: Arc<Mutex<()>>,
     launcher: TerminalLauncher,
     changes: broadcast::Sender<()>,
+    history: Option<crate::Catalog>,
 }
 
 #[derive(Clone)]
@@ -68,7 +69,10 @@ struct TerminalSession {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     output: Arc<Mutex<OutputBuffer>>,
     redactor: Arc<Mutex<Redactor>>,
-    broker_active: AtomicBool,
+    broker_active: Arc<AtomicBool>,
+    history: Option<crate::Catalog>,
+    submitted_input: Mutex<Zeroizing<Vec<u8>>>,
+    input_redactor: Mutex<Redactor>,
     interactive_unverified: AtomicBool,
     input_lease: Mutex<Option<InputLease>>,
     events: broadcast::Sender<TerminalEvent>,
@@ -208,6 +212,7 @@ impl TerminalManager {
             creation_lock: Arc::new(Mutex::new(())),
             launcher: TerminalLauncher::System,
             changes: broadcast::channel(64).0,
+            history: None,
         }
     }
 
@@ -219,7 +224,13 @@ impl TerminalManager {
             creation_lock: Arc::new(Mutex::new(())),
             launcher: TerminalLauncher::Synthetic(program),
             changes: broadcast::channel(64).0,
+            history: None,
         }
+    }
+
+    pub(crate) fn with_history(mut self, catalog: crate::Catalog) -> Self {
+        self.history = Some(catalog);
+        self
     }
 
     #[must_use]
@@ -251,7 +262,7 @@ impl TerminalManager {
         }
 
         let launch = self.prepare_launch(request)?;
-        let session = spawn_terminal(launch, self.changes.clone())?;
+        let session = spawn_terminal(launch, self.changes.clone(), self.history.clone())?;
         let summary = session.summary();
         self.write_sessions().insert(summary.id, session);
         let _ = self.changes.send(());
@@ -426,6 +437,7 @@ impl TerminalManager {
 fn spawn_terminal(
     launch: PreparedTerminalLaunch,
     changes: broadcast::Sender<()>,
+    history: Option<crate::Catalog>,
 ) -> Result<Arc<TerminalSession>, TerminalError> {
     let pair = NativePtySystem::default()
         .openpty(PtySize {
@@ -458,6 +470,7 @@ fn spawn_terminal(
     let redactor = Arc::new(Mutex::new(Redactor::new(&[])));
     let (events, _) = broadcast::channel(EVENT_CAPACITY);
     let (output_activity, output_activity_rx) = std::sync::mpsc::channel();
+    let broker_active = Arc::new(AtomicBool::new(false));
     let session = Arc::new(TerminalSession {
         id: launch.id,
         name: launch.name,
@@ -473,12 +486,32 @@ fn spawn_terminal(
         killer: Mutex::new(killer),
         output: Arc::clone(&output),
         redactor: Arc::clone(&redactor),
-        broker_active: AtomicBool::new(false),
+        broker_active: Arc::clone(&broker_active),
+        history: history.clone(),
+        submitted_input: Mutex::new(Zeroizing::new(Vec::new())),
+        input_redactor: Mutex::new(Redactor::new(&[])),
         interactive_unverified: AtomicBool::new(false),
         input_lease: Mutex::new(None),
         events: events.clone(),
         changes: changes.clone(),
     });
+    if let Some(catalog) = &history
+        && catalog
+            .record_terminal_history(
+                launch.id,
+                "created",
+                "",
+                &serde_json::to_value(session.summary()).unwrap_or_default(),
+            )
+            .is_err()
+    {
+        let _ = session
+            .killer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .kill();
+        return Err(TerminalError::SpawnFailed);
+    }
     spawn_terminal_reader(
         launch.id,
         reader,
@@ -487,6 +520,8 @@ fn spawn_terminal(
         writer,
         events.clone(),
         output_activity,
+        history.clone(),
+        broker_active,
     )?;
     spawn_terminal_waiter(
         launch.id,
@@ -496,10 +531,15 @@ fn spawn_terminal(
         events,
         output_activity_rx,
         changes,
+        history,
     )?;
     Ok(session)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PTY output and persistence share one redacted stream"
+)]
 fn spawn_terminal_reader(
     id: Uuid,
     mut reader: Box<dyn Read + Send>,
@@ -508,12 +548,16 @@ fn spawn_terminal_reader(
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     events: broadcast::Sender<TerminalEvent>,
     output_activity: std::sync::mpsc::Sender<()>,
+    history: Option<crate::Catalog>,
+    broker_active: Arc<AtomicBool>,
 ) -> Result<(), TerminalError> {
     thread::Builder::new()
         .name(format!("secretbridge-terminal-reader-{id}"))
         .spawn(move || {
             let mut buffer = [0_u8; 4096];
             let mut startup_protocol = StartupTerminalProtocol::default();
+            let mut decoder = crate::application::redaction::Utf8Decoder::default();
+            let mut cleaner = crate::command::TerminalOutputCleaner::default();
             loop {
                 match reader.read(&mut buffer) {
                     Ok(count) if count > 0 => {
@@ -525,6 +569,18 @@ fn spawn_terminal_reader(
                             .feed(&terminal_bytes, false);
                         if filtered.is_empty() {
                             continue;
+                        }
+                        let text = cleaner.feed(&decoder.feed(&filtered, false));
+                        if !broker_active.load(Ordering::Acquire)
+                            && !text.is_empty()
+                            && let Some(catalog) = &history
+                        {
+                            let _ = catalog.record_terminal_history(
+                                id,
+                                "output",
+                                &text,
+                                &serde_json::json!({}),
+                            );
                         }
                         let chunk: Arc<[u8]> = Arc::from(filtered);
                         let mut output = output
@@ -544,6 +600,18 @@ fn spawn_terminal_reader(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .feed(&terminal_bytes, true);
+                        let text = cleaner.feed(&decoder.feed(&filtered, true));
+                        if !broker_active.load(Ordering::Acquire)
+                            && !text.is_empty()
+                            && let Some(catalog) = &history
+                        {
+                            let _ = catalog.record_terminal_history(
+                                id,
+                                "output",
+                                &text,
+                                &serde_json::json!({}),
+                            );
+                        }
                         if !filtered.is_empty() {
                             let chunk: Arc<[u8]> = Arc::from(filtered);
                             let mut output = output
@@ -556,6 +624,7 @@ fn spawn_terminal_reader(
                             });
                             let _ = output_activity.send(());
                         }
+
                         break;
                     }
                 }
@@ -600,6 +669,10 @@ impl StartupTerminalProtocol {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PTY exit drains output before recording final session status"
+)]
 fn spawn_terminal_waiter(
     id: Uuid,
     mut child: Box<dyn Child + Send + Sync>,
@@ -608,6 +681,7 @@ fn spawn_terminal_waiter(
     events: broadcast::Sender<TerminalEvent>,
     output_activity: std::sync::mpsc::Receiver<()>,
     changes: broadcast::Sender<()>,
+    history: Option<crate::Catalog>,
 ) -> Result<(), TerminalError> {
     thread::Builder::new()
         .name(format!("secretbridge-terminal-wait-{id}"))
@@ -634,6 +708,9 @@ fn spawn_terminal_waiter(
                 let _ = events.send(TerminalEvent::Exited(code));
             } else if previous == STATUS_TERMINATED {
                 let _ = events.send(TerminalEvent::Terminated);
+            }
+            if let Some(catalog) = &history {
+                let _ = catalog.record_terminal_history(id, "closed", "", &serde_json::json!({"exit_code":code, "terminated": previous == STATUS_TERMINATED}));
             }
             let _ = changes.send(());
         })
@@ -667,6 +744,11 @@ impl TerminalBroker {
     }
 
     pub(crate) fn add_redaction_secrets(&self, secrets: &[Zeroizing<String>]) {
+        self.session
+            .input_redactor
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(secrets);
         self.session
             .redactor
             .lock()
@@ -786,6 +868,38 @@ impl TerminalConnection {
             .write_all(input)
             .and_then(|()| writer.flush())
             .map_err(|_| TerminalError::Closed)?;
+        if let Some(catalog) = &self.session.history {
+            let mut pending = self
+                .session
+                .submitted_input
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for byte in input {
+                match *byte {
+                    b'\r' | b'\n' if !pending.is_empty() => {
+                        let text = String::from_utf8_lossy(
+                            &self
+                                .session
+                                .input_redactor
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .feed(&pending, true),
+                        )
+                        .into_owned();
+                        catalog.record_terminal_history(self.session.id, "input", &text, &serde_json::json!({"accuracy":"submitted_keystrokes","exit_code":null})).map_err(|_| TerminalError::Closed)?;
+                        pending.clear();
+                    }
+                    8 | 127 => {
+                        pending.pop();
+                    }
+                    3 => {
+                        pending.clear();
+                    }
+                    _ if pending.len() < 32768 => pending.push(*byte),
+                    _ => {}
+                }
+            }
+        }
         self.session
             .interactive_unverified
             .store(true, Ordering::Release);

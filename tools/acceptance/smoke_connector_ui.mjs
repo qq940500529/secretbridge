@@ -62,15 +62,39 @@ try {
         mode: "controlled_operations",
         expires_in_seconds: 3600,
       };
-    else if (path === "/api/v1/credential-references")
-      body = { items: credentials };
+    else if (path === "/api/v1/resources")
+      body = {
+        items: [
+          ...targets,
+          ...credentials.map((c) => ({
+            ...c,
+            kind: "http_service",
+            environment: "test",
+            authentication: {
+              kind: c.kind,
+              secret_state: c.secret_state,
+              secret_version: 1,
+            },
+            connection: { protocol: "none" },
+            labels: [],
+          })),
+        ].map((r) => ({
+          ...r,
+          authentication: r.authentication ?? {
+            kind: "password",
+            secret_state: "not_configured",
+            secret_version: 1,
+          },
+          connection: r.connection ?? { protocol: "none" },
+          labels: [],
+        })),
+      };
     else if (path === "/api/v1/session/methods")
       body = {
         pin_enabled: true,
         totp_enabled: false,
         pairing_link_enabled: false,
       };
-    else if (path === "/api/v1/targets") body = { items: targets };
     else if (path === "/api/v1/runs" || path === "/api/v1/approvals")
       body = { items: [] };
     else if (path === "/api/v1/action-templates") {
@@ -98,7 +122,10 @@ try {
   await page.getByText("已配对", { exact: true }).waitFor();
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("SFTP UI 验证");
-  await page.getByLabel("连接分组").selectOption("synthetic-target");
+  await page
+    .getByRole("dialog")
+    .getByLabel("资源")
+    .selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("sftp");
   await page.getByLabel("固定主机地址").fill("example.com");
@@ -126,7 +153,10 @@ try {
 
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("Git UI 验证");
-  await page.getByLabel("连接分组").selectOption("synthetic-target");
+  await page
+    .getByRole("dialog")
+    .getByLabel("资源")
+    .selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("git");
   await page.getByLabel("Git 操作").selectOption("fetch");
@@ -148,7 +178,10 @@ try {
   assert.equal(items[1].command.slots[0].injection, "protocol");
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("Database UI 验证");
-  await page.getByLabel("连接分组").selectOption("synthetic-target");
+  await page
+    .getByRole("dialog")
+    .getByLabel("资源")
+    .selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("database");
   await page.getByLabel("数据库类型").selectOption("mysql");
@@ -174,7 +207,10 @@ try {
 
   await page.getByRole("button", { name: "新建操作模板", exact: true }).click();
   await page.getByLabel("模板名称").fill("Telnet UI 验证");
-  await page.getByLabel("连接分组").selectOption("synthetic-target");
+  await page
+    .getByRole("dialog")
+    .getByLabel("资源")
+    .selectOption("synthetic-target");
   await page.getByLabel("内置受控操作").selectOption("command_execution");
   await page.getByLabel("执行方式").selectOption("telnet");
   await page.getByLabel("固定主机地址").fill("legacy.example.com");

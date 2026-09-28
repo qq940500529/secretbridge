@@ -67,7 +67,7 @@ async fn maintenance_requires_session_and_preflights_without_writing() {
     let text = bundle.to_string();
     assert!(!text.contains("Synthetic-SB-command_A&z"));
     assert!(bundle.get("approvals").is_none());
-    assert!(bundle["credentials"][0].get("secret_state").is_none());
+    assert!(bundle["resources"][0].get("secret_state").is_none());
     let preview = json_body(
         app.clone()
             .oneshot(request(
@@ -268,7 +268,7 @@ async fn restored_directory_can_reenter_secret_authorize_and_execute_original_co
         .clone()
         .oneshot(request(
             "PUT",
-            &format!("/api/v1/credential-references/{credential}/secret"),
+            &format!("/api/v1/resources/{credential}/secret"),
             &token,
             json!({"secret":"Synthetic-SB-restored_B&z","expected_version":record.version})
                 .to_string(),

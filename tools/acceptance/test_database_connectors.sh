@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Disposable real servers and synthetic credentials only. Never uses business data.
+# Disposable real servers and disposable test credentials only. Never uses business data.
 set -euo pipefail
 umask 077
 task_tmp=$(mktemp -d /tmp/secretbridge-db.XXXXXXXX)

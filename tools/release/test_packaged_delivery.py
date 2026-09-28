@@ -104,13 +104,21 @@ def accept(archive: Path) -> None:
             wait_stopped()
             assert not run("status")["running"]
             print("Detached launch, broker reuse and graceful stop passed.", flush=True)
-            # A plain configuration reference is not a vault secret and can be seeded offline.
+            # A complete resource aggregate with no secret can be seeded offline.
             database = data / "secretbridge.sqlite3"
             reference = str(uuid.uuid4())
             with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute(
                     "INSERT INTO credential_references (id,name,kind,purpose,secret_state,secret_configured,created_at_unix_ms,updated_at_unix_ms,version) VALUES (?,?,?,NULL,'not_configured',0,1,1,1)",
                     (reference, "delivery acceptance", "password"),
+                )
+                connection.execute(
+                    "INSERT INTO targets(id,name,kind,environment,credential_reference_id,created_at_unix_ms,updated_at_unix_ms,version) VALUES(?, ?, 'generic', 'test', ?, 1, 1, 1)",
+                    (reference, "delivery acceptance", reference),
+                )
+                connection.execute(
+                    "INSERT INTO resource_configuration(resource_id,labels_json,options_json) VALUES(?, '[]', ?)",
+                    (reference, json.dumps({"protocol": "none"})),
                 )
 
             install_started = time.monotonic()

@@ -73,19 +73,15 @@ impl CredentialService {
         .map_err(|_| CredentialServiceError::TimedOut)
     }
 
-    pub(crate) async fn delete(&self, id: Uuid) -> Result<(), CredentialServiceError> {
+    pub(crate) async fn delete_resource(&self, id: Uuid) -> Result<(), CredentialServiceError> {
         let catalog = self.catalog.clone();
-        let current = task::spawn_blocking(move || catalog.get_credential_reference(id))
-            .await
-            .map_err(|_| CredentialServiceError::Worker)?
-            .map_err(CredentialServiceError::Catalog)?;
-
-        let catalog = self.catalog.clone();
-        task::spawn_blocking(move || catalog.ensure_credential_reference_deletable(id))
-            .await
-            .map_err(|_| CredentialServiceError::Worker)?
-            .map_err(CredentialServiceError::Catalog)?;
-
+        let current = task::spawn_blocking(move || {
+            catalog.prepare_resource_deletion(id)?;
+            catalog.get_credential_reference(id)
+        })
+        .await
+        .map_err(|_| CredentialServiceError::Worker)?
+        .map_err(CredentialServiceError::Catalog)?;
         if current.secret_state == SecretState::Available {
             let catalog = self.catalog.clone();
             task::spawn_blocking(move || {
@@ -95,12 +91,10 @@ impl CredentialService {
             .map_err(|_| CredentialServiceError::Worker)?
             .map_err(CredentialServiceError::Catalog)?;
         }
-        // Also clear a previously timed-out native write before removing an
-        // unconfigured reference. The native gate keeps late writes ordered.
+        // Even an unconfigured entry can contain a late native write. Keep the native gate.
         self.delete_native_entry(id).await?;
-
         let catalog = self.catalog.clone();
-        task::spawn_blocking(move || catalog.delete_credential_reference(id))
+        task::spawn_blocking(move || catalog.delete_resource(id))
             .await
             .map_err(|_| CredentialServiceError::Worker)?
             .map_err(CredentialServiceError::Catalog)

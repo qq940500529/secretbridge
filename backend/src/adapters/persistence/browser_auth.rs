@@ -98,6 +98,16 @@ pub struct BrowserAuthEvent {
 }
 
 impl Catalog {
+    pub fn pin_has_failed(&self) -> Result<bool, CatalogError> {
+        self.lock()
+            .query_row(
+                "SELECT pin_failures > 0 FROM browser_auth_settings WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|_| CatalogError::Storage)
+    }
+
     pub fn pin_retry_after_seconds(&self) -> Result<u64, CatalogError> {
         let blocked_until: i64 = self
             .lock()

@@ -165,9 +165,9 @@ export function DatabaseEditor({
                 ? "TLS：验证证书与主机名"
                 : "TLS: verify certificate and hostname"}
             </option>
-            <option value="loopback_plaintext">
+            <option value="disabled">
               {zh
-                ? "仅数值回环地址：不加密"
+                ? "不使用 TLS（账号和数据将明文传输）"
                 : "Numeric loopback only: plaintext"}
             </option>
           </select>
@@ -187,8 +187,8 @@ export function DatabaseEditor({
       ) : (
         <p className="text-xs text-amber-800">
           {zh
-            ? "仅允许 127.0.0.1 或 ::1 等数值回环地址；不要用此选项连接业务远端。"
-            : "Only numeric loopback addresses, such as 127.0.0.1 or ::1, are allowed; never use this for remote services."}
+            ? "不启用 TLS 时，账号、密码和数据可能明文传输；仅在你信任的网络中使用。不会自动降低 TLS 验证要求。"
+            : "With TLS disabled, accounts, passwords and data may travel unencrypted. Use only on a trusted network; verification is never downgraded automatically."}
         </p>
       )}
       {value.operation === "query" && (

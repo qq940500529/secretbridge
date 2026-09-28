@@ -38,7 +38,7 @@ pub(super) struct RequestApprovalParams {
     pub(super) expires_in_seconds: u64,
     #[serde(default)]
     #[schemars(
-        description = "Non-secret reason in the current conversation language, up to 240 characters"
+        description = "Non-secret reason in the broker ui_language returned by secretbridge_list_catalog, up to 240 characters"
     )]
     pub(super) reason: Option<String>,
     #[serde(default)]
@@ -82,7 +82,7 @@ pub(super) struct ConfirmApprovalParams {
 pub(super) struct RequestCommandParams {
     #[schemars(description = "Short human-readable label for this one-time command draft")]
     pub(super) name: String,
-    #[schemars(description = "Connection UUID returned by secretbridge_list_catalog")]
+    #[schemars(description = "Resource UUID returned by secretbridge_list_catalog")]
     pub(super) connection_id: String,
     #[serde(default)]
     #[schemars(description = "AI conversation UUID from secretbridge_begin_conversation")]
@@ -115,7 +115,7 @@ pub(super) struct RequestCommandParams {
     pub(super) timeout_seconds: u64,
     #[serde(default)]
     #[schemars(
-        description = "Non-secret reason in the current conversation language, up to 240 characters"
+        description = "Non-secret reason in the broker ui_language returned by secretbridge_list_catalog, up to 240 characters"
     )]
     pub(super) reason: Option<String>,
     #[serde(default)]
@@ -125,7 +125,7 @@ pub(super) struct RequestCommandParams {
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RequestSshParams {
-    #[schemars(description = "Saved SSH connection UUID from secretbridge_list_catalog")]
+    #[schemars(description = "Saved SSH resource UUID from secretbridge_list_catalog")]
     pub(super) connection_id: String,
     #[serde(default)]
     #[schemars(description = "AI conversation UUID from secretbridge_begin_conversation")]
@@ -163,7 +163,7 @@ const fn default_ssh_port() -> u16 {
 #[serde(deny_unknown_fields)]
 pub(super) struct DynamicCredentialSlot {
     pub(super) name: String,
-    #[schemars(description = "Credential UUID returned by secretbridge_list_catalog")]
+    #[schemars(description = "Resource UUID returned by secretbridge_list_catalog")]
     pub(super) credential_id: String,
     pub(super) injection: DynamicInjection,
     #[serde(default)]
@@ -210,96 +210,58 @@ pub(super) struct CancelRunParams {
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
 pub(super) struct CatalogSummary {
-    pub(super) credentials: Vec<CredentialSummary>,
-    pub(super) connections: Vec<ConnectionSummary>,
+    pub(super) ui_language: String,
+    pub(super) resources: Vec<ResourceSummary>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, Serialize)]
-pub(super) struct CredentialSummary {
-    pub(super) id: String,
-    pub(super) name: String,
-    pub(super) kind: String,
-    pub(super) address: Option<String>,
-    pub(super) username: Option<String>,
-    pub(super) configured: bool,
-    pub(super) version: u64,
-}
-
-impl From<crate::catalog::CredentialReference> for CredentialSummary {
-    fn from(value: crate::catalog::CredentialReference) -> Self {
-        Self {
-            id: value.id.to_string(),
-            name: value.name,
-            kind: match value.kind {
-                crate::catalog::CredentialKind::Password => "password",
-                crate::catalog::CredentialKind::ApiToken => "api_token",
-                crate::catalog::CredentialKind::SshKey => "ssh_key",
-            }
-            .to_owned(),
-            address: value.address,
-            username: value.username,
-            configured: value.secret_state == crate::catalog::SecretState::Available,
-            version: value.version,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, JsonSchema, Serialize)]
-pub(super) struct ConnectionSummary {
+pub(super) struct ResourceSummary {
     pub(super) id: String,
     pub(super) name: String,
     pub(super) kind: String,
     pub(super) environment: String,
+    pub(super) labels: Vec<String>,
     pub(super) address: Option<String>,
     pub(super) username: Option<String>,
-    pub(super) credential_id: Option<String>,
-    #[schemars(
-        description = "Non-secret PostgreSQL metadata. TLS policy applies only to the built-in PostgreSQL connection check; a generic program command must configure its own transport."
-    )]
-    pub(super) postgres_check: Option<PostgresCheckSummary>,
-    pub(super) insecure_protocol_explicitly_allowed: bool,
+    pub(super) authentication_kind: String,
+    pub(super) configured: bool,
+    pub(super) missing_fields: Vec<String>,
+    pub(super) connection: serde_json::Value,
     pub(super) version: u64,
 }
-
-#[derive(Debug, Deserialize, JsonSchema, Serialize)]
-pub(super) struct PostgresCheckSummary {
-    pub(super) host: String,
-    pub(super) port: u16,
-    pub(super) database: String,
-    pub(super) username: String,
-    pub(super) tls_mode: String,
-}
-
-impl From<crate::catalog::Target> for ConnectionSummary {
-    fn from(value: crate::catalog::Target) -> Self {
+impl From<crate::domain::resources::Resource> for ResourceSummary {
+    fn from(value: crate::domain::resources::Resource) -> Self {
+        let missing_fields = value
+            .missing_connection_fields()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let target = value.target;
         Self {
-            id: value.id.to_string(),
-            name: value.name,
-            kind: match value.kind {
-                crate::catalog::TargetKind::Database => "database",
-                crate::catalog::TargetKind::HttpService => "http_service",
-                crate::catalog::TargetKind::SshHost => "ssh_host",
-                crate::catalog::TargetKind::TelnetHost => "telnet_host",
-            }
-            .to_owned(),
-            environment: match value.environment {
-                crate::catalog::TargetEnvironment::Development => "development",
-                crate::catalog::TargetEnvironment::Test => "test",
-                crate::catalog::TargetEnvironment::Production => "production",
-            }
-            .to_owned(),
-            address: value.address,
-            username: value.username,
-            credential_id: value.credential_reference_id.map(|id| id.to_string()),
-            postgres_check: value.postgres.map(|postgres| PostgresCheckSummary {
-                host: postgres.host,
-                port: postgres.port,
-                database: postgres.database,
-                username: postgres.username,
-                tls_mode: "verify_full".to_owned(),
-            }),
-            insecure_protocol_explicitly_allowed: value.allow_insecure_protocol,
-            version: value.version,
+            id: target.id.to_string(),
+            name: target.name,
+            kind: serde_json::to_value(target.kind)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            environment: serde_json::to_value(target.environment)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            labels: value.labels,
+            address: target.address,
+            username: target.username,
+            authentication_kind: serde_json::to_value(value.authentication.kind)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            missing_fields,
+            configured: value.authentication.secret_state == crate::catalog::SecretState::Available,
+            connection: serde_json::to_value(value.connection).unwrap_or_default(),
+            version: target.version,
         }
     }
 }
@@ -434,6 +396,7 @@ pub(super) struct ApprovalSummary {
     pub(super) operation: ApprovalOperation,
     pub(super) result_scope: ApprovalResultScope,
     pub(super) state: ApprovalState,
+    pub(super) decision_note: Option<String>,
     pub(super) expires_at_unix_ms: u64,
     pub(super) version: u64,
     pub(super) console_url: Option<String>,
@@ -455,6 +418,7 @@ impl From<Approval> for ApprovalSummary {
             operation: approval.operation,
             result_scope: approval.result_scope,
             state: approval.state,
+            decision_note: approval.decision_note,
             expires_at_unix_ms: approval.expires_at_unix_ms,
             version: approval.version,
             console_url: None,
@@ -476,6 +440,9 @@ impl ApprovalSummary {
                 "or_if_totp_configured_submit_current_code_with_secretbridge_confirm_approval"
                     .to_owned(),
             ];
+        } else if self.state == ApprovalState::Denied {
+            self.next_actions =
+                vec!["read_decision_note_and_adjust_plan_or_request_more_information".to_owned()];
         } else if self.preauthorized {
             self.next_actions = vec![
                 "disclose_conversation_preapproval_and_risk_to_user".to_owned(),

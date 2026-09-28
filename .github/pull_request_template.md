@@ -26,7 +26,7 @@ List commands or manual checks, actual outcomes and untested environments. For d
 ## Submission checklist
 
 - [ ] Local checks and tests pass.
-- [ ] Failure paths and cleanup use synthetic data and were exercised where applicable.
+- [ ] Failure paths and cleanup use test data and were exercised where applicable.
 - [ ] No secrets, private paths or business artifacts are included.
 - [ ] Imported material has documented provenance and compatible licensing.
 - [ ] Relevant documentation and changelog are updated.

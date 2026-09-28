@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
+import { PinActionDialog } from "../auth/PinActionDialog";
 import { SectionTabs } from "../../shared/ui/SectionTabs";
 import {
   downloadBackup,
@@ -86,7 +87,7 @@ export function DataMaintenanceView({
   const [backupFile, setBackupFile] = useState<File | null>(null);
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
-  const [diagnosticPin, setDiagnosticPin] = useState("");
+  const [pinAction, setPinAction] = useState<"preview" | "export" | null>(null);
   const [includeCommands, setIncludeCommands] = useState(false);
   const [includeEvents, setIncludeEvents] = useState(true);
   const [unlockedDiagnostics, setUnlockedDiagnostics] =
@@ -104,7 +105,7 @@ export function DataMaintenanceView({
     }
   }
   const counts = (report: ImportReport | BackupReport) =>
-    `${zh ? "凭据引用" : "Credential references"} ${report.credentials} · ${zh ? "连接" : "Connections"} ${report.connections} · ${zh ? "模板" : "Templates"} ${report.templates}`;
+    `${zh ? "资源" : "Resources"} ${report.connections} · ${zh ? "模板" : "Templates"} ${report.templates}`;
   return (
     <section
       className="mt-8 border-t border-slate-200 pt-6"
@@ -133,8 +134,8 @@ export function DataMaintenanceView({
           <>
             <p className="text-sm text-slate-600">
               {zh
-                ? "导出连接、任务模板和凭据引用，不包含秘密值、授权或执行历史。普通命令参数和说明会随配置导出，请勿在其中直接填写密码。导入会新增记录，不覆盖现有配置。"
-                : "Exports connections, templates and credential references, without secret values, authorizations or history. Ordinary arguments and descriptions are included: do not place passwords in them. Import adds records and never replaces existing configuration."}
+                ? "导出资源配置和任务模板，不包含秘密值、授权或执行历史。普通命令参数和说明会随配置导出，请勿在其中直接填写密码。导入会新增记录，不覆盖现有配置。"
+                : "Exports resources and task templates, without secret values, authorizations or history. Ordinary arguments and descriptions are included: do not place passwords in them. Import adds records and never replaces existing configuration."}
             </p>
             <button
               className="workbench-button"
@@ -225,8 +226,8 @@ export function DataMaintenanceView({
                               ? "此文件已导入，未重复新增。"
                               : "Already imported; no duplicate records added."
                             : zh
-                              ? "导入完成，请前往凭据页重新配置秘密值。"
-                              : "Import complete. Configure secret values on the Credentials page.",
+                              ? "导入完成，请前往资源页重新配置秘密值。"
+                              : "Import complete. Configure secret values on the Resources page.",
                         );
                       })
                     }
@@ -369,8 +370,7 @@ export function DataMaintenanceView({
                   {diagnostics.bridge_schema_version}
                 </p>
                 <p>
-                  {zh ? "凭据引用" : "Credentials"}: {diagnostics.credentials} ·{" "}
-                  {zh ? "连接" : "Connections"}: {diagnostics.connections} ·{" "}
+                  {zh ? "资源" : "Resources"}: {diagnostics.connections} ·{" "}
                   {zh ? "模板" : "Templates"}: {diagnostics.templates}
                 </p>
                 <p>
@@ -466,21 +466,6 @@ export function DataMaintenanceView({
               </div>
             )}
             <div className="space-y-3 rounded-lg border border-slate-200 p-4">
-              <label className="block text-sm font-semibold">
-                {zh ? "PIN/口令" : "PIN/passphrase"}
-                <input
-                  type="password"
-                  autoComplete="off"
-                  minLength={12}
-                  maxLength={64}
-                  value={diagnosticPin}
-                  onChange={(event) => {
-                    setDiagnosticPin(event.target.value);
-                    setUnlockedDiagnostics(null);
-                  }}
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3.5 py-2.5"
-                />
-              </label>
               <label className="flex gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -507,25 +492,17 @@ export function DataMaintenanceView({
               </label>
               <button
                 className="workbench-button"
-                disabled={
-                  busy ||
-                  diagnosticPin.length < 12 ||
-                  (!includeEvents && !includeCommands)
-                }
-                onClick={() =>
-                  void perform(async () => {
-                    const result = await unlockDiagnostics(
-                      sessionToken,
-                      diagnosticPin,
-                      includeCommands,
-                      includeEvents,
-                    );
-                    setDiagnosticPin("");
-                    setUnlockedDiagnostics(result);
-                  })
-                }
+                disabled={busy || (!includeEvents && !includeCommands)}
+                onClick={() => setPinAction("preview")}
               >
                 {zh ? "解锁并预览所选内容" : "Unlock and preview selection"}
+              </button>
+              <button
+                className="workbench-button ml-3"
+                disabled={busy || (!includeEvents && !includeCommands)}
+                onClick={() => setPinAction("export")}
+              >
+                {zh ? "导出所选诊断" : "Export selected diagnostics"}
               </button>
               {unlockedDiagnostics && (
                 <>
@@ -536,20 +513,6 @@ export function DataMaintenanceView({
                   <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-3 text-xs">
                     {JSON.stringify(unlockedDiagnostics, null, 2)}
                   </pre>
-                  <button
-                    className="workbench-button"
-                    onClick={() =>
-                      saveDownload(
-                        new Blob(
-                          [JSON.stringify(unlockedDiagnostics, null, 2)],
-                          { type: "application/json" },
-                        ),
-                        "secretbridge-diagnostics-selected.json",
-                      )
-                    }
-                  >
-                    {zh ? "下载预览内容" : "Download previewed content"}
-                  </button>
                 </>
               )}
             </div>
@@ -571,6 +534,37 @@ export function DataMaintenanceView({
           </p>
         )}
       </div>
+      {pinAction && (
+        <PinActionDialog
+          language={language}
+          title={
+            pinAction === "export"
+              ? zh
+                ? "导出诊断报告"
+                : "Export diagnostics"
+              : zh
+                ? "预览诊断报告"
+                : "Preview diagnostics"
+          }
+          onClose={() => setPinAction(null)}
+          onConfirm={async (pin) => {
+            const result = await unlockDiagnostics(
+              sessionToken,
+              pin,
+              includeCommands,
+              includeEvents,
+            );
+            setUnlockedDiagnostics(result);
+            if (pinAction === "export")
+              saveDownload(
+                new Blob([JSON.stringify(result, null, 2)], {
+                  type: "application/json",
+                }),
+                "secretbridge-diagnostics-selected.json",
+              );
+          }}
+        />
+      )}
     </section>
   );
 }

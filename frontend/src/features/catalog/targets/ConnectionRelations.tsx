@@ -5,7 +5,6 @@ import {
   listActionTemplates,
   listSyntheticRuns,
   type ActionTemplate,
-  type CredentialReference,
   type SyntheticRun,
 } from "../../../api/index";
 import { useServiceChanges } from "../../../app/service-events";
@@ -13,13 +12,11 @@ import { RunOutputView } from "../../tasks/runs/RunOutputView";
 
 export function ConnectionRelations({
   targetId,
-  credentials,
   language,
   sessionToken,
   onTask,
 }: {
   targetId: string;
-  credentials: CredentialReference[];
   language: "zh-CN" | "en";
   sessionToken: string;
   onTask?: (targetId: string, templateId?: string) => void;
@@ -60,14 +57,6 @@ export function ConnectionRelations({
     };
   }, [sessionToken, targetId]);
   useServiceChanges(sessionToken, () => void refresh());
-  const credentialIds = new Set(
-    templates.flatMap(
-      (item) => item.command?.slots.map((slot) => slot.credential_id) ?? [],
-    ),
-  );
-  const relatedCredentials = credentials.filter((item) =>
-    credentialIds.has(item.id),
-  );
   const labels = {
     queued: zh ? "排队中" : "Queued",
     running: zh ? "执行中" : "Running",
@@ -95,30 +84,6 @@ export function ConnectionRelations({
           </button>
         </p>
       )}
-      <div>
-        <h3 className="text-sm font-semibold">
-          {zh ? "任务使用的凭据" : "Credentials used by tasks"}
-        </h3>
-        <ul className="m-0 list-none p-0 text-sm text-slate-600">
-          {relatedCredentials.map((item) => (
-            <li key={item.id} className="py-1">
-              {item.name} ·{" "}
-              {item.secret_state === "available"
-                ? zh
-                  ? "已配置"
-                  : "Configured"
-                : zh
-                  ? "待配置"
-                  : "Not configured"}
-            </li>
-          ))}
-        </ul>
-        {!loading && !error && relatedCredentials.length === 0 && (
-          <p className="text-sm text-slate-500">
-            {zh ? "尚无任务关联凭据" : "No task-linked credentials"}
-          </p>
-        )}
-      </div>
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold">{zh ? "可用任务" : "Tasks"}</h3>

@@ -27,6 +27,9 @@ mod helpers;
 pub(crate) mod maintenance;
 mod notification_settings;
 mod one_time;
+mod resources;
+mod terminal_history;
+pub use terminal_history::TerminalHistoryEntry;
 mod rows;
 mod runs;
 mod safe_events;
@@ -41,12 +44,15 @@ pub use browser_auth::{
     BrowserAuthChannel, BrowserAuthEvent, BrowserAuthEventKind, BrowserAuthMode,
 };
 use helpers::{
-    credential_by_id, ensure_approval_policy, ensure_capacity, ensure_credential_exists,
-    ensure_credential_reference_unlinked, ensure_target_exists, insert_safe_event,
-    normalize_idempotency_key, normalize_optional, normalize_postgres_config, normalize_required,
+    credential_by_id, ensure_approval_policy, ensure_capacity, ensure_target_exists,
+    insert_safe_event, normalize_idempotency_key, normalize_optional, normalize_required,
     now_unix_ms_i64, policy_evaluation, save_command_slots, synthetic_run_by_approval,
     synthetic_run_by_id, synthetic_run_by_idempotency_key_hash, synthetic_run_from_row,
     target_by_id, u64_from_row, uuid_from_row, validate_command,
+};
+#[cfg(test)]
+use helpers::{
+    ensure_credential_exists, ensure_credential_reference_unlinked, normalize_postgres_config,
 };
 pub use notification_settings::ApprovalNotificationChannel;
 use one_time::expire_approvals;
@@ -62,7 +68,9 @@ const MAX_ACTION_TEMPLATES: i64 = 256;
 const MAX_ACTIVE_RUNS: i64 = 1_024;
 const MAX_NAME_CHARS: usize = 80;
 const MAX_DESCRIPTION_CHARS: usize = 240;
+#[cfg(test)]
 const MAX_ADDRESS_CHARS: usize = 2_048;
+#[cfg(test)]
 const MAX_USERNAME_CHARS: usize = 256;
 const MIN_APPROVAL_TTL_SECONDS: u64 = 60;
 const MAX_APPROVAL_TTL_SECONDS: u64 = 3_600;
@@ -233,13 +241,13 @@ impl SafeEventKind {
     }
 }
 
-pub use crate::domain::credentials::{
-    CreateCredentialReference, CredentialKind, CredentialReference, SecretState,
-    UpdateCredentialReference,
-};
+#[cfg(test)]
+pub use crate::domain::credentials::{CreateCredentialReference, UpdateCredentialReference};
+pub use crate::domain::credentials::{CredentialKind, CredentialReference, SecretState};
+#[cfg(test)]
+pub use crate::domain::targets::{CreateTarget, UpdateTarget};
 pub use crate::domain::targets::{
-    CreateTarget, PostgresTargetConfig, PostgresTlsMode, Target, TargetEnvironment, TargetKind,
-    UpdateTarget,
+    PostgresTargetConfig, PostgresTlsMode, Target, TargetEnvironment, TargetKind,
 };
 
 impl CredentialKind {
@@ -265,12 +273,14 @@ impl PostgresTlsMode {
     const fn as_storage(self) -> &'static str {
         match self {
             Self::VerifyFull => "verify_full",
+            Self::Disabled => "disabled",
         }
     }
 
     fn from_storage(value: &str) -> rusqlite::Result<Self> {
         match value {
             "verify_full" => Ok(Self::VerifyFull),
+            "disabled" => Ok(Self::Disabled),
             _ => Err(rusqlite::Error::InvalidQuery),
         }
     }
@@ -279,6 +289,7 @@ impl PostgresTlsMode {
 impl TargetKind {
     const fn as_storage(self) -> &'static str {
         match self {
+            Self::Generic => "generic",
             Self::Database => "database",
             Self::HttpService => "http_service",
             Self::SshHost => "ssh_host",
@@ -288,6 +299,7 @@ impl TargetKind {
 
     fn from_storage(value: &str) -> rusqlite::Result<Self> {
         match value {
+            "generic" => Ok(Self::Generic),
             "database" => Ok(Self::Database),
             "http_service" => Ok(Self::HttpService),
             "ssh_host" => Ok(Self::SshHost),

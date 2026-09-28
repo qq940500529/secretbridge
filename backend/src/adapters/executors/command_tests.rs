@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::*;
-use crate::catalog::{
-    CreateActionTemplate, CreateApproval, CreateCredentialReference, CreateSyntheticRun,
-    CreateTarget, DecideApproval,
-};
+use crate::catalog::{CreateActionTemplate, CreateApproval, CreateSyntheticRun, DecideApproval};
 use std::sync::Arc;
 
 struct SlowReadStore {
@@ -104,14 +101,11 @@ fn configure_in_terminal(
     timeout: u64,
     terminal_id: Option<Uuid>,
 ) -> (Uuid, Uuid) {
-    let credential: CreateCredentialReference = serde_json::from_value(
-        serde_json::json!({"name":"Synthetic command test","kind":"password"}),
-    )
-    .unwrap();
-    let credential = state
-        .catalog
-        .create_credential_reference(&credential)
-        .unwrap();
+    let resource = state.catalog.save_resource(None, &serde_json::from_value(serde_json::json!({
+        "name":"Synthetic command test","kind":"http_service","environment":"test","authentication_kind":"password"
+    })).unwrap()).unwrap();
+    let target = resource.target;
+    let credential = state.catalog.get_credential_reference(target.id).unwrap();
     state
         .secret_store
         .set(credential.id, "Synthetic-SB-command_A&z")
@@ -120,11 +114,6 @@ fn configure_in_terminal(
         .catalog
         .set_credential_secret_state(credential.id, credential.version, true)
         .unwrap();
-    let target: CreateTarget = serde_json::from_value(
-        serde_json::json!({"name":"Local command","kind":"http_service","environment":"test"}),
-    )
-    .unwrap();
-    let target = state.catalog.create_target(&target).unwrap();
     let mut command = fixture(mode, credential.id);
     command.terminal_id = terminal_id;
     let template:CreateActionTemplate=serde_json::from_value(serde_json::json!({"name":"Credential echo fixture","target_id":target.id,"operation":"command_execution","result_scope":"sanitized_output","timeout_seconds":timeout,"command":command})).unwrap();

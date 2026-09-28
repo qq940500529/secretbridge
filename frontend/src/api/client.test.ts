@@ -12,8 +12,8 @@ import {
   evaluateActionTemplate,
   listCredentialReferences,
   listBrowserAuthEvents,
-  setCredentialSecret,
-  clearCredentialSecret,
+  setResourceSecret,
+  clearResourceSecret,
   createTerminal,
   getTerminalCapabilities,
   readRunOutput,
@@ -23,7 +23,7 @@ import {
   setBrowserAuthMethod,
   startTotpSetup,
   confirmTotpSetup,
-  updateCredentialReference,
+  saveResource,
 } from "./index";
 import { parseTerminalEnvironment } from "../features/terminal/environment";
 
@@ -278,7 +278,7 @@ describe("configuration API client", () => {
 
     expect(result).toEqual({ items: [], storage: "sqlite" });
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/credential-references",
+      "/api/v1/resources",
       expect.objectContaining({ credentials: "omit" }),
     );
   });
@@ -287,8 +287,14 @@ describe("configuration API client", () => {
     const response = {
       id: "synthetic-id",
       name: "Updated reference",
-      kind: "api_token",
-      purpose: "Test-only metadata",
+      kind: "http_service",
+      address: null,
+      username: null,
+      authentication_kind: "api_token",
+      environment: "test",
+      labels: [],
+      connection: { protocol: "none" },
+      description: "Test-only metadata",
       secret_state: "not_configured",
       created_at_unix_ms: 1,
       updated_at_unix_ms: 2,
@@ -302,19 +308,35 @@ describe("configuration API client", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    await updateCredentialReference("synthetic-session-token", "synthetic-id", {
-      name: "Updated reference",
-      kind: "api_token",
-      purpose: "Test-only metadata",
-      expected_version: 1,
-    });
+    await saveResource(
+      "synthetic-session-token",
+      {
+        name: "Updated reference",
+        kind: "http_service",
+        address: null,
+        username: null,
+        authentication_kind: "api_token",
+        environment: "test",
+        labels: [],
+        connection: { protocol: "none" },
+        description: "Test-only metadata",
+        expected_version: 1,
+      },
+      "synthetic-id",
+    );
 
     const [, request] = fetch.mock.calls[0] as [string, RequestInit];
     expect(request.method).toBe("PUT");
     expect(JSON.parse(request.body as string)).toEqual({
       name: "Updated reference",
-      kind: "api_token",
-      purpose: "Test-only metadata",
+      kind: "http_service",
+      address: null,
+      username: null,
+      authentication_kind: "api_token",
+      environment: "test",
+      labels: [],
+      connection: { protocol: "none" },
+      description: "Test-only metadata",
       expected_version: 1,
     });
     expect(request.body).not.toContain("secret");
@@ -338,16 +360,21 @@ describe("configuration API client", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    await setCredentialSecret(
+    await setResourceSecret(
       "session-token",
-      "credential-id",
+      {
+        id: "credential-id",
+        authentication: { secret_version: 1 },
+      } as Parameters<typeof setResourceSecret>[1],
       "test-secret",
-      1,
     );
-    await clearCredentialSecret("session-token", "credential-id", 2);
+    await clearResourceSecret("session-token", {
+      id: "credential-id",
+      authentication: { secret_version: 2 },
+    } as Parameters<typeof clearResourceSecret>[1]);
 
     expect(fetch.mock.calls[0]?.[0]).toBe(
-      "/api/v1/credential-references/credential-id/secret",
+      "/api/v1/resources/credential-id/secret",
     );
     expect(fetch.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
@@ -375,11 +402,22 @@ describe("configuration API client", () => {
     );
 
     await expect(
-      updateCredentialReference("synthetic-session-token", "synthetic-id", {
-        name: "Stale update",
-        kind: "password",
-        expected_version: 1,
-      }),
+      saveResource(
+        "synthetic-session-token",
+        {
+          name: "Stale update",
+          kind: "database",
+          address: null,
+          username: null,
+          description: null,
+          authentication_kind: "password",
+          environment: "test",
+          labels: [],
+          connection: { protocol: "none" },
+          expected_version: 1,
+        },
+        "synthetic-id",
+      ),
     ).rejects.toMatchObject({ status: 409, code: "version_conflict" });
   });
 
