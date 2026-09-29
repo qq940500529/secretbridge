@@ -18,6 +18,7 @@ import { CommandReview } from "../shared/CommandReview";
 import { authorizationLabel } from "../shared/parameters";
 import { useServiceChanges } from "../../../app/service-events";
 import type { ApprovalNotificationChannel } from "../../../app/preferences";
+import { noteForApproval, type ApprovalNoteDraft } from "./decision-note";
 
 type Language = "zh-CN" | "en";
 
@@ -45,13 +46,14 @@ export function ApprovalQueueDialog({
   const [templateLoading, setTemplateLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState("");
+  const [noteDraft, setNoteDraft] = useState<ApprovalNoteDraft | null>(null);
   const [conversation, setConversation] = useState<AiConversation | null>(null);
   const [policy, setPolicy] =
     useState<ConversationApprovalPolicy>("every_task");
   const [riskAccepted, setRiskAccepted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const current = pending[0];
+  const note = noteForApproval(noteDraft, current);
 
   useEffect(() => {
     const original = document.title;
@@ -172,7 +174,6 @@ export function ApprovalQueueDialog({
     setConversation(null);
     setPolicy("every_task");
     setRiskAccepted(false);
-    setNote("");
     if (current?.conversation_id)
       void listAiConversations(sessionToken)
         .then((result) => {
@@ -256,7 +257,11 @@ export function ApprovalQueueDialog({
           : {}),
         ...(note.trim() ? { note: note.trim() } : {}),
       });
-      setNote("");
+      setNoteDraft((draft) =>
+        draft?.approvalId === current.id && draft.version === current.version
+          ? null
+          : draft,
+      );
       // Re-read the server state so another page's decisions and new requests are included.
       await reload();
     } catch {
@@ -427,7 +432,13 @@ export function ApprovalQueueDialog({
                   }
                   maxLength={240}
                   value={note}
-                  onChange={(event) => setNote(event.target.value)}
+                  onChange={(event) =>
+                    setNoteDraft({
+                      approvalId: current.id,
+                      version: current.version,
+                      value: event.target.value,
+                    })
+                  }
                   className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>

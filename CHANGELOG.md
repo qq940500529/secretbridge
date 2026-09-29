@@ -8,6 +8,7 @@ This file records public release behavior rather than preserving a development d
 
 - Add an SSH host-key onboarding flow that observes a saved server's public fingerprint without credential reads, authentication or remote commands. Explicit independent verification fills a draft; normal save applies it. Cancel checks, discard stale endpoint/version results and warn on changed keys.
 - Ship a dedicated WorkBuddy MCP connector and Skill, plus a native DeepSeek Harness bundle using the official MCP client and scoped operation guidance. Export prebuilt client assets using the stable local launcher without compilation or overwriting existing client files.
+- Keep decision notes scoped to the current approval and version so background refreshes do not clear newly entered rejection feedback or carry it into another request. Keep SSH verification actions readable in both enabled and disabled states.
 
 ## 0.3.0-beta.4 — 2026-09-28
 

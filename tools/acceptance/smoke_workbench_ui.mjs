@@ -553,15 +553,26 @@ try {
     );
     await queue.getByLabel("审批要求").selectOption("every_task");
     await page.waitForFunction(
-      () => {
+      ({ width, height }) => {
         const dialog = document.querySelector(
           "dialog[open]:not([data-presentation])",
         );
         if (!dialog) return false;
         const footer = dialog.querySelector("footer");
-        return footer && footer.getBoundingClientRect().bottom <= innerHeight;
+        if (!footer || innerWidth !== width) return false;
+        return (
+          footer.getBoundingClientRect().bottom <= height &&
+          [...footer.querySelectorAll("button")].every((button) => {
+            const bounds = button.getBoundingClientRect();
+            return (
+              bounds.x >= 0 &&
+              bounds.x + bounds.width <= width &&
+              bounds.y + bounds.height <= height
+            );
+          })
+        );
       },
-      null,
+      { width, height: 700 },
       { timeout: 2000 },
     );
     assert.equal(
@@ -591,6 +602,12 @@ try {
   await queue
     .getByLabel("决定备注 / 拒绝反馈（可选）")
     .fill("Use a bounded alternative.");
+  await queue.getByLabel("审批要求").waitFor({ state: "visible" });
+  assert.equal(
+    await queue.getByLabel("决定备注 / 拒绝反馈（可选）").inputValue(),
+    "Use a bounded alternative.",
+    "Loading the next approval's conversation must not clear its decision note",
+  );
   await queue.getByRole("button", { name: "拒绝当前项" }).click();
   await queue.waitFor({ state: "hidden" });
   await nav("执行与结果").click();
