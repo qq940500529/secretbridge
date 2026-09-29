@@ -30,6 +30,9 @@ use tokio::{
 };
 use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 use uuid::Uuid;
+#[path = "ssh_host_key.rs"]
+mod host_key;
+pub(crate) use host_key::{HostKeyProbes, observe_host_key};
 use zeroize::Zeroizing;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

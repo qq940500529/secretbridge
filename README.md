@@ -77,6 +77,8 @@ AI clients with Skill support can install the versioned [SecretBridge operations
 
 For Codex, Claude Code, Cursor, GitHub Copilot CLI, OpenCode, WorkBuddy and DeepSeek Harness, the installed binary can print client-specific MCP setup with `client-config CLIENT`. Other local stdio MCP clients can start with `client-config generic` and adapt the outer configuration format; see [AI client integrations](./CLIENT_INTEGRATIONS.md).
 
+WorkBuddy also has a dedicated MCP connector and Skill. DeepSeek Harness uses a native bundle with the official MCP client and scoped operation guidance. Both are preassembled in packages containing this integration and exported using the stable installed launcher; no local plugin build is required.
+
 ## Validation targets
 
 | Platform | Current baseline | Default shell |

@@ -34,6 +34,7 @@ def available_port() -> int:
 
 def acceptance_plan(browsers: list[str]) -> list[tuple[str, str]]:
     plan = [(browser, "smoke_workbench_ui.mjs") for browser in browsers]
+    plan.extend((browser, "smoke_ssh_onboarding_ui.mjs") for browser in browsers)
     if "chromium" in browsers:
         plan.extend(("chromium", script) for script in CHROMIUM_SCRIPTS)
     return plan

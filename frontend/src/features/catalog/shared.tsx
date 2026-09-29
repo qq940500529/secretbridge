@@ -176,6 +176,7 @@ export function CatalogForm({
   children,
   error,
   returnFocusTarget,
+  submitIcon,
 }: {
   title: string;
   open: boolean;
@@ -190,6 +191,7 @@ export function CatalogForm({
   children: ReactNode;
   error: string | null;
   returnFocusTarget?: HTMLElement | null;
+  submitIcon?: ReactNode;
 }) {
   return (
     <EditorDialog
@@ -236,7 +238,7 @@ export function CatalogForm({
               {busy ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (
-                <Plus className="size-4" />
+                (submitIcon ?? <Plus className="size-4" />)
               )}
               {busy ? busyLabel : submitLabel}
             </button>

@@ -5,6 +5,7 @@ import type {
   ResourceRequest,
   CatalogListResponse,
   ConnectionTestResult,
+  SshHostKeyObservation,
 } from "./models";
 import {
   readJson,
@@ -12,6 +13,39 @@ import {
   sessionJsonHeaders,
   deleteCatalogItem,
 } from "./transport";
+export async function probeSshHostKey(
+  token: string,
+  resource: Resource,
+  probeId: string,
+  signal: AbortSignal,
+): Promise<SshHostKeyObservation> {
+  return readJson(
+    await fetch(
+      `/api/v1/resources/${encodeURIComponent(resource.id)}/ssh-host-key`,
+      {
+        method: "POST",
+        credentials: "omit",
+        cache: "no-store",
+        signal,
+        headers: sessionJsonHeaders(token),
+        body: JSON.stringify({
+          expected_version: resource.version,
+          probe_id: probeId,
+        }),
+      },
+    ),
+  );
+}
+export async function cancelSshHostKeyProbe(
+  token: string,
+  resourceId: string,
+  probeId: string,
+): Promise<void> {
+  await deleteCatalogItem(
+    token,
+    `/api/v1/resources/${encodeURIComponent(resourceId)}/ssh-host-key/${encodeURIComponent(probeId)}`,
+  );
+}
 export async function listResources(
   token: string,
 ): Promise<CatalogListResponse<Resource>> {

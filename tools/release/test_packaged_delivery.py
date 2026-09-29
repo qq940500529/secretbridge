@@ -158,6 +158,31 @@ def accept(archive: Path) -> None:
                 (plugin_root / "plugins/secretbridge/.mcp.json").read_text(encoding="utf-8")
             )
             client = config["mcpServers"]["secretbridge"]
+            for native_client, export_command, config_name in (
+                ("workbuddy", "client-connector", "mcp.json"),
+                ("deepseek-harness", "client-plugin", "cordis.patch.yml"),
+            ):
+                client_root = workspace / native_client
+                assert run(export_command, native_client, client_root)["requires_build"] is False
+                native_config = json.loads((client_root / config_name).read_text(encoding="utf-8"))
+                server = (
+                    native_config["mcpServers"]["secretbridge"]
+                    if native_client == "workbuddy"
+                    else native_config[0]["insert"][0]["config"]
+                )
+                assert server["command"] == client["command"]
+                assert server["args"] == client["args"]
+                assert original not in json.dumps(server)
+                run(export_command, native_client, client_root, success=False)
+                if native_client == "workbuddy":
+                    assert (client_root / "icon.svg").is_file()
+                    assert (client_root / "skills/secretbridge-workbuddy/SKILL.md").is_file()
+                else:
+                    manifest = json.loads(
+                        (client_root / "package.json").read_text(encoding="utf-8")
+                    )
+                    assert manifest["dsh"]["bundle"]["patch"] == "./cordis.patch.yml"
+                    assert "scripts" not in manifest
             launcher = Path(client["args"][-1])
             assert launcher.is_file() and launcher.parent == install
             assert "installation.json" in launcher.read_text(encoding="utf-8")

@@ -71,16 +71,16 @@ pub(super) fn render(client: &str, binary: &Path, data: &Path) -> Result<String>
                 "environment": env
             }}}
         })),
-        "deepseek-harness" => Ok(format!(
-            "- id: mcp-secretbridge\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n    serverName: secretbridge\n    transport: stdio\n    command: {}\n    args: ['--mcp-stdio']\n    env:\n      SECRETBRIDGE_DATA_DIR: {}\n",
-            serde_json::to_string(binary).map_err(|_| "client_config_render_failed")?,
-            serde_json::to_string(data).map_err(|_| "client_config_render_failed")?
-        )),
+        "deepseek-harness" => pretty(&json!([{"insert":[{
+            "id":"secretbridge-mcp", "name":"@deepseek-ai/dsh-mcp-client",
+            "config":{"serverName":"secretbridge","transport":"stdio","command":binary,
+                "args":["--mcp-stdio"],"env":env,"toolCallTimeoutMs":30000,"failOnStartupError":true}
+        }]}])),
         _ => unreachable!(),
     }
 }
 
-/// Export the signed release's preassembled plugin. Never modify an existing
+/// Export the verified release's preassembled plugin. Never modify an existing
 /// directory: its ownership and locally edited contents are unknown.
 pub(super) fn export_codex_plugin(
     binary: &Path,
@@ -158,6 +158,67 @@ fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Native client packages are already built; only non-secret launch settings vary per installation.
+pub(super) fn export_native_client(
+    client: &str,
+    binary: &Path,
+    destination: &Path,
+    launcher: &(String, Vec<String>),
+) -> Result<()> {
+    path_text(binary)?;
+    path_text(destination)?;
+    if destination.exists() || destination.file_name().is_none() {
+        return Err("plugin_destination_invalid");
+    }
+    let parent = destination
+        .parent()
+        .filter(|p| p.is_dir())
+        .ok_or("plugin_destination_invalid")?;
+    let root = binary
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("plugin_bundle_unavailable")?;
+    let (source, marker) = match client {
+        "workbuddy" => (root.join("connectors/workbuddy"), "connector-meta.json"),
+        "deepseek-harness" => (root.join("plugins/deepseek-harness"), "package.json"),
+        _ => return Err("client_unknown"),
+    };
+    if !source.join(marker).is_file() {
+        return Err("plugin_bundle_unavailable");
+    }
+    let staging = parent.join(format!(".secretbridge-client-{}", Uuid::new_v4()));
+    fs::create_dir(&staging).map_err(|_| "plugin_export_failed")?;
+    let result = (|| {
+        copy_plugin_tree(&source, &staging)?;
+        let configuration = if client == "workbuddy" {
+            json!({"mcpServers":{"secretbridge":{"type":"stdio","command":launcher.0,"args":launcher.1,"timeout":30000}}})
+        } else {
+            // JSON is valid YAML. Serialize, don't interpolate user paths into YAML syntax.
+            json!([{"insert":[
+                {"id":"secretbridge-mcp","name":"@deepseek-ai/dsh-mcp-client","config":{
+                    "serverName":"secretbridge","transport":"stdio","command":launcher.0,"args":launcher.1,
+                    "toolCallTimeoutMs":30000,"failOnStartupError":true
+                }},
+                {"id":"secretbridge-guidance","name":"dsh-secretbridge"}
+            ]}])
+        };
+        fs::write(
+            staging.join(if client == "workbuddy" {
+                "mcp.json"
+            } else {
+                "cordis.patch.yml"
+            }),
+            serde_json::to_vec_pretty(&configuration).map_err(|_| "plugin_export_failed")?,
+        )
+        .map_err(|_| "plugin_export_failed")?;
+        fs::rename(&staging, destination).map_err(|_| "plugin_export_failed")
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -312,6 +373,49 @@ mod tests {
             .unwrap()["name"],
             "secretbridge-local"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_client_exports_use_stable_launcher_and_refuse_overwrite() {
+        let root =
+            std::env::temp_dir().join(format!("secretbridge-client-test-{}", Uuid::new_v4()));
+        let workbuddy = root.join("release/connectors/workbuddy");
+        let deepseek = root.join("release/plugins/deepseek-harness");
+        fs::create_dir_all(&workbuddy).unwrap();
+        fs::create_dir_all(&deepseek).unwrap();
+        fs::write(workbuddy.join("connector-meta.json"), "{}").unwrap();
+        fs::write(deepseek.join("package.json"), "{}").unwrap();
+        let binary = root.join("release/bin/secretbridge");
+        let launcher = (
+            "stable-launcher".to_owned(),
+            vec!["/test/path with spaces & quotes'".to_owned()],
+        );
+        for client in ["workbuddy", "deepseek-harness"] {
+            let destination = root.join(client);
+            export_native_client(client, &binary, &destination, &launcher).unwrap();
+            let value: Value = serde_json::from_slice(
+                &fs::read(destination.join(if client == "workbuddy" {
+                    "mcp.json"
+                } else {
+                    "cordis.patch.yml"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let config = if client == "workbuddy" {
+                &value["mcpServers"]["secretbridge"]
+            } else {
+                &value[0]["insert"][0]["config"]
+            };
+            assert_eq!(config["command"], launcher.0);
+            assert_eq!(config["args"], json!(launcher.1));
+            assert!(config.get("env").is_none());
+            assert_eq!(
+                export_native_client(client, &binary, &destination, &launcher),
+                Err("plugin_destination_invalid")
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

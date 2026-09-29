@@ -243,6 +243,13 @@ class PackageReleaseTests(unittest.TestCase):
             encoding="utf-8",
         )
         binary = root / "app"
+        for folder, marker in (
+            ("connectors/workbuddy", "connector-meta.json"),
+            ("plugins/deepseek-harness", "package.json"),
+        ):
+            client = root / folder
+            client.mkdir(parents=True)
+            (client / marker).write_text("{}", encoding="utf-8")
         binary.write_bytes(b"fixture executable")
         return binary
 
@@ -313,6 +320,8 @@ class PackageReleaseTests(unittest.TestCase):
                     "skills/secretbridge-operations/SKILL.md",
                     "plugins/secretbridge/.codex-plugin/plugin.json",
                     "plugins/secretbridge/.mcp.json",
+                    "connectors/workbuddy/connector-meta.json",
+                    "plugins/deepseek-harness/package.json",
                 }
                 <= paths
             )

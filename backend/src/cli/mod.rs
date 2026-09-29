@@ -52,14 +52,24 @@ pub(super) async fn handle(
             let data = super::data_directory()?;
             println!("{}", client_config::render(client, &binary, &data)?);
         }
-        "client-plugin" if arguments.len() == 3 && arguments[1] == "codex" => {
+        "client-plugin" | "client-connector" if arguments.len() == 3 => {
+            let client = arguments[1].to_str().ok_or("client_name_invalid")?;
+            if !(command == "client-plugin" && ["codex", "deepseek-harness"].contains(&client)
+                || command == "client-connector" && client == "workbuddy")
+            {
+                return Err("client_unknown".into());
+            }
             let (binary, _) = installation::active_paths()?.ok_or("not_installed")?;
             let destination = Path::new(&arguments[2]);
             let launcher = installation::mcp_launcher()?;
-            client_config::export_codex_plugin(&binary, destination, &launcher)?;
+            if client == "codex" {
+                client_config::export_codex_plugin(&binary, destination, &launcher)?;
+            } else {
+                client_config::export_native_client(client, &binary, destination, &launcher)?;
+            }
             println!(
                 "{}",
-                serde_json::json!({"exported":true,"client":"codex","destination":destination,"requires_build":false})
+                serde_json::json!({"exported":true,"client":client,"destination":destination,"requires_build":false})
             );
         }
         "stop" if arguments.len() == 1 => {
