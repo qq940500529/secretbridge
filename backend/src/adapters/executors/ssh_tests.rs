@@ -369,6 +369,75 @@ fn ssh_host_key_probe_capacity_and_cancellation_are_bounded() {
 }
 
 #[tokio::test]
+async fn ssh_host_key_web_cancel_closes_the_transport_and_releases_capacity() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tokio::io::AsyncReadExt;
+    use tower::ServiceExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
+    let (token, _) = state.issue_session().await.unwrap();
+    let config = serde_json::from_value(json!({"name":"cancel probe","kind":"ssh_host","environment":"test","address":"127.0.0.1","authentication_kind":"password","connection":{"protocol":"ssh","port":listener.local_addr().unwrap().port(),"host_key_sha256":""}})).unwrap();
+    let resource = state.catalog.save_resource(None, &config).unwrap();
+    let id = resource.target.id;
+    let probe_id = Uuid::new_v4();
+    let snapshot = state.clone();
+    let auth = token.clone();
+    let pending = tokio::spawn(async move {
+        crate::command::tests::web_request(
+            &snapshot,
+            &auth,
+            &format!("/api/v1/resources/{id}/ssh-host-key"),
+            json!({"expected_version":resource.target.version,"probe_id":probe_id}),
+        )
+        .await
+    });
+    let (mut transport, _) = listener.accept().await.unwrap();
+    for (origin, session, expected) in [
+        (
+            "http://127.0.0.1:8787",
+            "invalid-session",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "https://example.invalid",
+            token.as_str(),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "http://127.0.0.1:8787",
+            token.as_str(),
+            StatusCode::NO_CONTENT,
+        ),
+    ] {
+        let response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/v1/resources/{id}/ssh-host-key/{probe_id}"))
+                    .header("origin", origin)
+                    .header("authorization", format!("Bearer {session}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let (status, response) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["code"], "cancelled");
+    let mut bytes = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), transport.read_to_end(&mut bytes))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.host_key_probes.begin(id, probe_id).is_ok());
+}
+
+#[tokio::test]
 async fn ssh_host_key_transport_closes_when_cancelled_during_handshake() {
     use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
