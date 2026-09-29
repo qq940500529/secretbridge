@@ -57,7 +57,8 @@ class NativeClientTests(unittest.TestCase):
         self.assertEqual(meta["dsh"]["bundle"]["patch"], "./cordis.patch.yml")
         self.assertNotIn("scripts", meta)
         self.assertNotIn("dependencies", meta)
-        self.assertEqual(meta["peerDependencies"]["@deepseek-ai/dsh"], ">=0.2.0-rc.1 <0.3.0")
+        # The host includes prereleases in comparisons. Exclude future 0.3 betas too.
+        self.assertEqual(meta["peerDependencies"]["@deepseek-ai/dsh"], ">=0.2.0-rc.1 <0.3.0-0")
         self.assertTrue(meta["peerDependenciesMeta"]["@deepseek-ai/dsh"]["optional"])
         self.assertEqual(meta["license"], "AGPL-3.0-or-later")
         self.assertEqual((folder / "LICENSE").read_bytes(), (ROOT / "LICENSE").read_bytes())

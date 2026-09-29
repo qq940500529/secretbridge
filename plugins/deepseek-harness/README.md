@@ -14,7 +14,7 @@ dsh --profile <profile> --dump-config
 
 The exporter personalizes the prebuilt bundle with the stable installed MCP launcher. Upgrade or rollback of SecretBridge does not require rebuilding this plugin. The destination must not exist. Do not register a second SecretBridge MCP client in the same profile.
 
-Use Harness 0.2.0-rc.1 or a compatible 0.2.x runtime satisfying the declared `@deepseek-ai/dsh` peer range. Harness checks this requirement against its running app-boot version, not the individual service package versions. This optional peer is a host compatibility declaration, not a request to download another Harness runtime. Older npm packages are not equivalent to the current plugin API; do not bypass compatibility checks. The host provides the MCP client and system-prompt services. The bundle does not vendor, patch or rebuild them.
+Use Harness 0.2.0-rc.1 or a compatible 0.2.x runtime satisfying the declared `@deepseek-ai/dsh` peer range. Harness checks this requirement against its running app-boot version, not the individual service package versions. The upper bound also excludes future 0.3 prereleases. This optional peer is a host compatibility declaration, not a request to download another Harness runtime. Older npm packages are not equivalent to the current plugin API; do not bypass compatibility checks. The host provides the MCP client and system-prompt services. The bundle does not vendor, patch or rebuild them.
 
 ## Verify and remove
 
