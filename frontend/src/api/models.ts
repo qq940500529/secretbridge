@@ -700,3 +700,10 @@ export interface ConnectionTestResult {
   tested_at_unix_ms: number;
   missing_fields: string[];
 }
+export interface SshHostKeyObservation {
+  resource_id: string;
+  resource_version: number;
+  code: string;
+  fingerprint: string | null;
+  algorithm: string | null;
+}

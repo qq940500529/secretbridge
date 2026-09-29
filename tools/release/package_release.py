@@ -514,6 +514,10 @@ def build_package(binary: Path, output: Path, allow_dirty: bool = False) -> Path
         # Codex integration is preassembled at build time. Installation may
         # personalize its non-secret MCP path, but must not compile a plugin.
         shutil.copytree(ROOT / "plugins" / "secretbridge", package / "plugins" / "secretbridge")
+        shutil.copytree(ROOT / "connectors" / "workbuddy", package / "connectors" / "workbuddy")
+        shutil.copytree(
+            ROOT / "plugins" / "deepseek-harness", package / "plugins" / "deepseek-harness"
+        )
         for document in DOCUMENTS:
             shutil.copy2(ROOT / document, package / document)
         for asset in BRAND_ASSETS:

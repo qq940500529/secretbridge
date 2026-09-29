@@ -4,7 +4,7 @@
 
 Codex、Claude Code、Cursor、GitHub Copilot CLI、OpenCode、WorkBuddy 和 DeepSeek Harness 的专用配置，以及其他本机 stdio MCP 客户端的通用配置、放置位置与连接验收，见[AI 客户端接入](../../CLIENT_INTEGRATIONS.md)。
 
-SecretBridge 的 [AI 操作 Skill](../../skills/secretbridge-operations/SKILL.md) 指导支持 Skill 的助手选择工具、展示审批和处理不确定结果。它不增加权限；实际的凭据访问、审批、脱敏和输入校验始终由本机 MCP 服务执行。没有 Skill 的 MCP 客户端仍能通过 `tools/list` 和简短的 server instructions 使用相同接口。
+SecretBridge 的 [AI 操作 Skill](../../skills/secretbridge-operations/SKILL.md) 指导支持 Skill 的助手选择工具、展示审批和处理不确定结果。WorkBuddy 提供[专用 Skill](../../connectors/workbuddy/skills/secretbridge-workbuddy/SKILL.md)与连接器结构，DeepSeek Harness 提供[原生 bundle 插件](../../plugins/deepseek-harness/README.md)及作用域内操作指导。它们不增加权限；实际的凭据访问、审批、脱敏和输入校验始终由本机 MCP 服务执行。没有 Skill 的 MCP 客户端仍能通过 `tools/list` 和简短的 server instructions 使用相同接口。
 
 ## 职责归属
 

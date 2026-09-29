@@ -27,6 +27,8 @@ EXPECTED_ROUTES = {
     "/api/v1/resources/{id}",
     "/api/v1/resources/{id}/secret",
     "/api/v1/resources/{id}/test",
+    "/api/v1/resources/{id}/ssh-host-key",
+    "/api/v1/resources/{id}/ssh-host-key/{probe_id}",
     "/api/v1/terminal-history",
     "/api/v1/terminal-history/{id}",
     "/api/v1/action-templates",

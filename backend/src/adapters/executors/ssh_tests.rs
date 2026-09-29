@@ -217,6 +217,172 @@ pub(crate) async fn server() -> Fixture {
         listener,
     }
 }
+
+#[tokio::test]
+async fn ssh_host_key_observation_never_authenticates_or_executes() {
+    let fixture = server().await;
+    let (fingerprint, algorithm) = tokio::time::timeout(
+        Duration::from_secs(5),
+        observe_host_key("127.0.0.1", fixture.port),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(fingerprint, fixture.fingerprint);
+    assert_eq!(algorithm, "ssh-ed25519");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 0);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+    assert!(fixture.disconnected.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn ssh_host_key_web_requires_session_version_and_does_not_save_trust() {
+    use crate::command::tests::web_request;
+    use axum::http::StatusCode;
+    struct NoSecretReads;
+    impl crate::secret_store::SecretStore for NoSecretReads {
+        fn get(&self, _: Uuid) -> Result<Zeroizing<String>, crate::secret_store::SecretStoreError> {
+            panic!("host-key observation must not read secrets");
+        }
+        fn set(&self, _: Uuid, _: &str) -> Result<(), crate::secret_store::SecretStoreError> {
+            panic!("host-key observation must not write secrets");
+        }
+        fn delete(&self, _: Uuid) -> Result<(), crate::secret_store::SecretStoreError> {
+            panic!("host-key observation must not delete secrets");
+        }
+    }
+    let fixture = server().await;
+    let (mut state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
+    state.secret_store = Arc::new(NoSecretReads);
+    let (token, _) = state.issue_session().await.unwrap();
+    let (_, resource) = web_request(&state, &token, "/api/v1/resources", json!({"name":"SSH onboarding test","kind":"ssh_host","environment":"test","address":"127.0.0.1","authentication_kind":"password","connection":{"protocol":"ssh","port":fixture.port,"host_key_sha256":""}})).await;
+    let id = Uuid::parse_str(resource["id"].as_str().unwrap()).unwrap();
+    let path = format!("/api/v1/resources/{id}/ssh-host-key");
+    let body = json!({"expected_version":resource["version"],"probe_id":Uuid::new_v4()});
+    let (status, _) = web_request(&state, "invalid-session", &path, body.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = web_request(
+        &state,
+        &token,
+        &path,
+        json!({"expected_version":0,"probe_id":Uuid::new_v4()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, result) = web_request(&state, &token, &path, body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["code"], "observed_unverified");
+    assert_eq!(result["fingerprint"], fixture.fingerprint);
+    let unchanged = state.catalog.get_resource(id).unwrap();
+    assert!(
+        matches!(unchanged.connection, crate::domain::resources::ConnectionOptions::Ssh { host_key_sha256, .. } if host_key_sha256.is_empty())
+    );
+    assert_eq!(
+        unchanged.target.version,
+        resource["version"].as_u64().unwrap()
+    );
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 0);
+    assert!(fixture.commands.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ssh_host_key_web_rejects_foreign_origin_and_stale_inflight_resource() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let fixture = server().await;
+    let (state, _) = AppState::new(["http://127.0.0.1:8787".into()]);
+    let (token, _) = state.issue_session().await.unwrap();
+    let mut config: crate::domain::resources::ResourceRequest = serde_json::from_value(json!({"name":"SSH probe","kind":"ssh_host","environment":"test","address":"127.0.0.1","authentication_kind":"password","connection":{"protocol":"ssh","port":fixture.port,"host_key_sha256":""}})).unwrap();
+    let resource = state.catalog.save_resource(None, &config).unwrap();
+    let path = format!("/api/v1/resources/{}/ssh-host-key", resource.target.id);
+    let response = crate::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("origin", "https://example.invalid")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"expected_version":resource.target.version,"probe_id":Uuid::new_v4()})
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(fixture.auth_hits.load(Ordering::SeqCst), 0);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    config.expected_version = Some(resource.target.version);
+    config.connection = crate::domain::resources::ConnectionOptions::Ssh {
+        port: listener.local_addr().unwrap().port(),
+        host_key_sha256: String::new(),
+    };
+    let saved = state
+        .catalog
+        .save_resource(Some(resource.target.id), &config)
+        .unwrap();
+    let snapshot = state.clone();
+    let auth = token.clone();
+    let endpoint = path.clone();
+    let pending = tokio::spawn(async move {
+        crate::command::tests::web_request(
+            &snapshot,
+            &auth,
+            &endpoint,
+            json!({"expected_version":saved.target.version,"probe_id":Uuid::new_v4()}),
+        )
+        .await
+    });
+    let (transport, _) = listener.accept().await.unwrap();
+    config.expected_version = Some(saved.target.version);
+    state
+        .catalog
+        .save_resource(Some(saved.target.id), &config)
+        .unwrap();
+    // Close the stalled exchange, then validate that its result cannot apply to the newer resource.
+    drop(transport);
+    assert_eq!(pending.await.unwrap().0, StatusCode::CONFLICT);
+}
+
+#[test]
+fn ssh_host_key_probe_capacity_and_cancellation_are_bounded() {
+    let probes = HostKeyProbes::default();
+    let resource = Uuid::new_v4();
+    let id = Uuid::new_v4();
+    let first = probes.begin(resource, id).unwrap();
+    assert!(probes.begin(resource, id).is_err());
+    let second = probes.begin(resource, Uuid::new_v4()).unwrap();
+    assert!(probes.begin(resource, Uuid::new_v4()).is_err());
+    probes.cancel(Uuid::new_v4(), id);
+    assert!(!first.stop.is_cancelled());
+    probes.cancel(resource, id);
+    assert!(first.stop.is_cancelled());
+    drop(first);
+    drop(second);
+    assert!(probes.begin(resource, Uuid::new_v4()).is_ok());
+}
+
+#[tokio::test]
+async fn ssh_host_key_transport_closes_when_cancelled_during_handshake() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move { observe_host_key("127.0.0.1", port).await });
+    let (mut stream, _) = listener.accept().await.unwrap();
+    task.abort();
+    let _ = task.await;
+    let mut data = Vec::new();
+    tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut data))
+        .await
+        .unwrap()
+        .unwrap();
+}
 fn config(fixture: &Fixture, credential: Uuid) -> CommandConfig {
     serde_json::from_value(json!({"program":"","working_directory":"","arguments":[],
             "slots":[{"name":"password","credential_id":credential,"injection":"protocol","environment_variable":null}],

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "secretbridge": {
+      "type": "stdio",
+      "command": "secretbridge",
+      "args": ["--mcp-stdio"],
+      "timeout": 30000
+    }
+  }
+}

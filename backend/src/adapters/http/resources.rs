@@ -25,6 +25,14 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/api/v1/resources/{id}/test", axum::routing::post(test))
         .route(
+            "/api/v1/resources/{id}/ssh-host-key",
+            axum::routing::post(probe_host_key),
+        )
+        .route(
+            "/api/v1/resources/{id}/ssh-host-key/{probe_id}",
+            axum::routing::delete(cancel_host_key_probe),
+        )
+        .route(
             "/api/v1/resources/{id}/secret",
             axum::routing::put(set_secret).delete(clear_secret),
         )
@@ -142,6 +150,74 @@ async fn clear_secret(
 #[serde(deny_unknown_fields)]
 struct TestRequest {
     expected_version: u64,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostKeyRequest {
+    expected_version: u64,
+    probe_id: Uuid,
+}
+#[derive(Serialize)]
+struct HostKeyObservation {
+    resource_id: Uuid,
+    resource_version: u64,
+    code: &'static str,
+    fingerprint: Option<String>,
+    algorithm: Option<String>,
+}
+async fn probe_host_key(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<HostKeyRequest>,
+) -> Result<Json<HostKeyObservation>, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    let resource = state.catalog.get_resource(id).map_err(map_catalog_error)?;
+    if resource.target.version != request.expected_version {
+        return Err(map_catalog_error(crate::CatalogError::VersionConflict));
+    }
+    let crate::domain::resources::ConnectionOptions::Ssh { port, .. } = resource.connection else {
+        return Err(ApiError::BadRequest);
+    };
+    let lease = state.host_key_probes.begin(id, request.probe_id);
+    let result = if let Ok(lease) = lease {
+        tokio::select! {
+            () = lease.stop.cancelled() => Err("cancelled"),
+            result = tokio::time::timeout(Duration::from_secs(10), crate::ssh_task::observe_host_key(
+                resource.target.address.as_deref().unwrap_or_default(), port,
+            )) => result.unwrap_or(Err("timed_out")),
+        }
+    } else {
+        Err("probe_busy")
+    };
+    // Recheck after the network await: edited/deleted resources cannot yield a usable observation.
+    require_session(&state, &headers).await?;
+    let current = state.catalog.get_resource(id).map_err(map_catalog_error)?;
+    if current.target.version != request.expected_version {
+        return Err(map_catalog_error(crate::CatalogError::VersionConflict));
+    }
+    let (code, fingerprint, algorithm) = match result {
+        Ok((fingerprint, algorithm)) => ("observed_unverified", Some(fingerprint), Some(algorithm)),
+        Err(code) => (code, None, None),
+    };
+    Ok(Json(HostKeyObservation {
+        resource_id: id,
+        resource_version: request.expected_version,
+        code,
+        fingerprint,
+        algorithm,
+    }))
+}
+async fn cancel_host_key_probe(
+    State(state): State<AppState>,
+    AxumPath((id, probe_id)): AxumPath<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    validate_origin(&headers, &state)?;
+    require_session(&state, &headers).await?;
+    state.host_key_probes.cancel(id, probe_id);
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn test(
     State(state): State<AppState>,

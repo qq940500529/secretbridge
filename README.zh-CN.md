@@ -66,6 +66,8 @@ flowchart LR
 
 Codex、Claude Code、Cursor、GitHub Copilot CLI、OpenCode、WorkBuddy 和 DeepSeek Harness 可通过已安装程序的 `client-config CLIENT` 生成各自的 MCP 配置；其他支持本机 stdio MCP 的客户端可用 `client-config generic` 获取通用配置。放置位置与验证步骤见[AI 客户端接入](./CLIENT_INTEGRATIONS.md)。
 
+WorkBuddy 另有专用 MCP 连接器与 Skill；DeepSeek Harness 使用原生 bundle、官方 MCP client 和作用域内操作指导。包含这些集成的发行包预置扩展，导出时引用固定安装入口，不需要在用户机器上构建插件。
+
 ## 日常流程
 
 1. 在“资源”依次填写名称、地址与连接参数、账号及认证；仅名称必填，其余配置可随后补充。

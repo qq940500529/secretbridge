@@ -66,6 +66,7 @@ TEXT_SUFFIXES = {
     ".tsx",
     ".txt",
     ".mjs",
+    ".js",
     ".yml",
     ".yaml",
     ".ps1",

@@ -25,12 +25,12 @@ class BrowserAcceptanceTests(unittest.TestCase):
                 ("webkit", "smoke_workbench_ui.mjs"),
             ],
         )
-        self.assertEqual(len(plan), 7)
+        self.assertEqual(len(plan), 10)
 
     def test_restricted_plan_does_not_claim_chromium_coverage(self):
         self.assertEqual(
             MODULE.acceptance_plan(["firefox"]),
-            [("firefox", "smoke_workbench_ui.mjs")],
+            [("firefox", "smoke_workbench_ui.mjs"), ("firefox", "smoke_ssh_onboarding_ui.mjs")],
         )
 
     def test_available_port_is_loopback_bindable(self):

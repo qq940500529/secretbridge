@@ -214,6 +214,8 @@ fn manifest(root: &Path, check_files: bool) -> Result<Manifest> {
             || !(file.path.starts_with("frontend/")
                 || file.path.starts_with("skills/secretbridge-operations/")
                 || file.path.starts_with("plugins/secretbridge/")
+                || file.path.starts_with("plugins/deepseek-harness/")
+                || file.path.starts_with("connectors/workbuddy/")
                 || [
                     binary_name(),
                     "brand/secretbridge-logo.png",

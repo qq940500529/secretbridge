@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 数链创元（天津）信息技术有限责任公司
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Pencil, PlugZap, ShieldCheck } from "lucide-react";
+import { Pencil, PlugZap, Save, ShieldCheck } from "lucide-react";
 import {
   listResources,
   saveResource,
@@ -30,6 +30,7 @@ import {
   type Language,
 } from "./shared";
 import { CredentialSecretInput } from "./credentials/CredentialSecretInput";
+import { SshHostFingerprintField } from "./SshHostFingerprintField";
 import { ConnectionRelations } from "./targets/ConnectionRelations";
 
 const blank = (): ResourceRequest => ({
@@ -168,6 +169,10 @@ export function ResourcesView({
     setError(null);
     let savedId = editing?.id;
     try {
+      const firstSshSave =
+        !editing &&
+        form.connection.protocol === "ssh" &&
+        !form.connection.host_key_sha256;
       let saved = await saveResource(
         sessionToken,
         {
@@ -189,7 +194,10 @@ export function ResourcesView({
         saved = await setResourceSecret(sessionToken, saved, candidate);
       }
       await reload();
-      close();
+      if (firstSshSave) {
+        setEditing(saved);
+        change({ expected_version: saved.version });
+      } else close();
     } catch {
       setSecret("");
       const refreshed = await reload().catch(() => undefined);
@@ -291,8 +299,21 @@ export function ResourcesView({
         error={error}
         onSubmit={submit}
         busy={busy}
-        submitLabel={editing ? common.save : common.add}
+        submitLabel={
+          !editing &&
+          form.connection.protocol === "ssh" &&
+          !form.connection.host_key_sha256
+            ? zh
+              ? "保存并核对指纹"
+              : "Save and verify fingerprint"
+            : editing
+              ? common.save
+              : common.add
+        }
         busyLabel={common.saving}
+        submitIcon={
+          editing ? <Save className="size-4" aria-hidden /> : undefined
+        }
         cancelLabel={common.cancel}
       >
         <ResourceFormSection
@@ -524,28 +545,20 @@ export function ResourcesView({
             </>
           )}{" "}
           {connection.protocol === "ssh" && (
-            <Field
-              label={
-                zh
-                  ? "已核验的 SSH 主机指纹（SHA256）"
-                  : "Verified SSH host fingerprint (SHA256)"
+            <SshHostFingerprintField
+              token={sessionToken}
+              resource={editing}
+              host={form.address ?? ""}
+              port={connection.port}
+              value={connection.host_key_sha256}
+              zh={zh}
+              disabled={busy}
+              onChange={(value) =>
+                change({
+                  connection: { ...connection, host_key_sha256: value },
+                })
               }
-              htmlFor="resource-host-key"
-            >
-              <input
-                id="resource-host-key"
-                className={inputClass}
-                value={connection.host_key_sha256}
-                onChange={(e) =>
-                  change({
-                    connection: {
-                      ...connection,
-                      host_key_sha256: e.target.value,
-                    },
-                  })
-                }
-              />
-            </Field>
+            />
           )}
           {connection.protocol === "telnet" && (
             <label className="flex gap-3 border-l-4 border-amber-400 bg-amber-50 p-3 text-sm text-amber-950">

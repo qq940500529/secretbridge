@@ -55,6 +55,8 @@ The repository is licensed under `AGPL-3.0-or-later`. Proprietary commercial use
 
 ## Adding a dependency or asset
 
+The WorkBuddy connector contains project-authored metadata, operating guidance and the existing project logo. The DeepSeek Harness bundle contains project-authored JavaScript and configuration; it uses the host's official MCP-client and system-prompt services without vendoring their code or installing another runtime. The current upstream Harness repository declares MIT. Its services remain governed by their own distribution terms; this bundle's compatibility peer is not an embedded third-party dependency. Verify the actual host release when deploying, rather than treating older npm packages as the current Harness API.
+
 Record the following before merge:
 
 | Field | Required information |
