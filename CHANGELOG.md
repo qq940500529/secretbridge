@@ -6,10 +6,13 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.3.0-beta.5 — 2026-09-29
+
 - Add an SSH host-key onboarding flow that observes a saved server's public fingerprint without credential reads, authentication or remote commands. Explicit independent verification fills a draft; normal save applies it. Cancel checks, discard stale endpoint/version results and warn on changed keys.
 - Ship a dedicated WorkBuddy MCP connector and Skill, plus a native DeepSeek Harness bundle using the official MCP client and scoped operation guidance. Export prebuilt client assets using the stable local launcher without compilation or overwriting existing client files.
 - Keep decision notes scoped to the current approval and version so background refreshes do not clear newly entered rejection feedback or carry it into another request. Keep SSH verification actions readable in both enabled and disabled states.
 - Update the MCP SDK, random-number library, Web icons and development tooling together, retaining exact dependency locks and refreshing the applicable third-party notices.
+- Publish separately downloadable Codex, WorkBuddy connector/Skill, DeepSeek Harness bundle and generic operations Skill archives alongside each software release, with matching versions, corresponding-source references and SHA-256 checksums. Native packages continue to include these integrations; portable templates require a local broker and an explicit launcher configuration when it is not on PATH.
 
 ## 0.3.0-beta.4 — 2026-09-28
 

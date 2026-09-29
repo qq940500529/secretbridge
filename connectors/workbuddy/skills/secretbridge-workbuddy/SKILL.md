@@ -3,7 +3,7 @@ name: secretbridge-workbuddy
 description: Use the local SecretBridge MCP connector for user-requested SSH, database, HTTP and terminal operations with saved credentials, approval and filtered output. Not for installation or ordinary source editing.
 description_zh: 通过 SecretBridge 本机连接器完成用户请求的 SSH、数据库、HTTP 和终端任务，使用已保存资源并等待人工审批，秘密不进入对话。
 description_en: Use saved SecretBridge resources for approved SSH, database, HTTP and terminal operations without exposing credentials to the conversation.
-version: 0.3.0-beta.4
+version: 0.3.0-beta.5
 author: 数链创元（天津）信息技术有限责任公司
 ---
 

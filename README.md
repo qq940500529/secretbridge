@@ -15,7 +15,7 @@
 </div>
 
 > [!IMPORTANT]
-> The `0.3.0-beta.4` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with disposable test credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
+> The `0.3.0-beta.5` source line is not compatible with earlier installation layouts, databases or binaries; do not install it over an existing deployment. Start evaluations with disposable test credentials in a separate, empty data directory, keep independent backups, and read the [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md). There is no secret-reading or export API; AI reads terminal results only through the broker's redacted MCP cursor.
 
 ## Start here: deploy with a local AI assistant
 
@@ -78,6 +78,8 @@ AI clients with Skill support can install the versioned [SecretBridge operations
 For Codex, Claude Code, Cursor, GitHub Copilot CLI, OpenCode, WorkBuddy and DeepSeek Harness, the installed binary can print client-specific MCP setup with `client-config CLIENT`. Other local stdio MCP clients can start with `client-config generic` and adapt the outer configuration format; see [AI client integrations](./CLIENT_INTEGRATIONS.md).
 
 WorkBuddy also has a dedicated MCP connector and Skill. DeepSeek Harness uses a native bundle with the official MCP client and scoped operation guidance. Both are preassembled in packages containing this integration and exported using the stable installed launcher; no local plugin build is required.
+
+Each new [Release](https://github.com/qq940500529/secretbridge/releases) also provides separate Codex, WorkBuddy, DeepSeek Harness and generic Skill downloads, with matching versions and SHA-256 files. See [client integration downloads](./docs/release/客户端集成下载.md) for package selection, launcher configuration and installation limits.
 
 ## Validation targets
 

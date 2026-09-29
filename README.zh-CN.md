@@ -15,7 +15,7 @@
 </div>
 
 > [!IMPORTANT]
-> `0.3.0-beta.4` 源码版本不兼容旧版安装目录、数据库或二进制；请勿用它直接覆盖已有安装。评估时请使用独立的空白数据目录和测试凭据，保留独立备份，并阅读[许可协议与免责协议](./docs/最终用户许可与免责声明.md)。本产品不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
+> `0.3.0-beta.5` 源码版本不兼容旧版安装目录、数据库或二进制；请勿用它直接覆盖已有安装。评估时请使用独立的空白数据目录和测试凭据，保留独立备份，并阅读[许可协议与免责协议](./docs/最终用户许可与免责声明.md)。本产品不提供凭据读取／导出接口；AI 只能通过代理的 MCP 脱敏游标读取终端结果。
 
 ## 首选：让本机 AI 助手协助部署
 
@@ -65,6 +65,8 @@ flowchart LR
 支持 Skill 的 AI 客户端可在接通 MCP 后安装版本化的 [SecretBridge AI 操作 Skill](./skills/secretbridge-operations/SKILL.md)，用于工具选择、审批交接、游标读取和错误恢复。安装与职责说明见 [AI 操作 Skill 与 MCP 职责](./docs/user-guide/AI客户端接入.md)。仅支持 MCP 的客户端仍可使用工具 schema 和服务端的最小指引。
 
 Codex、Claude Code、Cursor、GitHub Copilot CLI、OpenCode、WorkBuddy 和 DeepSeek Harness 可通过已安装程序的 `client-config CLIENT` 生成各自的 MCP 配置；其他支持本机 stdio MCP 的客户端可用 `client-config generic` 获取通用配置。放置位置与验证步骤见[AI 客户端接入](./CLIENT_INTEGRATIONS.md)。
+
+每个新 [Release](https://github.com/qq940500529/secretbridge/releases) 还提供独立的 Codex 插件、WorkBuddy 连接器与 Skill、DeepSeek Harness bundle、通用操作 Skill 下载及 SHA-256。选择附件、配置本机启动入口和安装边界见[客户端集成下载](./docs/release/客户端集成下载.md)。
 
 WorkBuddy 另有专用 MCP 连接器与 Skill；DeepSeek Harness 使用原生 bundle、官方 MCP client 和作用域内操作指导。包含这些集成的发行包预置扩展，导出时引用固定安装入口，不需要在用户机器上构建插件。
 

@@ -40,6 +40,12 @@ dsh --profile <profile> --dump-config
 
 安装后应能发现 `mcp__secretbridge__secretbridge_terminal_capabilities`。使用 `dsh plugin --profile <profile> remove dsh-secretbridge` 卸载插件，不删除代理或凭据。不要在同一 profile 再登记第二个 `serverName: secretbridge` MCP client，以免工具命名冲突。详见[插件说明](./plugins/deepseek-harness/README.md)及[官方 bundle 文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)。
 
+## 独立下载附件
+
+每个新 Release 同时提供 Codex 插件、WorkBuddy 连接器、WorkBuddy Skill、DeepSeek Harness bundle 和通用操作 Skill 的独立附件及 SHA-256，不需要为了获取集成文件重新下载完整软件包。附件与代理版本一致，保留源码引用和许可；完整软件包仍包含这些文件。
+
+下载包使用可移植的 MCP 启动模板，不包含个人安装路径。若代理未加入客户端可见的 PATH，或使用自定义数据目录，先按上文导出个性化目录，或替换模板中的启动配置。Skill 本身不能连接代理。详见[客户端集成下载](./docs/release/客户端集成下载.md)。
+
 ## 生成普通 MCP 配置
 
 从 `secretbridge status` 输出中的 `installation.binary` 获取正在使用的绝对程序路径。用这个程序运行 `client-config`：

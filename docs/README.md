@@ -4,7 +4,7 @@
 
 [项目首页](../README.zh-CN.md) / 文档
 
-这里按读者要完成的事情组织文档。`0.3.0-beta.4` 不支持覆盖旧版安装；请使用独立的空白数据目录与测试凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
+这里按读者要完成的事情组织文档。`0.3.0-beta.5` 不支持覆盖旧版安装；请使用独立的空白数据目录与测试凭据评估。[Beta 发行包](https://github.com/qq940500529/secretbridge/releases)以发布页为准。
 
 ## 首先部署：把提示词交给本机 AI 助手
 
@@ -30,6 +30,7 @@ flowchart TD
 | 安全连续终端与实时状态 | [安全连续终端](./user-guide/连续终端.md) |
 | 为 AI 客户端安装操作 Skill | [AI 操作 Skill 与 MCP 职责](./user-guide/AI客户端接入.md) |
 | 接入主流 AI 客户端 | [AI 客户端接入](../CLIENT_INTEGRATIONS.md) |
+| 单独下载客户端插件或 Skill | [客户端集成下载](./release/客户端集成下载.md) |
 | 迁移、备份和恢复 | [配置迁移与备份恢复](./user-guide/备份与恢复.md) |
 | 参与真实环境测试 | [Beta 测试与反馈](./community/测试与反馈.md) · [社区验证待办](./community/社区验证待办.md) |
 | 查看首次运行条款 | [最终用户许可与免责声明](./最终用户许可与免责声明.md) |
