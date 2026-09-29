@@ -232,6 +232,12 @@ try {
     await confirmation.evaluate((node) => document.activeElement === node),
     true,
   );
+  assert.equal(await confirmation.isDisabled(), false);
+  assert.equal(
+    await confirmation.evaluate((node) => getComputedStyle(node).opacity),
+    "1",
+    "The enabled confirmation must not retain disabled opacity",
+  );
   assertNoSeriousAccessibilityViolations(
     await new AxeBuilder({ page })
       .include("dialog")

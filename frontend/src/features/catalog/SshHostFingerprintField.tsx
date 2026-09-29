@@ -252,7 +252,7 @@ export function SshHostFingerprintField({
                 onChange(observation.fingerprint!);
                 setFilled(true);
               }}
-              className="rounded-lg bg-cyan-700 px-3 py-2 text-sm font-semibold text-white hover:bg-cyan-800 disabled:cursor-not-allowed disabled:opacity-50"
+              className="workbench-primary"
             >
               {filled
                 ? zh
