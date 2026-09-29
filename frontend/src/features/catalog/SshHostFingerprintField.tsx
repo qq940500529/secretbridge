@@ -252,7 +252,7 @@ export function SshHostFingerprintField({
                 onChange(observation.fingerprint!);
                 setFilled(true);
               }}
-              className="workbench-primary"
+              className="workbench-primary ssh-host-key-confirm"
             >
               {filled
                 ? zh

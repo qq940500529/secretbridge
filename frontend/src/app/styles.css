@@ -165,6 +165,16 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
+/* Keep the verification decision readable in both states, without opacity changes. */
+.ssh-host-key-confirm {
+  opacity: 1;
+}
+.ssh-host-key-confirm:disabled {
+  background: #e2e8f0;
+  border-color: #e2e8f0;
+  color: #475569;
+  opacity: 1;
+}
 .workbench-dialog {
   position: fixed;
   inset: 0 0 0 auto;

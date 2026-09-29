@@ -133,6 +133,11 @@ try {
   });
   await confirmation.waitFor();
   assert.equal(await confirmation.isDisabled(), true);
+  assert.equal(
+    await confirmation.evaluate((node) => getComputedStyle(node).opacity),
+    "1",
+    "The unverified state must keep its explanatory action readable",
+  );
   assert.equal(await page.locator("#resource-host-key").inputValue(), "");
   assert.equal(mutations, 1);
   assertNoSeriousAccessibilityViolations(
