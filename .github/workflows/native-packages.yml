@@ -37,6 +37,28 @@ jobs:
           esac
       - name: Check Rust and production Web dependencies
         run: python tools/checks/check_dependency_vulnerabilities.py
+  client-integrations:
+    name: Client integration downloads
+    needs: dependency-vulnerability-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test and build client downloads twice
+        run: |
+          python -m unittest tests.release.test_client_downloads -v
+          python tools/release/package_client_integrations.py --output dist/client-integrations-a
+          python tools/release/package_client_integrations.py --output dist/client-integrations-b
+          python tools/release/package_client_integrations.py --verify dist/client-integrations-a --compare dist/client-integrations-b
+      - name: Retain version-matched client downloads
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: secretbridge-client-integrations
+          path: dist/client-integrations-a/*
+          if-no-files-found: error
+          retention-days: 30
   package:
     name: Native package (${{ matrix.os }})
     needs: dependency-vulnerability-gate

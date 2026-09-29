@@ -7,7 +7,7 @@
   "description_en": "Run approved local, SSH, database and HTTP operations without exposing credentials to AI.",
   "source": "secretbridge",
   "type": "mcp",
-  "version": "0.3.0-beta.4",
+  "version": "0.3.0-beta.5",
   "minWorkbuddyVersion": "4.24.0",
   "examples_zh": ["使用已保存的 SSH 资源检查服务状态", "通过已保存的数据库资源查询表结构", "检查已保存的 HTTP API 是否可用"],
   "examples_en": ["Check service status using a saved SSH resource", "Inspect table definitions using a saved database resource", "Check a saved HTTP API"]

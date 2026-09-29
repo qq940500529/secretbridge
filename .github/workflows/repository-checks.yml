@@ -192,6 +192,22 @@ jobs:
           path: dist/ci-metadata.json
           if-no-files-found: warn
           retention-days: 14
+  client-integration-downloads:
+    name: Client integration downloads
+    needs: change-scope
+    if: needs.change-scope.outputs.package == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Validate standalone client downloads
+        run: |
+          python -m unittest tests.release.test_client_downloads -v
+          python tools/release/package_client_integrations.py --output dist/client-integrations-a
+          python tools/release/package_client_integrations.py --output dist/client-integrations-b
+          python tools/release/package_client_integrations.py --verify dist/client-integrations-a --compare dist/client-integrations-b
   package-delivery:
     name: package-delivery (${{ matrix.os }})
     needs: change-scope
