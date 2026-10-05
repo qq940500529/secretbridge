@@ -1,0 +1,21 @@
+{
+  "format": "secretbridge-browser-acceptance",
+  "format_version": 1,
+  "browsers": [
+    "chromium"
+  ],
+  "checks": [
+    {
+      "browser": "chromium",
+      "script": "smoke_workbench_ui.mjs",
+      "duration_ms": 49240.9
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_ssh_onboarding_ui.mjs",
+      "duration_ms": 5141.1
+    }
+  ],
+  "passed": true,
+  "failure": null
+}

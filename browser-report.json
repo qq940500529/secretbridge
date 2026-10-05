@@ -1,0 +1,41 @@
+{
+  "format": "secretbridge-browser-acceptance",
+  "format_version": 1,
+  "browsers": [
+    "chromium"
+  ],
+  "checks": [
+    {
+      "browser": "chromium",
+      "script": "smoke_workbench_ui.mjs",
+      "duration_ms": 48985.3
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_ssh_onboarding_ui.mjs",
+      "duration_ms": 4937.4
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_connector_ui.mjs",
+      "duration_ms": 2226.5
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_maintenance_ui.mjs",
+      "duration_ms": 3078.7
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_background_ui.mjs",
+      "duration_ms": 6201.0
+    },
+    {
+      "browser": "chromium",
+      "script": "smoke_browser_auth_ui.mjs",
+      "duration_ms": 4745.3
+    }
+  ],
+  "passed": true,
+  "failure": null
+}

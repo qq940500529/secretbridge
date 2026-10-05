@@ -1,0 +1,182 @@
+{
+  "format": "secretbridge-stability-acceptance",
+  "format_version": 2,
+  "profile": "soak",
+  "iterations": 3,
+  "planned_same_directory_approvals": 4000,
+  "planned_same_directory_runs": 4000,
+  "data_directory_reuse": "one_owned_directory_across_two_test_processes",
+  "remaining_limits": [
+    "synthetic_catalog_operations_only",
+    "no_multiday_desktop_residency"
+  ],
+  "with_databases": false,
+  "started_at": "2026-10-05T18:02:36.218113+00:00",
+  "duration_seconds": 74.967,
+  "platform": "linux",
+  "architecture": "x86_64",
+  "passed": true,
+  "checks": [
+    {
+      "name": "connector failure and resource cleanup contracts",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "--lib"
+      ],
+      "duration_seconds": 41.348,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "terminal output flood, reconnect and cancellation",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "--test",
+        "synthetic_terminal"
+      ],
+      "duration_seconds": 3.627,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "native persistent terminal lifecycle",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "--test",
+        "real_terminal"
+      ],
+      "duration_seconds": 0.728,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "parallel cancellation soak 1/3",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "stability_acceptance::parallel_cancellation_releases_capacity_and_follow_up_work_succeeds",
+        "--",
+        "--exact"
+      ],
+      "duration_seconds": 0.767,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "parallel cancellation soak 2/3",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "stability_acceptance::parallel_cancellation_releases_capacity_and_follow_up_work_succeeds",
+        "--",
+        "--exact"
+      ],
+      "duration_seconds": 0.722,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "parallel cancellation soak 3/3",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "stability_acceptance::parallel_cancellation_releases_capacity_and_follow_up_work_succeeds",
+        "--",
+        "--exact"
+      ],
+      "duration_seconds": 0.718,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": []
+    },
+    {
+      "name": "same-directory 2000 approval/run history, restart and backup restore",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "secretbridge",
+        "--lib",
+        "adapters::persistence::tests::same_directory_soak_records_resource_trend_and_restores_history",
+        "--",
+        "--ignored",
+        "--exact",
+        "--nocapture"
+      ],
+      "duration_seconds": 27.057,
+      "exit_code": 0,
+      "passed": true,
+      "error_code": null,
+      "metrics": [
+        {
+          "authorizations": 1000,
+          "catalog_bytes": 6000288,
+          "duration_seconds": 3.099093519,
+          "phase": 1,
+          "resident_pages": 3429,
+          "runs": 1000
+        },
+        {
+          "authorizations": 2000,
+          "catalog_bytes": 7683840,
+          "duration_seconds": 5.363963224,
+          "phase": 2,
+          "resident_pages": 3608,
+          "runs": 2000
+        },
+        {
+          "backup_bytes": 3481600,
+          "phase": "backup_restore",
+          "runs": 2000
+        },
+        {
+          "authorizations": 3000,
+          "catalog_bytes": 9383848,
+          "duration_seconds": 7.768429921,
+          "phase": 3,
+          "resident_pages": 3641,
+          "runs": 3000
+        },
+        {
+          "authorizations": 4000,
+          "catalog_bytes": 10997576,
+          "duration_seconds": 9.801595069,
+          "phase": 4,
+          "resident_pages": 3731,
+          "runs": 4000
+        },
+        {
+          "backup_bytes": 6795264,
+          "phase": "backup_restore",
+          "runs": 4000
+        }
+      ]
+    }
+  ]
+}
