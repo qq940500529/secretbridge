@@ -6,7 +6,7 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
-- Fix acceptance filters after the backend module reorganization. Database and soak runners now verify the compiled test inventory before execution; same-directory soak metrics must prove 4,000 approvals/runs across two processes.
+- Fix acceptance filters after the backend module reorganization. Database and soak runners now verify the compiled test inventory before execution; same-directory soak metrics must prove 4,000 approvals/runs across two processes. Write the ownership marker with platform-independent bytes so Windows newline conversion cannot prevent the soak from running.
 
 ## 0.3.0-beta.5 — 2026-09-29
 
