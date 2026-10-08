@@ -71,7 +71,7 @@ jobs:
         with:
           node-version-file: .node-version
       - name: Restore pinned cargo-audit
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4.2.4, pinned
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0, pinned
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('security/dependency-vulnerability-policy.json', 'rust-toolchain.toml') }}
