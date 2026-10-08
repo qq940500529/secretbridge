@@ -52,9 +52,18 @@ class StabilityAcceptanceToolTests(unittest.TestCase):
                 )
                 for batch in outputs
             ]
+
+            def run_fixture(*args, responses=responses, **kwargs):
+                marker = Path(kwargs["env"]["SECRETBRIDGE_SOAK_OWNED_DIR"])
+                self.assertEqual(
+                    (marker / ".secretbridge-soak-owned").read_bytes(),
+                    b"secretbridge-owned-soak\n",
+                )
+                return responses.pop(0)
+
             with (
                 self.subTest(metrics=metrics),
-                patch.object(stability.subprocess, "run", side_effect=responses),
+                patch.object(stability.subprocess, "run", side_effect=run_fixture),
             ):
                 results, passed = stability.run_plan([check])
             self.assertEqual(passed, expected_passed)

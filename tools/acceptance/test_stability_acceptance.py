@@ -134,8 +134,8 @@ def run_plan(plan: list[Check]) -> tuple[list[CheckResult], bool]:
             with directory as owned_directory:
                 check_environment = environment.copy()
                 if owned_directory is not None:
-                    Path(owned_directory, ".secretbridge-soak-owned").write_text(
-                        "secretbridge-owned-soak\n", encoding="utf-8"
+                    Path(owned_directory, ".secretbridge-soak-owned").write_bytes(
+                        b"secretbridge-owned-soak\n"
                     )
                     check_environment["SECRETBRIDGE_SOAK_OWNED_DIR"] = owned_directory
                 for _ in range(2 if check.capture_metrics else 1):

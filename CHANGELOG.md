@@ -7,7 +7,7 @@ This file records public release behavior rather than preserving a development d
 ## Unreleased
 
 - Review and combine nine dependency PRs with exact locks: UUID, SFTP, MCP SDK, native notifications, Node.js types, icons, Vite, Vitest and the CI cache action. Refresh dependency notices and provenance; the supported Node.js runtime remains 24.x.
-- Fix acceptance filters after the backend module reorganization. Database and soak runners now verify the compiled test inventory before execution; same-directory soak metrics must prove 4,000 approvals/runs across two processes.
+- Fix acceptance filters after the backend module reorganization. Database and soak runners now verify the compiled test inventory before execution; same-directory soak metrics must prove 4,000 approvals/runs across two processes. Write the ownership marker with platform-independent bytes so Windows newline conversion cannot prevent the soak from running.
 
 ## 0.3.0-beta.5 — 2026-09-29
 
