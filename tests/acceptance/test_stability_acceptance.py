@@ -30,10 +30,11 @@ class StabilityAcceptanceToolTests(unittest.TestCase):
         plan = stability.build_plan("soak", 4, True)
         repeated = [item for item in plan if item.command[-1] == "parallel"]
         self.assertEqual(len(repeated), 4)
+        self.assertEqual(repeated[0].command[0], sys.executable)
         self.assertEqual(plan[-1].command, ("bash", "tools/acceptance/test_database_connectors.sh"))
 
     def test_history_metrics_require_two_processes_and_4000_records(self):
-        check = stability.Check("history", ("fixture",), capture_metrics=True)
+        check = stability.Check("history", (sys.executable, "fixture"), capture_metrics=True)
         complete = [
             {"phase": 1, "runs": 1000, "authorizations": 1000},
             {"phase": 2, "runs": 2000, "authorizations": 2000},
@@ -67,6 +68,7 @@ class StabilityAcceptanceToolTests(unittest.TestCase):
             ):
                 results, passed = stability.run_plan([check])
             self.assertEqual(passed, expected_passed)
+            self.assertEqual(results[0].command, ["python", "fixture"])
             self.assertEqual(
                 results[0].error_code, None if expected_passed else "metrics_incomplete"
             )

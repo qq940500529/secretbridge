@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPORT = ROOT / "dist" / "stability-acceptance.json"
-RUST_ACCEPTANCE = ("python", "tools/acceptance/run_rust_acceptance.py")
+RUST_ACCEPTANCE = (sys.executable, "tools/acceptance/run_rust_acceptance.py")
 
 
 @dataclass(frozen=True)
@@ -181,7 +181,7 @@ def run_plan(plan: list[Check]) -> tuple[list[CheckResult], bool]:
             error_code = "check_unavailable"
         result = CheckResult(
             name=check.name,
-            command=list(check.command),
+            command=["python" if item == sys.executable else item for item in check.command],
             duration_seconds=round(time.monotonic() - started, 3),
             exit_code=exit_code,
             passed=exit_code == 0 and error_code is None,
