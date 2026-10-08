@@ -53,7 +53,7 @@ class StabilityAcceptanceToolTests(unittest.TestCase):
                 for batch in outputs
             ]
 
-            def run_fixture(*args, **kwargs):
+            def run_fixture(*args, responses=responses, **kwargs):
                 marker = Path(kwargs["env"]["SECRETBRIDGE_SOAK_OWNED_DIR"])
                 self.assertEqual(
                     (marker / ".secretbridge-soak-owned").read_bytes(),
