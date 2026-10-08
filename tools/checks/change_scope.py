@@ -73,6 +73,8 @@ def checks_for_path(path: str) -> frozenset[str]:
     if path == "tools/requirements-dev.txt":
         return frozenset({"python"})
     if path.startswith("tools/acceptance/"):
+        if path.endswith("run_rust_acceptance.py"):
+            return frozenset({"python", "rust", "database", "package"})
         if path.endswith(".mjs") or "browser" in path:
             return frozenset({"python", "browser"})
         if "database" in path:

@@ -35,6 +35,7 @@ class ChangeScopeTests(unittest.TestCase):
             "backend/src/adapters/http/mod.rs": {"rust", "python", "browser", "package"},
             "tools/acceptance/smoke_workbench_ui.mjs": {"python", "browser"},
             "tools/acceptance/test_database_connectors.sh": {"database"},
+            "tools/acceptance/run_rust_acceptance.py": {"python", "rust", "database", "package"},
             "tools/release/package_release.py": {"dependency", "python", "package"},
             "skills/secretbridge-operations/SKILL.md": {"python", "package"},
         }
