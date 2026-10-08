@@ -18,6 +18,7 @@ This inventory describes material included in the repository. Technologies discu
 | React / React DOM 19.3.0 | Web runtime, MIT | Copyright and MIT terms must be retained |
 | Radix Tooltip 1.2.16 / Tailwind CSS 4.3.3 / Vite 8.3.2 | Web UI and build tooling, MIT | Copyright and MIT terms must be retained where applicable |
 | Lucide React 1.50.0 | Web icons, ISC | Copyright and ISC terms must be retained |
+| source-map-js 1.2.2 | Transitive CSS/build source-map tooling, BSD-3-Clause; upstream https://github.com/7rulnik/source-map-js | Preserve BSD copyright, conditions and disclaimer if redistributing the tooling; not application credential-processing code |
 | xterm.js 6.0.0 / Fit addon 0.11.0 | Browser terminal runtime, MIT | Copyright and MIT terms must be retained with distributed Web assets |
 | portable-pty 0.9.0 | Cross-platform PTY runtime, MIT | Preserve the crate license and upstream copyright notice with distributed service packages |
 | notify-rust 4.18.1 | Native desktop notifications, MIT OR Apache-2.0; upstream https://github.com/hoodie/notify-rust | Preserve the selected license and applicable platform-backend notices in service distributions; operating-system notification services are not bundled |
