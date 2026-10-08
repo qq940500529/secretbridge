@@ -181,7 +181,7 @@ def run_plan(plan: list[Check]) -> tuple[list[CheckResult], bool]:
             error_code = "check_unavailable"
         result = CheckResult(
             name=check.name,
-            command=list(check.command),
+            command=["python" if item == sys.executable else item for item in check.command],
             duration_seconds=round(time.monotonic() - started, 3),
             exit_code=exit_code,
             passed=exit_code == 0 and error_code is None,
