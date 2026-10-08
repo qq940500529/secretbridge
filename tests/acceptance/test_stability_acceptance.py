@@ -30,6 +30,7 @@ class StabilityAcceptanceToolTests(unittest.TestCase):
         plan = stability.build_plan("soak", 4, True)
         repeated = [item for item in plan if item.command[-1] == "parallel"]
         self.assertEqual(len(repeated), 4)
+        self.assertEqual(repeated[0].command[0], sys.executable)
         self.assertEqual(plan[-1].command, ("bash", "tools/acceptance/test_database_connectors.sh"))
 
     def test_history_metrics_require_two_processes_and_4000_records(self):

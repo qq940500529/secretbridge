@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPORT = ROOT / "dist" / "stability-acceptance.json"
-RUST_ACCEPTANCE = ("python", "tools/acceptance/run_rust_acceptance.py")
+RUST_ACCEPTANCE = (sys.executable, "tools/acceptance/run_rust_acceptance.py")
 
 
 @dataclass(frozen=True)
