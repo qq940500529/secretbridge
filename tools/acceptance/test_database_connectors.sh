@@ -4,6 +4,9 @@
 # Disposable real servers and disposable test credentials only. Never uses business data.
 set -euo pipefail
 umask 077
+# Validate the actual test inventory before creating any disposable resources.
+python3 tools/acceptance/run_rust_acceptance.py database --list-only
+python3 tools/acceptance/run_rust_acceptance.py database-mcp --list-only
 task_tmp=$(mktemp -d /tmp/secretbridge-db.XXXXXXXX)
 task_suffix=${task_tmp##*.}
 task_pg="secretbridge-pg-$task_suffix"
@@ -69,5 +72,5 @@ export SECRETBRIDGE_TEST_PG_CONTAINER="$task_pg"
 export SECRETBRIDGE_TEST_MYSQL_CONTAINER="$task_mysql"
 export SECRETBRIDGE_TEST_DB_PASSWORD="$task_db_password"
 unset task_db_password
-RUST_TEST_THREADS=1 cargo test -p secretbridge database_task::tests::real_ -- --ignored
-cargo test -p secretbridge native_mcp_executes_real_databases -- --ignored
+RUST_TEST_THREADS=1 python3 tools/acceptance/run_rust_acceptance.py database
+python3 tools/acceptance/run_rust_acceptance.py database-mcp

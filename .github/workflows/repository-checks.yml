@@ -172,6 +172,9 @@ jobs:
         env:
           RUST_TEST_THREADS: 2
         run: cargo test --workspace --all-targets
+      - name: Verify acceptance filters against compiled Rust tests
+        if: needs.change-scope.outputs.rust == 'true'
+        run: python tools/acceptance/run_rust_acceptance.py all --list-only
       - name: Test native credential store with a disposable entry
         if: needs.change-scope.outputs.rust == 'true' && (runner.os == 'Windows' || runner.os == 'macOS')
         run: cargo test -p secretbridge native_store_round_trip_uses_a_disposable_entry -- --ignored --nocapture

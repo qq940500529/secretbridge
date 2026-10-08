@@ -6,6 +6,8 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+- Fix acceptance filters after the backend module reorganization. Database and soak runners now verify the compiled test inventory before execution; same-directory soak metrics must prove 4,000 approvals/runs across two processes.
+
 ## 0.3.0-beta.5 — 2026-09-29
 
 - Add an SSH host-key onboarding flow that observes a saved server's public fingerprint without credential reads, authentication or remote commands. Explicit independent verification fills a draft; normal save applies it. Cancel checks, discard stale endpoint/version results and warn on changed keys.

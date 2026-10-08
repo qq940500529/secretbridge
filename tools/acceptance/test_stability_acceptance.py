@@ -19,9 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPORT = ROOT / "dist" / "stability-acceptance.json"
-PARALLEL_FILTER = (
-    "stability_acceptance::parallel_cancellation_releases_capacity_and_follow_up_work_succeeds"
-)
+RUST_ACCEPTANCE = ("python", "tools/acceptance/run_rust_acceptance.py")
 
 
 @dataclass(frozen=True)
@@ -96,33 +94,14 @@ def build_plan(profile: str, iterations: int, with_databases: bool) -> list[Chec
         plan.extend(
             Check(
                 f"parallel cancellation soak {attempt + 1}/{iterations}",
-                (
-                    "cargo",
-                    "test",
-                    "-p",
-                    "secretbridge",
-                    PARALLEL_FILTER,
-                    "--",
-                    "--exact",
-                ),
+                (*RUST_ACCEPTANCE, "parallel"),
             )
             for attempt in range(iterations)
         )
         plan.append(
             Check(
                 "same-directory 2000 approval/run history, restart and backup restore",
-                (
-                    "cargo",
-                    "test",
-                    "-p",
-                    "secretbridge",
-                    "--lib",
-                    "catalog::tests::same_directory_soak_records_resource_trend_and_restores_history",
-                    "--",
-                    "--ignored",
-                    "--exact",
-                    "--nocapture",
-                ),
+                (*RUST_ACCEPTANCE, "history"),
                 capture_metrics=True,
             )
         )
@@ -175,8 +154,22 @@ def run_plan(plan: list[Check]) -> tuple[list[CheckResult], bool]:
                     if exit_code != 0:
                         error_code = "check_failed"
                         break
-                if check.capture_metrics and error_code is None and len(metrics) != 6:
-                    error_code = "metrics_incomplete"
+                if check.capture_metrics and error_code is None:
+                    expected = [
+                        (1, 1_000),
+                        (2, 2_000),
+                        ("backup_restore", 2_000),
+                        (3, 3_000),
+                        (4, 4_000),
+                        ("backup_restore", 4_000),
+                    ]
+                    actual = [(item.get("phase"), item.get("runs")) for item in metrics]
+                    if actual != expected or any(
+                        item.get("authorizations") != item.get("runs")
+                        for item in metrics
+                        if item.get("phase") != "backup_restore"
+                    ):
+                        error_code = "metrics_incomplete"
         except subprocess.TimeoutExpired:
             exit_code = -1
             error_code = "check_timed_out"
