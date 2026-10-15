@@ -256,7 +256,10 @@ try {
         body = { run: body, replayed: false };
         status = 201;
       } else body = { items: runs };
-    } else if (path === "/api/v1/runs/run/output") {
+    } else if (
+      path === "/api/v1/runs/run/output" ||
+      path === "/api/v1/runs/one-time-run/output"
+    ) {
       outputReads++;
       body = {
         items:
