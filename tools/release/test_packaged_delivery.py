@@ -188,9 +188,12 @@ def accept(archive: Path) -> None:
             assert "installation.json" in launcher.read_text(encoding="utf-8")
             assert original not in json.dumps(client)
             assert (
-                json.loads((plugin_root / "marketplace.json").read_text(encoding="utf-8"))["name"]
+                json.loads(
+                    (plugin_root / ".agents/plugins/marketplace.json").read_text(encoding="utf-8")
+                )["name"]
                 == "secretbridge-local"
             )
+            assert not (plugin_root / "marketplace.json").exists()
             mcp_messages = [
                 {
                     "jsonrpc": "2.0",

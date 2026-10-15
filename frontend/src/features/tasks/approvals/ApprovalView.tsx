@@ -22,12 +22,16 @@ import { MasterDetail } from "../../../shared/ui/MasterDetail";
 import { CommandReview } from "../shared/CommandReview";
 import { ParameterFields } from "./ParameterFields";
 import { authorizationLabel } from "../shared/parameters";
+import {
+  includeApprovalDrafts,
+  operationDisplayName,
+  operationLabels,
+} from "../shared/operation-presentation";
 import type { AuthorizationMode, ParameterValue } from "../../../api/index";
 
 import {
   type Approval,
   type ActionTemplate,
-  type ApprovalOperation,
   type ApprovalResultScope,
   type ApprovalState,
   type PolicyEvaluation,
@@ -36,7 +40,6 @@ import {
   createActionTemplate,
   decideApproval,
   evaluateActionTemplate,
-  getActionTemplate,
   listApprovals,
   listActionTemplates,
   listTargets,
@@ -45,21 +48,6 @@ import {
 } from "../../../api/index";
 
 type Language = "zh-CN" | "en";
-
-const operationLabels: Record<Language, Record<ApprovalOperation, string>> = {
-  "zh-CN": {
-    inspect_metadata: "查看非秘密元数据",
-    synthetic_health_check: "合成健康检查",
-    postgres_connection_check: "PostgreSQL 只读连接检查",
-    command_execution: "凭据任务",
-  },
-  en: {
-    inspect_metadata: "Inspect non-secret metadata",
-    synthetic_health_check: "Synthetic health check",
-    postgres_connection_check: "PostgreSQL read-only connection check",
-    command_execution: "Credential task",
-  },
-};
 
 const scopeLabels: Record<Language, Record<ApprovalResultScope, string>> = {
   "zh-CN": {
@@ -266,6 +254,10 @@ export function ApprovalView({
     () => new Map(targets.map((target) => [target.id, target.name])),
     [targets],
   );
+  const templateMap = useMemo(
+    () => new Map(templates.map((template) => [template.id, template])),
+    [templates],
+  );
   const reviewTarget = (item: Approval) =>
     targets.find(
       (target) =>
@@ -293,35 +285,6 @@ export function ApprovalView({
     [templates],
   );
 
-  async function includeApprovalDrafts(
-    approvals: Approval[],
-    saved: ActionTemplate[],
-  ) {
-    const known = new Set(saved.map((template) => template.id));
-    const missing = [
-      ...new Set(
-        approvals
-          .filter(
-            (item) => item.state === "pending" || item.state === "approved",
-          )
-          .map((item) => item.action_template_id)
-          .filter((id): id is string => !!id && !known.has(id)),
-      ),
-    ];
-    const fetched = await Promise.allSettled(
-      missing.map((id) => getActionTemplate(sessionToken, id)),
-    );
-    return [
-      ...saved,
-      ...fetched
-        .filter(
-          (result): result is PromiseFulfilledResult<ActionTemplate> =>
-            result.status === "fulfilled",
-        )
-        .map((result) => result.value),
-    ];
-  }
-
   async function reload() {
     const [approvals, targetsResponse, templatesResponse] = await Promise.all([
       listApprovals(sessionToken),
@@ -331,7 +294,11 @@ export function ApprovalView({
     setItems(approvals.items);
     setTargets(targetsResponse.items);
     setTemplates(
-      await includeApprovalDrafts(approvals.items, templatesResponse.items),
+      await includeApprovalDrafts(
+        sessionToken,
+        approvals.items,
+        templatesResponse.items,
+      ),
     );
     setTemplateId((current) =>
       templatesResponse.items.some(
@@ -369,7 +336,11 @@ export function ApprovalView({
         setItems(approvals.items);
         setTargets(targetsResponse.items);
         setTemplates(
-          await includeApprovalDrafts(approvals.items, templatesResponse.items),
+          await includeApprovalDrafts(
+            sessionToken,
+            approvals.items,
+            templatesResponse.items,
+          ),
         );
         setTemplateId(
           (initialTemplateId
@@ -745,12 +716,7 @@ export function ApprovalView({
                       </span>
                     </div>
                     <h3 className="mb-0 mt-3 text-base font-semibold text-slate-950">
-                      {item.action_template_id
-                        ? (reviewTemplate(item)?.name ??
-                          (language === "zh-CN"
-                            ? "已移除的操作模板"
-                            : "Removed operation template"))
-                        : operationLabels[language][item.operation]}
+                      {operationDisplayName(item, templateMap, language)}
                     </h3>
                     <p className="mb-0 mt-2 text-sm text-slate-500">
                       {reviewTarget(item)?.name ?? item.target_id}

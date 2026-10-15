@@ -9,6 +9,10 @@ import { useServiceChanges } from "../../../app/service-events";
 import { RunOutputView } from "./RunOutputView";
 import { authorizationLabel, retryGuidance } from "../shared/parameters";
 import { RunRequestKeys } from "../shared/run-request";
+import {
+  includeApprovalDrafts,
+  operationDisplayName,
+} from "../shared/operation-presentation";
 
 import {
   type ActionTemplate,
@@ -173,10 +177,20 @@ export function OperationsView({
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const templateNames = useMemo(
-    () => new Map(templates.map((item) => [item.id, item.name])),
+  const templateMap = useMemo(
+    () => new Map(templates.map((item) => [item.id, item])),
     [templates],
   );
+  const approvalMap = useMemo(
+    () => new Map(approvals.map((item) => [item.id, item])),
+    [approvals],
+  );
+  const runName = (run: SyntheticRun) =>
+    operationDisplayName(
+      approvalMap.get(run.approval_id) ?? run,
+      templateMap,
+      language,
+    );
   const targetNames = useMemo(
     () => new Map(targets.map((item) => [item.id, item.name])),
     [targets],
@@ -212,7 +226,13 @@ export function OperationsView({
       ]);
     setRuns(runResponse.items);
     setApprovals(approvalResponse.items);
-    setTemplates(templateResponse.items);
+    setTemplates(
+      await includeApprovalDrafts(
+        sessionToken,
+        approvalResponse.items,
+        templateResponse.items,
+      ),
+    );
     setTargets(targetResponse.items);
     const used = new Set(runResponse.items.map((run) => run.approval_id));
     setApprovalId((current) =>
@@ -381,13 +401,8 @@ export function OperationsView({
                 <option value="">{text.choose}</option>
                 {availableApprovals.map((approval) => (
                   <option key={approval.id} value={approval.id}>
-                    {(approval.action_template_id
-                      ? templateNames.get(approval.action_template_id)
-                      : undefined) ??
-                      (language === "zh-CN"
-                        ? "已移除的操作模板"
-                        : "Removed operation template")}{" "}
-                    · {targetNames.get(approval.target_id)} ·{" "}
+                    {operationDisplayName(approval, templateMap, language)} ·{" "}
+                    {targetNames.get(approval.target_id)} ·{" "}
                     {text.approvalVersion} {approval.version}
                   </option>
                 ))}
@@ -457,7 +472,7 @@ export function OperationsView({
             }}
             items={runs.map((run) => ({
               id: run.id,
-              name: templateNames.get(run.action_template_id) ?? run.operation,
+              name: runName(run),
               detail: `${targetNames.get(run.target_id) ?? run.target_id} · ${text.states[run.state]}`,
             }))}
           >
@@ -475,10 +490,7 @@ export function OperationsView({
                         {text.states[run.state]}
                       </span>
                       <span className="text-xs font-medium text-slate-500">
-                        {templateNames.get(run.action_template_id) ??
-                          (language === "zh-CN"
-                            ? "已移除的操作模板"
-                            : "Removed operation template")}
+                        {runName(run)}
                       </span>
                     </div>
                     <h3 className="mb-0 mt-2 text-base font-semibold text-slate-950">

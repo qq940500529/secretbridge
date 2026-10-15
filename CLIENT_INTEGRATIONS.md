@@ -14,6 +14,8 @@ secretbridge client-plugin codex <absolute-empty-destination>
 
 命令会复制经过安装包校验的插件，配置指向安装目录内固定的 MCP 启动入口；启动入口每次读取当前活动版本，因此升级和回退后不必重建插件，也不复制任何凭据。目标目录不得已存在。随后运行 `codex plugin marketplace add <absolute-destination>` 和 `codex plugin add secretbridge@secretbridge-local`，并在新会话中验证工具。若本机已有同名市场，先用 `codex plugin list` 核对其来源，不要覆盖已有市场或插件文件；也可以继续使用下述 MCP 配置方式。卸载代理后此入口会失效，属于预期行为。
 
+导出目录是市场根目录：清单位于 `.agents/plugins/marketplace.json`，插件位于 `plugins/secretbridge/`；清单中的 `source.path` 相对市场根目录解析，而不是相对清单文件所在目录。将整个导出目录传给 `marketplace add`，不要传 `.agents/plugins` 子目录。此布局遵循 [Codex 官方插件说明](https://developers.openai.com/plugins/build/plugins)。旧导出仅在根部提供 `marketplace.json`，可能被当前 CLI 拒绝；请使用含此修复的程序导出到新目录，再核对并替换旧市场注册，不要覆盖原目录。插件列表可见仅说明安装成功，还需按下文完成只读 MCP 调用验证。
+
 ## WorkBuddy：专用连接器与 Skill
 
 发行包包含官方规范的连接器结构和专用 Skill。先完成 SecretBridge 初始化，再导出到一个不存在的绝对目录：

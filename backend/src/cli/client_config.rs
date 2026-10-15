@@ -127,8 +127,10 @@ pub(super) fn export_codex_plugin(
                 "category":"Productivity"
             }]
         });
+        let marketplace_directory = staging.join(".agents/plugins");
+        fs::create_dir_all(&marketplace_directory).map_err(|_| "plugin_export_failed")?;
         fs::write(
-            staging.join("marketplace.json"),
+            marketplace_directory.join("marketplace.json"),
             serde_json::to_vec_pretty(&marketplace).map_err(|_| "plugin_export_failed")?,
         )
         .map_err(|_| "plugin_export_failed")?;
@@ -368,10 +370,29 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_slice::<Value>(
-                &fs::read(destination.join("marketplace.json")).unwrap()
+                &fs::read(destination.join(".agents/plugins/marketplace.json")).unwrap()
             )
             .unwrap()["name"],
             "secretbridge-local"
+        );
+        assert!(!destination.join("marketplace.json").exists());
+        let marketplace: Value = serde_json::from_slice(
+            &fs::read(destination.join(".agents/plugins/marketplace.json")).unwrap(),
+        )
+        .unwrap();
+        let entry = &marketplace["plugins"][0];
+        assert_eq!(entry["name"], "secretbridge");
+        assert_eq!(entry["source"]["source"], "local");
+        assert_eq!(entry["policy"]["installation"], "AVAILABLE");
+        assert_eq!(entry["policy"]["authentication"], "ON_INSTALL");
+        assert_eq!(entry["category"], "Productivity");
+        let plugin_path = entry["source"]["path"].as_str().unwrap();
+        assert_eq!(plugin_path, "./plugins/secretbridge");
+        assert!(
+            destination
+                .join(plugin_path)
+                .join(".codex-plugin/plugin.json")
+                .is_file()
         );
         fs::remove_dir_all(root).unwrap();
     }
