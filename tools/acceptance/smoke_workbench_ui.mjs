@@ -971,7 +971,7 @@ try {
   );
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "关闭", exact: true })
+    .getByRole("button", { name: "关闭编辑器", exact: true })
     .click();
   await page
     .getByRole("complementary", { name: "记录列表" })
