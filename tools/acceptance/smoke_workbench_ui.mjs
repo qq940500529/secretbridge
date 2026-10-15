@@ -43,6 +43,7 @@ try {
   let failTaskSave = true;
   let failSecretWrite = true;
   let outputReads = 0;
+  let oneTimeDraft = null;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname,
@@ -171,7 +172,9 @@ try {
         tasks.push(body);
         status = 201;
       } else body = { items: tasks };
-    } else if (path === "/api/v1/action-templates/task") body = tasks[0];
+    } else if (path === "/api/v1/action-templates/one-time-draft")
+      body = oneTimeDraft;
+    else if (path === "/api/v1/action-templates/task") body = tasks[0];
     else if (path === "/api/v1/action-templates/another-task") {
       status = 404;
       body = { code: "not_found" };
@@ -253,7 +256,10 @@ try {
         body = { run: body, replayed: false };
         status = 201;
       } else body = { items: runs };
-    } else if (path === "/api/v1/runs/run/output") {
+    } else if (
+      path === "/api/v1/runs/run/output" ||
+      path === "/api/v1/runs/one-time-run/output"
+    ) {
       outputReads++;
       body = {
         items:
@@ -929,6 +935,58 @@ try {
   await page.getByRole("button", { name: "待审批 1" }).click();
   await staleQueue.getByRole("button", { name: "拒绝当前项" }).click();
   await staleQueue.waitFor({ state: "hidden" });
+  // One-time drafts have IDs but are absent from the saved-template catalog.
+  // A genuinely missing referenced template must still be marked as removed.
+  oneTimeDraft = { ...tasks[0], id: "one-time-draft", one_time: true };
+  const oneTimeApproval = {
+    ...approvals[0],
+    id: "one-time-available",
+    action_template_id: oneTimeDraft.id,
+    action_template_version: oneTimeDraft.version,
+    target_version: targets[0].version,
+    state: "approved",
+    expires_at_unix_ms: Date.now() + 3600000,
+  };
+  approvals.push(oneTimeApproval, {
+    ...oneTimeApproval,
+    id: "one-time-used",
+  });
+  runs.push({
+    ...runs[0],
+    id: "one-time-run",
+    approval_id: "one-time-used",
+    action_template_id: oneTimeDraft.id,
+  });
+  await nav("任务").click();
+  await nav("执行与结果").click();
+  await page.getByRole("button", { name: "新建运行请求", exact: true }).click();
+  const options = page.getByRole("dialog").getByLabel("已批准的授权");
+  await options
+    .locator('option[value="one-time-available"]')
+    .waitFor({ state: "attached" });
+  assert.match(
+    await options.locator('option[value="one-time-available"]').textContent(),
+    /一次性操作 · 凭据任务/,
+  );
+  assert.match(
+    await options.locator('option[value="unrelated-approval"]').textContent(),
+    /已移除的操作模板/,
+  );
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "关闭编辑器", exact: true })
+    .click();
+  await page
+    .getByRole("complementary", { name: "记录列表" })
+    .getByRole("button", { name: /一次性操作 · 凭据任务/ })
+    .click();
+  await page
+    .getByText("一次性操作 · 凭据任务", { exact: true })
+    .last()
+    .waitFor();
+  console.log(
+    `One-time draft and removed-template labels passed (${browserName}).`,
+  );
   await nav("设置").click();
   await page
     .getByRole("navigation", { name: "工作区分区" })
