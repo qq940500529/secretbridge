@@ -6,6 +6,13 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.3.2 — 2026-10-16
+
+- Fix one-time operation labels across approvals, the execution selector and run records. Resolve temporary drafts separately from saved templates, show bilingual operation types for requests without a template, and retain the removed-template label for genuinely missing references. Approval and credential-use rules are unchanged.
+- Export personalized Codex marketplaces with `.agents/plugins/marketplace.json`, resolving plugin sources from the marketplace root. Keep the stable installed launcher, atomic export and refusal to overwrite existing directories; re-export old layouts into a new directory.
+- Integrate ten locked dependency updates for tooltips, Tokio utilities, zeroize, Vite, serde_json, Node.js types, UUID, native notifications, Playwright and Prettier. Update transitive rustls to 0.23.46 for RUSTSEC-2026-0346 through RUSTSEC-2026-0349 without vulnerability exceptions or weaker TLS settings.
+- Align the broker, Web application and five client downloads at 0.3.2. This remains a public prerelease; SQLite schema 25 and configuration export format 2 are unchanged, with no new in-place upgrade guarantee. Preserve existing installations and evaluate with a separate, empty data directory.
+
 ## 0.3.1 — 2026-10-10
 
 - Use 0.3.1 consistently across the broker, Web application and client integrations. The GitHub release remains a public prerelease; the numeric version does not imply software copyright registration, additional platform certification or new compatibility guarantees. SQLite schema 25 and configuration export format 2 are unchanged.
