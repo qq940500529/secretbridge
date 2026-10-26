@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { copy } from "./copy";
 
 const sourceDirectory = dirname(fileURLToPath(import.meta.url));
 const renderedViews = [
@@ -37,6 +38,10 @@ const renderedViews = [
 ];
 
 describe("operator-facing copy", () => {
+  it("includes the visible language label in each accessible button name", () => {
+    expect(copy["zh-CN"].switchLanguage).toContain("EN");
+    expect(copy.en.switchLanguage).toContain("中文");
+  });
   it.each(renderedViews)("keeps development metadata out of %s", (fileName) => {
     const source = readFileSync(join(sourceDirectory, fileName), "utf8");
 

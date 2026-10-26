@@ -3,6 +3,30 @@
 
 use super::*;
 
+#[tokio::test]
+async fn cached_update_metadata_does_not_unlock_operations_before_pin_initialization() {
+    use crate::adapters::{mcp::bridge_dispatch::dispatch_bridge_request, native_ipc};
+    let (mut state, _) = crate::AppState::new([]);
+    state.enable_runtime_control(
+        "http://127.0.0.1:8787".to_owned(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    state.updates.seed_for_test().await;
+    let status = dispatch_bridge_request(
+        state.clone(),
+        native_ipc::OP_UPDATE_STATUS,
+        serde_json::json!({}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status["update_available"], true);
+    assert_eq!(status["automatic_install"], false);
+    let error = dispatch_bridge_request(state, native_ipc::OP_LIST_CATALOG, serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert_eq!(error.message, "initialization_required");
+}
+
 #[test]
 fn compares_semver_not_lexical_order_and_includes_public_prereleases() {
     let body = br#"[{"tag_name":"v0.9.0","draft":false},{"tag_name":"v0.10.0-beta.2","draft":false},{"tag_name":"v99.0.0","draft":true}]"#;
