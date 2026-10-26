@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { Activity } from "lucide-react";
+import { UpdateSettings } from "./UpdateSettings";
 
 import type { ServiceStatus } from "../../api/index";
 import { ISSUE_URL, SECURITY_URL } from "../auth/LegalConsent";
@@ -30,6 +31,7 @@ interface StatusCopy {
 }
 
 interface SettingsViewProps {
+  sessionToken?: string | null;
   text: StatusCopy;
   status: ServiceStatus | null;
   language: Language;
@@ -42,6 +44,7 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({
+  sessionToken,
   text,
   status,
   language,
@@ -160,6 +163,12 @@ export function SettingsView({
           />
         </dl>
       </section>
+
+      <UpdateSettings
+        status={status?.updates}
+        sessionToken={sessionToken}
+        language={language}
+      />
 
       <section className="enterprise-surface mt-6">
         <div className="border-b border-slate-200 px-5 py-4">

@@ -442,6 +442,7 @@ pub fn router_with_web(state: AppState, web_root: impl AsRef<Path>) -> Router {
 fn api_router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/status", get(status))
+        .route("/api/v1/updates/check", post(runtime::updates::check_web))
         .route("/api/v1/runtime/stop", post(runtime::stop_http))
         .route("/api/v1/session/pair", post(pair))
         .route("/api/v1/session/pin", post(pair_with_pin))

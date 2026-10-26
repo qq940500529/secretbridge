@@ -21,6 +21,10 @@ pub(crate) async fn dispatch_bridge_request(
         );
     }
     ensure_bridge_ready(&state, operation)?;
+    if operation == crate::adapters::native_ipc::OP_UPDATE_STATUS {
+        parse_bridge_payload::<BridgeEmpty>(payload)?;
+        return serialize_bridge_payload(state.updates.snapshot().await);
+    }
     let backend = McpBackend::Local(Box::new(state));
     match operation {
         OP_HEALTH => {

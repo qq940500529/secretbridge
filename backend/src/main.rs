@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cancellation = CancellationToken::new();
     state.enable_runtime_control(origin, cancellation.clone());
     let bridge = bind_local_bridge(&data_directory, &state)?;
+    state.start_update_checks(cancellation.clone());
     let app = router_with_web(state.clone(), web_root);
 
     info!(%address, mode = "controlled_operations", "SecretBridge local broker started");

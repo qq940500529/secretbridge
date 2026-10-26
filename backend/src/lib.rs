@@ -114,6 +114,7 @@ pub struct AppState {
     command_capacity: Arc<tokio::sync::Semaphore>,
     changes: broadcast::Sender<()>,
     runtime_control: Option<Arc<runtime::RuntimeControl>>,
+    updates: runtime::updates::UpdateChecker,
 }
 
 #[derive(Debug)]
@@ -226,6 +227,7 @@ impl AppState {
             host_key_probes: ssh_task::HostKeyProbes::default(),
             changes: terminals.change_notifier(),
             runtime_control: None,
+            updates: runtime::updates::UpdateChecker::default(),
             terminals,
             terminal_controls: terminal_control::TerminalControls::default(),
             command_directory: Arc::new(
@@ -259,6 +261,11 @@ impl AppState {
             cancellation,
             stopping: CancellationToken::new(),
         }));
+    }
+
+    /// Starts read-only, bounded release checks until the broker is stopped.
+    pub fn start_update_checks(&self, cancellation: CancellationToken) {
+        self.updates.start(cancellation);
     }
 
     /// Cancels running operations and stops owned terminal processes during broker shutdown.

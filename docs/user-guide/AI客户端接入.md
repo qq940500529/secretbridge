@@ -8,6 +8,10 @@ SecretBridge 的 [AI 操作 Skill](../../skills/secretbridge-operations/SKILL.md
 
 ## 职责归属
 
+### 新版本提醒
+
+`secretbridge_get_update_status` 返回后台已缓存的 GitHub 检查结果；新版本也会以工具文本及 `_meta.secretbridge_update` 附带在正常调用中。助手应按聊天语言提醒用户：测试版不保证兼容，询问是否升级，默认不更新。`not_checked`、`checking` 或 `unavailable` 不能解释为“已是最新版”。更新提示不授予安装权限，也不要求中断当前任务；用户明确选择后再按[安装与服务管理](../getting-started/安装与服务管理.md)规划独立安装和备份。
+
 | 内容 | 唯一维护位置 | 其他位置保留什么 |
 |---|---|---|
 | 工具名、输入/输出 schema、状态和错误码 | `backend/src/adapters/mcp/` 与服务端类型 | Skill 仅引用工具名和少量已校验示例 |

@@ -12,6 +12,7 @@ pub(crate) async fn status(State(state): State<AppState>) -> Json<StatusResponse
     let mut status = StatusResponse::controlled_operations(paired, state.configuration_storage);
     status.background_control_enabled = state.runtime_control.is_some();
     status.source_commit = release_source_commit();
+    status.updates = Some(state.updates.snapshot().await);
     Json(status)
 }
 

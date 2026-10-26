@@ -52,6 +52,14 @@ jobs:
         run: |
           corepack enable
           pnpm install --frozen-lockfile
+          # Hosted Ubuntu's Azure mirror can stall large WebKit dependency downloads.
+          # Change only mirror selection on this disposable runner; APT signatures remain required.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+          fi
+          if [ -f /etc/apt/apt-mirrors-security.txt ]; then
+            printf '%s\n' 'https://security.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors-security.txt >/dev/null
+          fi
           pnpm exec playwright install --with-deps chromium firefox webkit
       - name: Build Web application
         run: pnpm build

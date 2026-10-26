@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 export interface ServiceStatus {
+  updates?: UpdateStatus | null;
   product: string;
   api_version: string;
   mode: "synthetic_only" | "credential_configuration" | "controlled_operations";
@@ -11,6 +12,19 @@ export interface ServiceStatus {
   background_control_enabled?: boolean;
   software_version?: string;
   source_commit?: string | null;
+}
+
+export interface UpdateStatus {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  checked_at_unix_ms: number | null;
+  check_state: "not_checked" | "checking" | "checked" | "unavailable";
+  release_url: string;
+  automatic_install: false;
+  compatibility_guaranteed: false;
+  user_choice_required: true;
+  default_action: "keep_current_version";
 }
 
 export type ConfigurationStorage = "memory_only" | "sqlite";

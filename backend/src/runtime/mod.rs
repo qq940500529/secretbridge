@@ -3,4 +3,5 @@
 
 pub(crate) mod control;
 pub(crate) mod diagnostics;
+pub(crate) mod updates;
 pub use control::*;

@@ -6,6 +6,16 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+## 0.3.3 — 2026-10-26
+
+- Check the fixed GitHub Releases endpoint at broker startup and periodically, with bounded requests, cached results and explicit offline/rate-limit status. Add a human-authenticated manual check in Settings and read-only MCP update status. Available updates are included in normal tool responses without changing their structured result or approval behavior. Beta compatibility is not guaranteed: ask the person whether to upgrade, default to keeping the current version, and never download, install, migrate or restart automatically.
+- Upgrade russh to 0.64.1 for GHSA-4wc5-f2rc-q74m and GHSA-j7h2-66j4-ghjf. The application uses its SSH client, not the affected server/agent-server entrypoints; keep host verification and authentication unchanged while removing the affected locked version.
+- Update rustls-webpki, webpki-roots, webpki-root-certs, ctutils and crypto-bigint for RUSTSEC-2026-0381, RUSTSEC-2026-0382, RUSTSEC-2026-0383, RUSTSEC-2026-0385 and RUSTSEC-2026-0387. Retain certificate verification and the existing cryptographic backend; no advisory exceptions are introduced.
+- Integrate the ten dependency PRs for russh, serde_json, Tokio, Vitest, the React Vite plugin, tooltips, accessibility tooling, schemars, MCP and React DOM. Align React with React DOM at 19.3.1 to preserve runtime compatibility.
+- Include the visible language label in the language switcher's accessible name, correcting the WCAG label/name mismatch detected by the upgraded accessibility checker without weakening its assertions.
+- Use official HTTPS Ubuntu package mirrors for browser CI's disposable runner after repeated slow Azure-mirror downloads, retaining APT signature verification and the full browser suite.
+- Align the broker, Web application and five client attachments at 0.3.3. Public prerelease status, SQLite schema 25 and configuration export format 2 remain unchanged; existing installations must be preserved and evaluation uses a separate empty data directory.
+
 ## 0.3.2 — 2026-10-16
 
 - Fix one-time operation labels across approvals, the execution selector and run records. Resolve temporary drafts separately from saved templates, show bilingual operation types for requests without a template, and retain the removed-template label for genuinely missing references. Approval and credential-use rules are unchanged.

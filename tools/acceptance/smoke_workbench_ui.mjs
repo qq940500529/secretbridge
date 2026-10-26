@@ -44,6 +44,20 @@ try {
   let failSecretWrite = true;
   let outputReads = 0;
   let oneTimeDraft = null;
+  let updateChecks = 0;
+  const updateStatus = {
+    current_version: "0.3.2",
+    latest_version: "0.3.3",
+    update_available: true,
+    checked_at_unix_ms: now,
+    check_state: "checked",
+    release_url:
+      "https://github.com/qq940500529/secretbridge/releases/tag/v0.3.3",
+    automatic_install: false,
+    compatibility_guaranteed: false,
+    user_choice_required: true,
+    default_action: "keep_current_version",
+  };
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname,
@@ -68,6 +82,13 @@ try {
     } else if (path === "/api/v1/notification-settings") {
       if (method === "PUT") notificationChannel = input.channel;
       body = { channel: notificationChannel };
+    } else if (path === "/api/v1/updates/check") {
+      assert.equal(method, "POST");
+      updateChecks++;
+      body =
+        updateChecks === 1
+          ? updateStatus
+          : { ...updateStatus, check_state: "unavailable" };
     } else if (path === "/api/v1/status")
       body = {
         product: "SecretBridge",
@@ -78,6 +99,7 @@ try {
         paired: true,
         software_version: "0.3.0-beta.2",
         source_commit: "a".repeat(40),
+        updates: updateStatus,
       };
     else if (path === "/api/v1/session/pair")
       body = {
@@ -486,6 +508,15 @@ try {
   );
   await page.getByRole("button", { name: "添加模板", exact: true }).click();
   await nav("设置").click();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page
+    .getByRole("status")
+    .filter({ hasText: "有新版本 0.3.3" })
+    .waitFor();
+  await page.getByText(/默认保持当前版本，不自动更新/).waitFor();
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "检查不可用" }).waitFor();
+  assert.equal(updateChecks, 2);
   await page.getByRole("button", { name: "系统级通知" }).click();
   await page
     .getByRole("button", { name: "系统级通知", pressed: true })
