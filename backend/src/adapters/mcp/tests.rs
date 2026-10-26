@@ -32,6 +32,9 @@ const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
 
 #[tokio::test]
 async fn update_notice_is_added_to_success_and_errors_without_changing_the_result() {
+    assert!(super::SERVER_INSTRUCTIONS.contains(
+        "Neither silence, nor a task approval, nor an authenticator code counts as upgrade consent"
+    ));
     let (state, _) = AppState::new([]);
     state.updates.seed_for_test().await;
     let (client, server) = connect(state).await;
