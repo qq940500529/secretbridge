@@ -13,6 +13,7 @@ This file records public release behavior rather than preserving a development d
 - Update rustls-webpki, webpki-roots, webpki-root-certs, ctutils and crypto-bigint for RUSTSEC-2026-0381, RUSTSEC-2026-0382, RUSTSEC-2026-0383, RUSTSEC-2026-0385 and RUSTSEC-2026-0387. Retain certificate verification and the existing cryptographic backend; no advisory exceptions are introduced.
 - Integrate the ten dependency PRs for russh, serde_json, Tokio, Vitest, the React Vite plugin, tooltips, accessibility tooling, schemars, MCP and React DOM. Align React with React DOM at 19.3.1 to preserve runtime compatibility.
 - Include the visible language label in the language switcher's accessible name, correcting the WCAG label/name mismatch detected by the upgraded accessibility checker without weakening its assertions.
+- Use official HTTPS Ubuntu package mirrors for browser CI's disposable runner after repeated slow Azure-mirror downloads, retaining APT signature verification and the full browser suite.
 - Align the broker, Web application and five client attachments at 0.3.3. Public prerelease status, SQLite schema 25 and configuration export format 2 remain unchanged; existing installations must be preserved and evaluation uses a separate empty data directory.
 
 ## 0.3.2 — 2026-10-16
