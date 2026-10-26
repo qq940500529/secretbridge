@@ -47,6 +47,7 @@ const MAX_BRIDGE_PIPE_INSTANCES: usize = MAX_BRIDGE_CONNECTIONS + 1;
 const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) const OP_HEALTH: &str = "health";
+pub(crate) const OP_UPDATE_STATUS: &str = "update_status";
 pub(crate) const OP_BEGIN_CONVERSATION: &str = "begin_conversation";
 pub(crate) const OP_LIST_TEMPLATES: &str = "list_action_templates";
 pub(crate) const OP_LIST_CATALOG: &str = "list_catalog";

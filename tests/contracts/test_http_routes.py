@@ -11,6 +11,7 @@ ROUTER = ROOT / "backend/src/adapters/http/mod.rs"
 
 EXPECTED_ROUTES = {
     "/api/v1/status",
+    "/api/v1/updates/check",
     "/api/v1/runtime/stop",
     "/api/v1/session/pair",
     "/api/v1/session/pin",

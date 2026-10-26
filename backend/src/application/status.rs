@@ -32,6 +32,7 @@ pub struct StatusResponse {
     pub background_control_enabled: bool,
     pub software_version: &'static str,
     pub source_commit: Option<String>,
+    pub(crate) updates: Option<crate::runtime::updates::UpdateStatus>,
 }
 
 impl StatusResponse {
@@ -47,6 +48,7 @@ impl StatusResponse {
             background_control_enabled: false,
             software_version: env!("CARGO_PKG_VERSION"),
             source_commit: None,
+            updates: None,
         }
     }
 
@@ -65,6 +67,7 @@ impl StatusResponse {
             background_control_enabled: false,
             software_version: env!("CARGO_PKG_VERSION"),
             source_commit: None,
+            updates: None,
         }
     }
 
@@ -83,6 +86,7 @@ impl StatusResponse {
             background_control_enabled: false,
             software_version: env!("CARGO_PKG_VERSION"),
             source_commit: None,
+            updates: None,
         }
     }
 }

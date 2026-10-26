@@ -21,6 +21,7 @@ mod contracts;
 mod conversation;
 pub(crate) mod errors;
 mod ready;
+mod update_notice;
 use crate::adapters::native_ipc as native_bridge;
 use contracts::ConversationLanguage;
 use contracts::{
@@ -177,6 +178,16 @@ enum McpBackend {
 }
 
 impl McpBackend {
+    async fn update_status(&self) -> Result<crate::runtime::updates::UpdateStatus, ErrorData> {
+        match self {
+            Self::Local(state) => Ok(state.updates.snapshot().await),
+            Self::Remote(client) => {
+                client
+                    .call(native_bridge::OP_UPDATE_STATUS, &BridgeEmpty {})
+                    .await
+            }
+        }
+    }
     async fn begin_conversation(
         &self,
         params: BeginConversationParams,
@@ -693,6 +704,17 @@ async fn open_console_for_human(state: &AppState) {
 #[tool_router]
 impl SecretBridgeMcp {
     #[tool(
+        name = "secretbridge_get_update_status",
+        description = "Read the broker's cached GitHub release check, including public prereleases. No download or installation. If an update is available, explain beta incompatibility in the user's language, ask whether they want to upgrade, and default to keeping the current version. An unavailable or unchecked result is not evidence of no updates.",
+        output_schema = rmcp::handler::server::tool::schema_for_type::<crate::runtime::updates::UpdateStatus>()
+    )]
+    async fn get_update_status(
+        &self,
+    ) -> Result<McpJson<crate::runtime::updates::UpdateStatus>, ErrorData> {
+        Ok(McpJson(self.backend.update_status().await?))
+    }
+
+    #[tool(
         name = "secretbridge_read_run_output",
         description = "Read retained, bounded, sanitized output for an approved run. cursor is the last chunk sequence; next_cursor continues the stream. Use secretbridge_terminal_read for live terminal interaction.",
         output_schema = rmcp::handler::server::tool::schema_for_type::<crate::command::OutputPage>()
@@ -985,6 +1007,24 @@ impl SecretBridgeMcp {
 )]
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SecretBridgeMcp {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let mut result = self.tool_router.call(call).await;
+        // Cached local IPC only: offline GitHub must not delay task execution.
+        if let Ok(Ok(update)) = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            self.backend.update_status(),
+        )
+        .await
+        {
+            update_notice::annotate(&mut result, &update);
+        }
+        result
+    }
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(

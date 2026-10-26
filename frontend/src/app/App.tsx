@@ -619,6 +619,7 @@ export function App() {
                   <SettingsView
                     text={text}
                     status={serviceStatus}
+                    sessionToken={sessionToken}
                     language={language}
                     onLanguageChange={changeLanguage}
                     notificationChannel={notificationChannel}

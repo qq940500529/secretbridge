@@ -17,6 +17,41 @@ use super::{AppState, SESSION_TTL, apply_security_headers, router};
 
 const ORIGIN: &str = "http://127.0.0.1:8787";
 
+#[tokio::test]
+async fn update_checks_require_session_and_origin_and_expose_only_public_cache() {
+    let (state, bootstrap) = AppState::new([ORIGIN.to_owned()]);
+    state.updates.seed_for_test().await;
+    let app = router(state);
+    let token = pair_test_session(&app, &bootstrap).await;
+    for (presented, origin, expected) in [
+        ("wrong", Some(ORIGIN), StatusCode::UNAUTHORIZED),
+        (token.as_str(), None, StatusCode::FORBIDDEN),
+        (
+            token.as_str(),
+            Some("http://attacker.invalid"),
+            StatusCode::FORBIDDEN,
+        ),
+        (token.as_str(), Some(ORIGIN), StatusCode::OK),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/v1/updates/check",
+                presented,
+                origin,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            let value = response_json(response).await;
+            assert_eq!(value["automatic_install"], false);
+            assert_eq!(value["default_action"], "keep_current_version");
+        }
+    }
+}
+
 #[test]
 fn bridge_startup_failure_records_fixed_summary_and_encrypted_event() {
     let (state, _) = AppState::new([ORIGIN.to_owned()]);

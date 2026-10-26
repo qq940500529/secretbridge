@@ -30,6 +30,44 @@ use crate::{
 
 const SENSITIVE_MARKER: &str = "sensitive-marker-must-not-cross-mcp-boundary";
 
+#[tokio::test]
+async fn update_notice_is_added_to_success_and_errors_without_changing_the_result() {
+    let (state, _) = AppState::new([]);
+    state.updates.seed_for_test().await;
+    let (client, server) = connect(state).await;
+    let result = client
+        .call_tool(CallToolRequestParams::new("secretbridge_list_catalog"))
+        .await
+        .unwrap();
+    let result = serde_json::to_value(result).unwrap();
+    assert_eq!(
+        result["_meta"]["secretbridge_update"]["default_action"],
+        "keep_current_version"
+    );
+    assert_eq!(
+        result["_meta"]["secretbridge_update"]["automatic_install"],
+        false
+    );
+    assert!(result["structuredContent"]["resources"].is_array());
+    assert!(
+        result["content"]
+            .to_string()
+            .contains("Do not download, install")
+    );
+    let error = client
+        .call_tool(
+            CallToolRequestParams::new("secretbridge_get_run")
+                .with_arguments(arguments(json!({"id":"invalid"}))),
+        )
+        .await
+        .unwrap_err();
+    let text = format!("{error:?}");
+    assert!(text.contains("secretbridge_update"));
+    assert!(text.contains("keep_current_version"));
+    client.cancel().await.unwrap();
+    server.await.unwrap();
+}
+
 #[test]
 fn initialization_error_points_to_local_page_and_required_pin() {
     let (mut state, _) = AppState::new([]);
@@ -627,6 +665,7 @@ async fn advertises_only_the_bounded_tool_surface() {
             "secretbridge_evaluate_policy",
             "secretbridge_get_approval",
             "secretbridge_get_run",
+            "secretbridge_get_update_status",
             "secretbridge_list_action_templates",
             "secretbridge_list_catalog",
             "secretbridge_list_run_events",
@@ -648,6 +687,7 @@ async fn advertises_only_the_bounded_tool_surface() {
     );
 
     let expected_properties = BTreeMap::from([
+        ("secretbridge_get_update_status", vec![]),
         ("secretbridge_begin_conversation", vec!["summary"]),
         ("secretbridge_list_action_templates", vec![]),
         ("secretbridge_list_catalog", vec![]),

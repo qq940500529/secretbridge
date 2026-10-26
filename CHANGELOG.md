@@ -6,6 +6,8 @@ This file records public release behavior rather than preserving a development d
 
 ## Unreleased
 
+- Check the fixed GitHub Releases endpoint at broker startup and periodically, with bounded requests, cached results and explicit offline/rate-limit status. Add a human-authenticated manual check in Settings and read-only MCP update status. Available updates are included in normal tool responses without changing their structured result or approval behavior. Beta compatibility is not guaranteed: ask the person whether to upgrade, default to keeping the current version, and never download, install, migrate or restart automatically.
+
 ## 0.3.2 — 2026-10-16
 
 - Fix one-time operation labels across approvals, the execution selector and run records. Resolve temporary drafts separately from saved templates, show bilingual operation types for requests without a template, and retain the removed-template label for genuinely missing references. Approval and credential-use rules are unchanged.

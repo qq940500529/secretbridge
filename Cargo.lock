@@ -3322,6 +3322,7 @@ dependencies = [
  "rustls-tokio-postgres",
  "schemars",
  "secretbridge-local-access",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",

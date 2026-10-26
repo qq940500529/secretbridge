@@ -8,6 +8,7 @@ use super::{AppState, OP_HEALTH};
 pub(super) fn ensure_bridge_ready(state: &AppState, operation: &str) -> Result<(), ErrorData> {
     if state.runtime_control.is_some()
         && operation != OP_HEALTH
+        && operation != crate::adapters::native_ipc::OP_UPDATE_STATUS
         && !state.catalog.diagnostic_vault_ready().unwrap_or(false)
     {
         let console_url = state
