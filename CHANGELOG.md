@@ -10,6 +10,7 @@ This file records public release behavior rather than preserving a development d
 
 - Add the SecretBridge product website to the bilingual README navigation and documentation hub, and link the company website from the README copyright credits.
 - Integrate fourteen dependency updates, including russh 0.65.0 and pageant 0.2.5 for five GitHub advisories. Keep the MCP transport stdio-only, preserve SSH host-key verification, and align the Tailwind CSS compiler with its stylesheet package.
+- Update bundled SQLite and supersede the proposed rmcp 3.7.0 pin with 3.9.0 for RUSTSEC-2026-0459 and RUSTSEC-2026-0462. Preserve database schema and the existing stdio-only MCP feature set; no advisory exceptions are added.
 - Replace the retired macOS 14 hosted runner with macOS 15 arm64 for isolated package and release checks. This does not validate the macOS 14 minimum target. Keep Action references pinned to full commit IDs.
 - Align native packages, the Web application and client integrations at 0.3.4. This remains an unsigned public prerelease; schema 25 and configuration export format 2 are unchanged. Preserve existing installations, use a separate empty data directory and do not upgrade without an explicit user choice.
 

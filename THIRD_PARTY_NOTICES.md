@@ -32,8 +32,8 @@ This inventory describes material included in the repository. Technologies discu
 | fiat-crypto 0.3.0 | Transitive cryptographic arithmetic, MIT OR Apache-2.0 OR BSD-1-Clause; upstream commit 67316f05d771f7f2db62beede59e9b56406a9efd | The MIT option is reviewed and selected for this dependency; preserve LICENSE-MIT, copyright, AUTHORS and upstream provenance in applicable distributions |
 | hyper-rustls 0.27.9, base64 0.23.1, ipnet 2.12.2, tower-http 0.6.11, try-lock 0.2.5, want 0.3.1 and wasm-bindgen-futures 0.4.78 | Additional HTTP dependency graph, MIT and/or Apache-2.0 | Review target-specific inclusion and preserve applicable terms; exact expressions remain in the locked dependency inventory |
 | SHA-2 0.11.1 | In-memory token digest runtime, MIT OR Apache-2.0 | Record the chosen license path and preserve applicable terms and notices |
-| rusqlite 0.40.2 / libsqlite3-sys 0.38.2 | SQLite binding and bundled native build, MIT | Preserve upstream MIT notices; only the `bundled` feature is enabled |
-| SQLite 3.53.2 | Bundled non-secret metadata database, public domain per upstream | Record the exact bundled source version and upstream provenance in release materials |
+| rusqlite 0.41.1 / libsqlite3-sys 0.39.1 | SQLite binding and bundled native build, MIT | Preserve upstream MIT notices; only the `bundled` feature is enabled |
+| SQLite 3.54.1 | Bundled non-secret metadata database, public domain per upstream | Record the exact bundled source version and upstream provenance in release materials |
 | keyring 4.2.0 and selected native platform stores | Operating-system credential-store integration, MIT OR Apache-2.0 | Preserve the selected license and platform-backend notices; review each target platform's resolved dependency graph |
 | zeroize 1.9.0 | Transient secret-buffer clearing, MIT OR Apache-2.0 | Record the selected license path and preserve applicable terms and notices |
 | totp-rs 6.0.0, qrcodegen 1.8.0 and png 0.18.1 | RFC 6238 TOTP generation, validation and enrollment QR rendering; MIT, plus png under MIT OR Apache-2.0 | Preserve applicable license texts and include the resolved components in release SBOMs; the QR image is rendered directly without the `qrcodegen-image` wrapper, whose published package does not include a license text |
@@ -46,7 +46,7 @@ This inventory describes material included in the repository. Technologies discu
 | rustls-tokio-postgres 0.5.1 | TLS connector for the PostgreSQL client, Apache-2.0 | Preserve the Apache-2.0 terms and applicable notices |
 | Tokio 1.54.1 | Async runtime, Windows named pipes and Unix domain sockets, MIT | Preserve the MIT license and upstream copyright notice with distributed service packages |
 | tokio-util 0.7.19 | Runtime cancellation support, MIT | Preserve the MIT license and upstream copyright notice |
-| rmcp 3.7.0 / rmcp-macros 3.8.0 | MCP stdio server SDK and macros, Apache-2.0 | Preserve the Apache-2.0 license, copyright and any applicable NOTICE content with distributed service packages |
+| rmcp 3.9.0 / rmcp-macros 3.9.0 | MCP stdio server SDK and macros, Apache-2.0 | Preserve the Apache-2.0 license, copyright and any applicable NOTICE content with distributed service packages |
 | schemars 1.2.3 / schemars_derive 1.2.3 | MCP JSON Schema generation, MIT | Preserve the upstream MIT terms and copyright notice with distributed service packages |
 | semver 1.0.28 | Release-tag parsing and ordering, MIT OR Apache-2.0 | Preserve the selected license and applicable upstream notices; remote release text is not executable input |
 | darling 0.24.1, dyn-clone 1.0.20, pastey 0.2.3, ref-cast 1.0.27, tokio-stream 0.1.19 and related packages | Transitive MCP/schema build or runtime dependencies, MIT and/or Apache-2.0 | Resolved versions and exact expressions are locked in `Cargo.lock`; preserve applicable terms in each platform's generated notice inventory |
