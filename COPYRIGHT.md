@@ -2,6 +2,8 @@
 
 Copyright (c) 2026 **数链创元（天津）信息技术有限责任公司**
 
+[公司官网 / Company website](https://www.slcy.tech)
+
 SecretBridge（秘桥）由数链创元（天津）信息技术有限责任公司持有其自有项目内容的版权，并就其有权许可的内容提供[开源许可与另行商业授权](./LICENSING.md)。
 
 ## 声明范围

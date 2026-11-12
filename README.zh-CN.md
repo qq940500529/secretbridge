@@ -6,7 +6,7 @@
 
 **让凭据留在本机，让授权决定操作。**
 
-[English](./README.md) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases) · [文档](./docs/README.md) · [部署](./docs/getting-started/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](./SECURITY.md)
+[English](./README.md) · [产品官网](https://www.secretbridge.cn) · [下载 Beta](https://github.com/qq940500529/secretbridge/releases) · [文档](./docs/README.md) · [部署](./docs/getting-started/AI辅助部署.md) · [问题反馈](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [安全](./SECURITY.md)
 
 [![开源许可：AGPL v3+](https://img.shields.io/badge/开源许可-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -122,4 +122,4 @@ WorkBuddy 另有专用 MCP 连接器与 Skill；DeepSeek Harness 使用原生 bu
 | 查看首次运行条款 | [许可协议与免责协议](./docs/最终用户许可与免责声明.md) |
 | 反馈问题 | [公开缺陷报告](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [私密安全报告](https://github.com/qq940500529/secretbridge/security/advisories/new) |
 
-Copyright (c) 2026 数链创元（天津）信息技术有限责任公司。开源代码采用 `AGPL-3.0-or-later`；第三方组件遵循各自许可，参见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+Copyright (c) 2026 [数链创元（天津）信息技术有限责任公司](https://www.slcy.tech)。开源代码采用 `AGPL-3.0-or-later`；第三方组件遵循各自许可，参见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。

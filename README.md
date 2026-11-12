@@ -6,7 +6,7 @@
 
 **Keep credentials local. Let a human set the approval policy.**
 
-[简体中文](./README.zh-CN.md) · [Download Beta](https://github.com/qq940500529/secretbridge/releases) · [Docs](./docs/README.md) · [Deploy](./docs/getting-started/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](./SECURITY.md)
+[简体中文](./README.zh-CN.md) · [Product website](https://www.secretbridge.cn) · [Download Beta](https://github.com/qq940500529/secretbridge/releases) · [Docs](./docs/README.md) · [Deploy](./docs/getting-started/AI辅助部署.md) · [Feedback](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Security](./SECURITY.md)
 
 [![Open source: AGPL v3+](https://img.shields.io/badge/open%20source-AGPL%20v3%2B-663399)](LICENSE)
 [![Rust 1.98](https://img.shields.io/badge/Rust-1.98-000000?logo=rust)](rust-toolchain.toml)
@@ -122,4 +122,4 @@ See the [security model](./docs/security/安全模型.md) and [automated securit
 | Review first-run terms | [License Agreement and Disclaimer](./docs/最终用户许可与免责声明.md) |
 | Report a problem | [Public bug report](https://github.com/qq940500529/secretbridge/issues/new?template=bug_report.md) · [Private security report](https://github.com/qq940500529/secretbridge/security/advisories/new) |
 
-Copyright (c) 2026 数链创元（天津）信息技术有限责任公司. Open-source code is licensed under `AGPL-3.0-or-later`; third-party components retain their own licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+Copyright (c) 2026 [数链创元（天津）信息技术有限责任公司](https://www.slcy.tech). Open-source code is licensed under `AGPL-3.0-or-later`; third-party components retain their own licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
