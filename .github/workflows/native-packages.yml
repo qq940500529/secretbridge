@@ -53,7 +53,7 @@ jobs:
           python tools/release/package_client_integrations.py --output dist/client-integrations-b
           python tools/release/package_client_integrations.py --verify dist/client-integrations-a --compare dist/client-integrations-b
       - name: Retain version-matched client downloads
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: secretbridge-client-integrations
           path: dist/client-integrations-a/*
@@ -111,7 +111,7 @@ jobs:
       - name: Record release toolchain metadata
         run: python tools/release/write_ci_metadata.py --output dist/ci-metadata.json
       - name: Retain unsigned native packages
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: secretbridge-${{ runner.os }}-${{ runner.arch }}
           path: |
