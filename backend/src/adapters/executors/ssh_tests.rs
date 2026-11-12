@@ -70,14 +70,16 @@ impl server::Handler for Server {
     fn auth_publickey(
         &mut self,
         user: &str,
-        key: &PublicKey,
+        key: server::VerifiedPublicKey<'_>,
     ) -> impl Future<Output = Result<server::Auth, Self::Error>> + Send {
         self.auth_hits.fetch_add(1, Ordering::SeqCst);
-        std::future::ready(Ok(if user == "operator" && key == self.key.as_ref() {
-            server::Auth::Accept
-        } else {
-            server::Auth::reject()
-        }))
+        std::future::ready(Ok(
+            if user == "operator" && key.public_key == self.key.as_ref() {
+                server::Auth::Accept
+            } else {
+                server::Auth::reject()
+            },
+        ))
     }
     async fn channel_open_session(
         &mut self,
